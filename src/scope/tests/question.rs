@@ -1,12 +1,12 @@
 //! The questions a door asks: the closed door's answer per kind, a binding written into a question
 //! whole and in part, whether a binding keeps an answer, and an answered question's digest.
 
-use crate::memory::{Bump, resident};
+use crate::memory::Bump;
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{DeclaredType, Interval, KKind, KType, Parametric, Verdict};
 use crate::values::tests::TestTypes;
 
-use super::super::{Answer, Answered, Levels, Question, answer, keeps};
+use super::super::{Answer, ArmChoice, ArmsLayout, Levels, Question, Selecting, Selection, answer};
 
 fn ty(kt: KType) -> DeclaredType<Parametric> {
     kt.into()
@@ -20,14 +20,14 @@ fn the_closed_door_answers_each_kind_holding_no_type() {
     let (number, str, any) = (KType::NUMBER, KType::STR, KType::ANY);
     assert_eq!(
         asked(Question::Fits {
-            a: ty(number),
+            a: ty(number).into(),
             b: ty(any)
         }),
         Some(Answer::Bool(true))
     );
     assert_eq!(
         asked(Question::Fits {
-            a: ty(any),
+            a: ty(any).into(),
             b: ty(number)
         }),
         Some(Answer::Bool(false))
@@ -68,7 +68,7 @@ fn the_closed_door_answers_each_kind_holding_no_type() {
     );
     // A verdict is always written: its intervals are the door's, not the question's.
     let verdict = Question::Verdict {
-        shape: ty(number),
+        shape: ty(number).into(),
         arguments: &[],
     };
     assert_eq!(asked(verdict), Some(Answer::Verdict(Verdict::Maybe)));
@@ -113,7 +113,7 @@ fn a_binding_is_written_into_a_question_whole_and_in_part() {
         whole.substituted(&types, &scratch, &levels),
         (
             Question::Fits {
-                a: ty(KType::NUMBER),
+                a: ty(KType::NUMBER).into(),
                 b: ty(KType::NUMBER),
             },
             true
@@ -121,8 +121,45 @@ fn a_binding_is_written_into_a_question_whole_and_in_part() {
     );
 }
 
+/// A closer writing in the closed types `levels` binds, as a store's binding of levels does.
+struct LevelCloser<'q, 'l> {
+    types: &'q crate::values::Chain<'q, 'q, 'q, 'q>,
+    lay: &'l Bump,
+    levels: &'q Levels<'q>,
+}
+
+impl crate::scope::Closer for LevelCloser<'_, '_> {
+    fn close(&mut self, ty: DeclaredType<Parametric>) -> crate::scope::Closed {
+        crate::scope::rebound(self.types, self.lay, ty, self.levels)
+    }
+
+    fn concrete(&self, ty: Parametric) -> Option<KType> {
+        self.types.concrete(ty)
+    }
+
+    fn rebuilt(
+        &mut self,
+        scheme: crate::type_lattice::Scheme,
+        rebounds: crate::scope::Rebounds<'_>,
+    ) -> Option<DeclaredType<KType>> {
+        let (types, scratch) = (self.types, self.lay);
+        crate::scope::rebuilt_closed(types, scratch, scheme, rebounds, &mut |ty| self.close(ty))
+    }
+}
+
+impl<'l> crate::scope::Laying<'l> for LevelCloser<'_, 'l> {
+    type Lay = &'l Bump;
+
+    fn lay(&self) -> &'l Bump {
+        self.lay
+    }
+}
+
+/// An instance over rigid variables closes once the binding closes every point, a point closed
+/// already among them: a binding leaves a closed point as it is, which is closed all the same.
 #[test]
-fn a_binding_keeps_an_answer_its_closed_door_gives_alike() {
+fn an_instance_closes_where_a_point_was_closed_already() {
+    use crate::scope::{CloseLaying, StaticInstance};
     let (registry, scratch) = (Bump::new(), Bump::new());
     let types = TestTypes::new(&registry).load();
     let symbols = SymbolInterner::new();
@@ -131,41 +168,24 @@ fn a_binding_keeps_an_answer_its_closed_door_gives_alike() {
         TypeSymbol::declared("Elt", &symbols).unwrap(),
         KType::ANY,
     );
-    let answered = Answered {
-        question: Question::Fits {
-            a: elt.into(),
-            b: ty(KType::NUMBER),
-        },
-        answer: Answer::Bool(true),
+    let rigid = StaticInstance::Rigid {
+        solution: scratch.alloc_slice_copy(&[Parametric::from(KType::NUMBER), elt]),
+        ktype: types.list(elt),
+        variables: &[],
     };
-    let under = |closed| Levels::from_bound(&scratch, &[(0, closed)]);
-    assert!(keeps(&types, &scratch, &answered, &under(KType::NUMBER)));
-    assert!(!keeps(&types, &scratch, &answered, &under(KType::STR)));
-}
-
-#[test]
-fn an_answered_questions_digest_is_alike_across_two_lays() {
-    let (a, b) = (Bump::new(), Bump::new());
-    let arguments = [Interval::point(KType::NUMBER.into())];
-    let answered = Answered {
-        question: Question::Verdict {
-            shape: ty(KType::STR),
-            arguments: &arguments,
-        },
-        answer: Answer::Verdict(Verdict::Always),
+    let levels = Levels::from_bound(&scratch, &[(0, KType::STR)]);
+    let mut closer = LevelCloser {
+        types: &types,
+        lay: &scratch,
+        levels: &levels,
     };
-    let (here, there) = (
-        resident(&a, answered.laid(&a)),
-        resident(&b, answered.laid(&b)),
-    );
-    assert!(!std::ptr::eq(here, there));
-    assert_eq!(here.digest(), there.digest());
-    assert_eq!(here, there);
-    let never = Answered {
-        answer: Answer::Verdict(Verdict::Never),
-        ..answered
-    };
-    assert_ne!(answered.digest(), never.digest());
+    match rigid.closed_laying(&mut closer) {
+        StaticInstance::Closed { solution, ktype } => {
+            assert_eq!(solution, &[KType::NUMBER, KType::STR]);
+            assert_eq!(ktype, types.list(KType::STR));
+        }
+        StaticInstance::Rigid { .. } => panic!("every point closes"),
+    }
 }
 
 proptest::proptest! {
@@ -201,9 +221,9 @@ proptest::proptest! {
         let arguments = [interval];
         let defined = [ty(a)];
         let question = match kind {
-            0 => Question::Verdict { shape: ty(b), arguments: &arguments },
+            0 => Question::Verdict { shape: ty(b).into(), arguments: &arguments },
             1 => Question::NeverSatisfies { value: interval, wanted: b.into() },
-            2 => Question::Fits { a: ty(a), b: ty(b) },
+            2 => Question::Fits { a: ty(a).into(), b: ty(b) },
             3 => Question::LowerEndOutside { value: interval, bound: ty(b) },
             4 => Question::Under { a: a.into(), b: b.into() },
             5 => Question::Same { a: ty(a), b: ty(b) },
@@ -231,7 +251,7 @@ fn every_kind_but_those_that_hold_is_a_question_s() {
     let one = Parametric::from(KType::NUMBER);
     let questions = [
         Question::Verdict {
-            shape: number,
+            shape: number.into(),
             arguments: &[],
         },
         Question::NeverSatisfies {
@@ -239,7 +259,7 @@ fn every_kind_but_those_that_hold_is_a_question_s() {
             wanted: one,
         },
         Question::Fits {
-            a: number,
+            a: number.into(),
             b: number,
         },
         Question::LowerEndOutside {
@@ -255,14 +275,38 @@ fn every_kind_but_those_that_hold_is_a_question_s() {
         Question::Restamp { declared: one },
         Question::Under { a: one, b: one },
         Question::Runs {
-            kept: &[],
+            selection: Selection {
+                asks: &[],
+                layout: Selecting {
+                    listed: 0,
+                    single: false,
+                    arriving: 0,
+                    open: 0,
+                    ranked: 0,
+                    classes: 0,
+                    ranks: 0,
+                    refusals: 1,
+                    refused: None,
+                    dropped: None,
+                    members: 0,
+                    agrees: 0,
+                    split: None,
+                },
+                candidates: &[],
+            },
             candidate: 0,
-            unfilled: false,
         },
         Question::Arms {
-            scrutinee: point,
-            clause: None,
-            arms: &[],
+            choice: ArmChoice {
+                asks: &[],
+                layout: ArmsLayout {
+                    count: 0,
+                    arriving: 0,
+                    ranks: 0,
+                    ranked: 0,
+                },
+                guards: &[],
+            },
             arm: 0,
         },
         Question::Overlaps {
@@ -270,26 +314,25 @@ fn every_kind_but_those_that_hold_is_a_question_s() {
             against: &[],
         },
         Question::Defined {
-            rule: Rule::Pinned,
+            rule: Rule::Fielded,
             operands: &[],
         },
         Question::Defined {
-            rule: Rule::InstanceAt { variables: 0 },
+            rule: Rule::InstanceAt {
+                variables: 0,
+                bounded: 0,
+            },
             operands: &[],
         },
         Question::IsFunction { ty: one },
         Question::Outranks {
-            a: number,
-            b: number,
+            a: number.into(),
+            b: number.into(),
             class: 0,
         },
     ];
     let asked: Vec<OpenKind> = questions.iter().map(Question::kind).collect();
     for kind in OpenKind::ALL {
-        assert_ne!(
-            kind.holds(),
-            asked.contains(&kind),
-            "{kind:?} is a question's or holds, not both"
-        );
+        assert!(asked.contains(&kind), "{kind:?} is a question's");
     }
 }

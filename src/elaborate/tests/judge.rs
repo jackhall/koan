@@ -55,8 +55,12 @@ type Asked = (Rule, u8);
 
 impl Marks for Deriving {
     fn open(&self, _: OpenKind, _: Option<DeclaredType<Parametric>>, _: DeclaredType<Parametric>) {}
+}
 
-    fn derive(&self, term: DerivedTerm<'_>) -> Option<Parametric> {
+impl judge::Derives for Deriving {
+    type Unwalked = std::convert::Infallible;
+
+    fn derive(&self, term: DerivedTerm<'_>) -> Result<Parametric, std::convert::Infallible> {
         let mut laid = self.0.borrow_mut();
         // Any name but a rule's is recorded as the meet rule's: only its count is read.
         let (rule, output) = match term {
@@ -64,7 +68,7 @@ impl Marks for Deriving {
             _ => (Rule::Meet, u8::MAX),
         };
         laid.push((rule, output));
-        Some(Parametric::from(KType::STR))
+        Ok(Parametric::from(KType::STR))
     }
 }
 

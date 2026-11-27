@@ -273,3 +273,31 @@ fn a_closed_retype_target_is_read_and_never_computed() {
     assert_eq!(printed, "[1]");
     assert!(computed > 0);
 }
+
+/// A frame whose parameter or return the load left open over a run-bound name re-stamps by the
+/// type it closes, read off that type as the load's restamp door reads it: calling `f` computes no
+/// target beyond those `SUBJECT`'s own quantified frame computes.
+///
+/// ```text
+/// EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(
+///   LET f = (FN :{y :(LIST OF Elt)} -> (LIST OF Elt) = #(y))
+///   (f {y = [x]})
+/// )
+/// PRINT (SUBJECT 1)
+/// PRINT (SUBJECT "a")
+/// ```
+#[test]
+fn a_frame_open_over_a_run_bound_name_re_stamps_by_the_type_it_closes() {
+    let program = |last: &str| {
+        format!(
+            "EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(\n  \
+             LET f = (FN :{{y :(LIST OF Elt)}} -> (LIST OF Elt) = #(y))\n  \
+             {last}\n)\n\
+             PRINT (SUBJECT 1)\nPRINT (SUBJECT \"a\")"
+        )
+    };
+    let called = computed_targets(&program("(f {y = [x]})"));
+    let uncalled = computed_targets(&program("[x]"));
+    assert_eq!(called.0, "[1]\n[a]");
+    assert_eq!(called, uncalled);
+}

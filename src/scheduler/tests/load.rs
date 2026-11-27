@@ -3,7 +3,7 @@
 
 use crate::memory::Bump;
 use crate::scheduler::Graph;
-use crate::scheduler::seek::{Settles, Unsettled};
+use crate::scheduler::depot::{Composes, Uncomposed};
 use crate::scheduler::tests::bundle::Native;
 use crate::scope::LoadFacts;
 use crate::values::BuildBudget;
@@ -14,7 +14,7 @@ fn the_graph_holds_one_slab_root() {
     let (mut graph, run, out) = Graph::<'_, Native>::load(1, BuildBudget::default(), || {
         Ok::<_, ()>((
             crate::values::tests::seeded_tiers(&type_region),
-            (&LoadFacts::EMPTY, &Unsettled as &dyn Settles<'_>),
+            (&LoadFacts::EMPTY, &Uncomposed as &dyn Composes<'_>),
             7,
         ))
     })
@@ -25,7 +25,7 @@ fn the_graph_holds_one_slab_root() {
         graph.root().is_err(),
         "a slab of one holds the run root alone"
     );
-    assert_eq!(graph.live_settlements(), 0);
+    assert_eq!(graph.live_compositions(), 0);
     graph.release_root(run).expect("the run root releases");
     assert!(graph.is_empty());
 }
@@ -33,7 +33,7 @@ fn the_graph_holds_one_slab_root() {
 #[test]
 fn a_refused_load_hands_its_refusal_back() {
     let refused = Graph::<'_, Native>::load(1, BuildBudget::default(), || {
-        Err::<(_, (&LoadFacts<'_>, &dyn Settles<'_>), ()), _>("refused")
+        Err::<(_, (&LoadFacts<'_>, &dyn Composes<'_>), ()), _>("refused")
     });
     assert_eq!(refused.err(), Some("refused"));
 }

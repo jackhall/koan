@@ -35,7 +35,7 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
         &fixture.reading_of(activation),
         fixture.written(),
         shape.component_of(slot),
-        (crate::values::DepotRef::ROOT, None),
+        crate::values::DepotRef::ROOT,
         types,
         fixture.scratch(),
         eager,

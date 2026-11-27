@@ -10,21 +10,21 @@
 use std::cell::Cell;
 use std::fmt;
 
+use crate::build::lay::{GraphFacts, GraphKept, Instances};
 use crate::knot::KFault;
 use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer};
 use crate::parse::SourceRef;
 use crate::parse::{KExpression, ParseError};
-use crate::scheduler::{Ask, Settles, Work};
+use crate::scheduler::{ComposedFacts, Composes, Work};
 use crate::scope::{
-    BodyShape, BuildLayer, ComposedRoot, ComposedSyntax, Composition, Facts, Fault, FaultKind, Hop,
-    Line, LoadFacts, Segment, ShapeError, Shapes, Site, Slot, Store, Written,
+    BodyShape, ComposedRoot, ComposedSyntax, Facts, Fault, FaultKind, Hop, Line, LoadFacts,
+    ShapeError, Shapes, Site, Slot, Store, Written,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, TypeNode, satisfied_by, substitute_quantified};
 use crate::values::{Chain, KeptCell, Retype, TypeTiers, satisfies};
 
-use super::activation_store::Activate;
 use super::bundle::{KBirth, KBundle, Within};
 use super::stack::Evaluator;
 
@@ -48,9 +48,9 @@ pub trait Language {
     /// step, the node and what was last delivered to it, it answers with what the node needs next.
     fn evaluator<'graph>() -> Evaluator<'graph>;
 
-    /// Run the language's one walk over the body at `at` of `shapes` and every body nested in it,
+    /// Run the language's one walk over `shapes` from its root, every body nested in it walked,
     /// keeping every record it computes in `store` and interning through `types`: what the load
-    /// decides at the root, and what a resumption re-decides under the store's binding. Runs
+    /// decides over the program, and what a composition's miss decides over its code. Runs
     /// nothing by default, so the run elaborates where it reads, as it does wherever the load
     /// leaves a fact unknown.
     fn facts<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
@@ -59,10 +59,64 @@ pub trait Language {
         store: &S,
         types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
-        at: Segment,
     ) -> Result<(), ShapeError<'o>> {
-        let _ = (shapes, builtins, store, types, scratch, at);
+        let _ = (shapes, builtins, store, types, scratch);
         Ok(())
+    }
+
+    /// Make the instances the load makes of the program's binding graph: the root's, binding
+    /// nothing, and every one it reaches along a call the text selects or an arm an answer takes,
+    /// resting in `resting`. The first refusal one of them answers, by its question, its template
+    /// worded under the refusing instance's binding and the call that entered that instance,
+    /// refuses the load. Makes none by default.
+    fn instances<'graph, 'x>(
+        bound: &mut bindgraph::Bound<'_, '_, 'graph, GraphFacts<'graph>>,
+        resting: &bindgraph::Resting<'graph, GraphKept>,
+        facts: &'graph GraphFacts<'graph>,
+        load: &'graph LoadFacts<'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
+        scratch: BumpAllocator<'x>,
+        symbols: &SymbolInterner,
+    ) -> Option<(
+        bindgraph::QuestionId,
+        &'x crate::scope::ShapeError<'x>,
+        Option<bindgraph::EdgeId>,
+    )>
+    where
+        'graph: 'x,
+    {
+        let _ = (bound, resting, facts, load, types, scratch, symbols);
+        None
+    }
+
+    /// Make, or find filed among `instances`, the instance of `node` of their base's binding
+    /// graph under what `bound` binds its names to, read off a frame's slots, and write its handle
+    /// into `into`; with the first question it owns, in id order, that it answers with a refusal,
+    /// by its arm. Makes none by default, leaving `into` as it was.
+    fn instance<'graph>(
+        instances: &Instances<'graph>,
+        node: bindgraph::NodeId,
+        bound: &[(bindgraph::NameId, crate::scope::Bound<'_>)],
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        into: &mut [u64],
+    ) -> Option<(bindgraph::QuestionId, u16)> {
+        let _ = (instances, node, bound, types, scratch, into);
+        None
+    }
+
+    /// `ty`, a type a base record names, read in the body `segment`, with `binding` written in
+    /// through the program's fact domain over `instances`' graph. Writes nothing in by default.
+    fn rebind<'graph>(
+        instances: &Instances<'graph>,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        segment: crate::scope::Segment,
+        binding: crate::scope::Binding<'_>,
+        ty: crate::type_lattice::DeclaredType<crate::type_lattice::Parametric>,
+    ) -> crate::scope::Closed {
+        let _ = (instances, types, scratch, segment, binding, ty);
+        crate::scope::Closed::Same
     }
 }
 
@@ -199,50 +253,27 @@ pub enum Evaluated {
     Part(Site),
 }
 
-/// The walk a miss settles through, the language's monomorphized in: [`settled`](super::settle).
-pub(super) type Settle<'graph> = for<'a> fn(
-    &Program<'graph>,
-    &'a Bump,
-    Facts<'a>,
-    &[&'a Composition<'a>],
-    &Ask,
-    &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
-    &'a &'graph (),
-) -> Option<BuildLayer<'a>>;
-
 /// The miss a composition is built through, the language's monomorphized in:
-/// [`composed`](super::settle::composed).
+/// [`composed`](super::compose::composed).
 pub(super) type Compose<'graph> = for<'a> fn(
     &Program<'graph>,
     ProgramBrand<'a>,
-    &'a Bump,
+    crate::scheduler::ComposedHome<'a>,
     (&'a KExpression<'a>, &'a [BinderSymbol]),
     &'a &'graph (),
-) -> Composition<'a>;
+) -> ComposedFacts<'a>;
 
-impl<'graph> Settles<'graph> for Program<'graph> {
-    fn settle<'a>(
-        &self,
-        bump: &'a Bump,
-        parent: Facts<'a>,
-        pinned: &[&'a Composition<'a>],
-        ask: &Ask,
-        rest: &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
-        witness: &'a &'graph (),
-    ) -> Option<BuildLayer<'a>> {
-        (self.settle)(self, bump, parent, pinned, ask, rest, witness)
-    }
-
+impl<'graph> Composes<'graph> for Program<'graph> {
     fn compose<'a>(
         &self,
         syntax: &'a ComposedSyntax,
-        bump: &'a Bump,
+        home: crate::scheduler::ComposedHome<'a>,
         witness: &'a &'graph (),
-    ) -> Composition<'a> {
+    ) -> ComposedFacts<'a> {
         (self.compose)(
             self,
             syntax.brand(),
-            bump,
+            home,
             (syntax.syntax(), syntax.parameters()),
             witness,
         )
@@ -251,9 +282,10 @@ impl<'graph> Settles<'graph> for Program<'graph> {
 
 /// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
 /// of the types the load built and the interner its names live in, the evaluator a node in flight
-/// is handed to and the walk a miss settles through, the sinks it writes to, the builtin `Result`
-/// and `Error` unions, and how its last run ended. `Copy` and without drop glue, so it rests in program
-/// storage beside the table it names; it is the door the graph settles a miss through.
+/// is handed to and the walk a composition's miss runs, the sinks it writes to, the builtin
+/// `Result` and `Error` unions, and how its last run ended. `Copy` and without drop glue, so it
+/// rests in program storage beside the table it names; it is the door the graph composes a miss
+/// through.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
     facts: &'graph LoadFacts<'graph>,
@@ -261,9 +293,7 @@ pub struct Program<'graph> {
     tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
     evaluator: Evaluator<'graph>,
-    settle: Settle<'graph>,
     compose: Compose<'graph>,
-    activate: Activate<'graph>,
     output: Output,
     result: KType,
     error: KType,
@@ -281,12 +311,7 @@ impl<'graph> Program<'graph> {
         tiers: TypeTiers<'graph>,
         (result, error, variants): (KType, KType, &'graph [KType]),
         symbols: &'graph SymbolInterner,
-        (evaluator, settle, compose, activate): (
-            Evaluator<'graph>,
-            Settle<'graph>,
-            Compose<'graph>,
-            Activate<'graph>,
-        ),
+        (evaluator, compose): (Evaluator<'graph>, Compose<'graph>),
         output: Output,
         ending: &'graph Cell<Ending>,
     ) -> Self {
@@ -296,9 +321,7 @@ impl<'graph> Program<'graph> {
             tiers,
             symbols,
             evaluator,
-            settle,
             compose,
-            activate,
             output,
             result,
             error,
@@ -310,11 +333,6 @@ impl<'graph> Program<'graph> {
     /// The function every node in flight is evaluated by.
     pub fn evaluator(&self) -> Evaluator<'graph> {
         self.evaluator
-    }
-
-    /// The walk a frame's binding event decides through.
-    pub(super) fn activate(&self) -> Activate<'graph> {
-        self.activate
     }
 
     /// The top level's shape.
@@ -330,48 +348,6 @@ impl<'graph> Program<'graph> {
     /// What the load decided about every body. A step reads facts through its door instead.
     pub fn facts(&self) -> &'graph LoadFacts<'graph> {
         self.facts
-    }
-
-    /// The trace's enumeration over the load's records, at most `limit` bindings a body: handed to
-    /// `each` per body with traced slots, in segment order, how many bindings it names or why they
-    /// are open. Returns how many times it read a site to push a binding.
-    #[cfg(test)]
-    pub(crate) fn enumerated(
-        &self,
-        limit: usize,
-        mut each: impl FnMut(Result<usize, crate::scope::Open>),
-    ) -> usize {
-        use crate::build::trace::{Bindings, bindings, edge_reads};
-        let scratch = Bump::new();
-        let folds = crate::build::fold(
-            (self.facts, &self.tiers.settling(&scratch)),
-            &scratch,
-            &scratch,
-        );
-        let before = edge_reads();
-        let bodies = bindings(self.facts, folds, limit, &scratch);
-        let reads = edge_reads() - before;
-        for body in bodies.iter().filter(|body| !body.slots.is_empty()) {
-            each(match body.bindings {
-                Bindings::Named(named) => Ok(named.len()),
-                Bindings::Open(reason) => Err(reason),
-            });
-        }
-        reads
-    }
-
-    /// Hand `each` every body's fact keys, in segment order: the keys fold's keys, recomputed
-    /// from the load's records, before the trace widens them to its traced slots.
-    #[cfg(test)]
-    pub(crate) fn fact_keys(&self, mut each: impl FnMut(Option<&[crate::scope::Slot]>)) {
-        let scratch = Bump::new();
-        for folds in crate::build::fold(
-            (self.facts, &self.tiers.settling(&scratch)),
-            &scratch,
-            &scratch,
-        ) {
-            each(folds.keys);
-        }
     }
 
     /// The program's written code: what a value born of it keeps.
@@ -397,7 +373,7 @@ impl<'graph> Program<'graph> {
     }
 
     /// The tiers of the types the load built: what the program's graph hands every step's chain to
-    /// read first, and what a seek's binding image and a reader outside a step read over.
+    /// read first, and what a reader outside a step reads over.
     pub fn tiers(&self) -> TypeTiers<'graph> {
         self.tiers
     }

@@ -10,8 +10,8 @@
 //! A step cannot create or release a cell, and names no handle and no carrier door: it hands the
 //! drain an [`Action`] naming nothing but `'graph`, and the drain performs every birth and every
 //! death. A request has no cell until the drain pops it, so the only thing a live cell ever waits
-//! on is its receipt run. A frame keyed on its bindings is born under its settlement, a depot
-//! node the drain finds or builds before the birth ([`Seek`]), so it never waits on one.
+//! on is its receipt run. A cell running composed code is born under its composition, a depot
+//! slot the drain finds or builds before the birth, so it never waits on one.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
 //! `crate::memory`, `crate::scope`, `crate::type_lattice` and `crate::values`, and nothing else in
@@ -29,7 +29,6 @@ mod depot;
 mod drain;
 mod kept;
 mod load;
-mod seek;
 
 #[cfg(test)]
 mod tests;
@@ -37,16 +36,14 @@ mod tests;
 #[cfg(test)]
 pub(crate) use action::PASSED;
 pub use action::{
-    Action, Hold, Holding, MemoHome, Placement, Received, Request, Slot, Step, StepError, Taken,
-    Use,
+    Action, Hold, Holding, Placement, Received, Request, Slot, Step, StepError, Taken, Use,
 };
 pub use beside::Beside;
 pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
+pub use depot::{ComposedFacts, ComposedHome, Composes};
 #[cfg(test)]
 pub(crate) use drain::{
-    ANSWERED, BORN, CACHING, FRAMES, HOPS, HopSample, LAID, PARKS, REGION_WRITTEN, SKELETONS,
-    TIERS, Tiers,
+    BORN, CACHING, FRAMES, HOPS, HopSample, LAID, PARKS, REGION_WRITTEN, SKELETONS, TIERS, Tiers,
 };
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
 pub use kept::{Held, Kept, KeptPart};
-pub use seek::{Ask, Asked, Replayed, Requested, Seek, Settles, Sought};

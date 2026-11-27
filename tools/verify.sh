@@ -292,7 +292,8 @@ if [ "$TIER" = routine ]; then
     release_step
     snippets_step
     cellgraph_surface
-    clippy_step --workspace --all-targets
+    # koan's `perf` compiles the binding graph's counter report, which no default build reaches.
+    clippy_step --workspace --all-targets --features koan/perf
     doclinks_step
 
     summary
@@ -321,9 +322,10 @@ release_step
 snippets_step
 cellgraph_surface
 # `cellgraph/perf` gates the measurement binary the perf step below runs, and `bindgraph/perf` the
-# binding graph's counters. A default build hides that source from clippy, so the total tier's lint
-# turns both on — the same reason the cellgraph-only routine scope does.
-clippy_step --workspace --all-targets --features cellgraph/perf,bindgraph/perf
+# binding graph's counters, and `koan/perf` the report over them. A default build hides that source
+# from clippy, so the total tier's lint turns all three on — the same reason the cellgraph-only
+# routine scope does.
+clippy_step --workspace --all-targets --features koan/perf,cellgraph/perf,bindgraph/perf
 doclinks_step
 
 # The leak/UB audit over the slate the `slate-audit` step just proved current. Minutes, and the

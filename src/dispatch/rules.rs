@@ -20,7 +20,7 @@
 //!
 //! See [README.md § The builtin table](README.md#the-builtin-table).
 
-use crate::elaborate::judge::{self, Marks};
+use crate::elaborate::judge::{self, Derives, Marks};
 use crate::elaborate::{SignatureMember, signature_member};
 use crate::memory::{BumpAllocator, BumpVec, collect};
 use crate::scope::Rule;
@@ -44,6 +44,17 @@ pub(super) struct Given<'x> {
     pub names: Option<&'x [BinderSymbol]>,
 }
 
+/// What an argument whose lower end a need drops may lack ([`lacks`]): nothing the native names,
+/// what it lacks at every binding, or, its lower end a variable, the first of the names a field
+/// or member read reads, in the order written, that its binding declares none of
+/// ([`Rule::Lacks`](crate::scope::Rule::Lacks)).
+#[derive(Clone, Copy)]
+pub(super) enum Lackable<'x> {
+    Nothing,
+    Rigid(Lacks),
+    Named(&'x [BinderSymbol]),
+}
+
 /// What an argument whose lower end a need dropped lacks, in the native's own words.
 #[derive(Clone, Copy)]
 pub(super) enum Lacks {
@@ -54,37 +65,73 @@ pub(super) enum Lacks {
 }
 
 /// What a rule gives one call.
-pub(super) struct Typed {
+pub(super) struct Typed<'x> {
     /// The first slot whose argument's lower end lies outside its need, beside what it lacks
     /// where the rule narrowed that need by a name.
     pub dropped: Option<(usize, Option<Lacks>)>,
     /// The call's return with no need checked: what it returns wherever no need drops it.
     pub read: Interval,
+    /// Each slot's need, as a binding narrows it.
+    pub needs: BumpVec<'x, SlotNeed<'x>>,
+}
+
+/// One slot's need: its declared slot, or a narrower one where the gate's question gives its
+/// answer.
+#[derive(Clone, Copy)]
+pub(super) struct SlotNeed<'x> {
+    pub need: KType,
+    pub narrowed: Option<Narrowed<'x>>,
+}
+
+/// A need narrowed where `gate` answers `answer`, beside whether the load's door so answered.
+#[derive(Clone, Copy)]
+pub(super) struct Narrowed<'x> {
+    pub gate: Question<'x>,
+    pub answer: Answer,
+    pub need: KType,
+    pub taken: bool,
+}
+
+impl SlotNeed<'_> {
+    /// The need the load checks.
+    fn checked(&self) -> KType {
+        match self.narrowed {
+            Some(narrowed) if narrowed.taken => narrowed.need,
+            _ => self.need,
+        }
+    }
 }
 
 /// The first argument a need of `native`'s call drops and the call's return, its overload declared
 /// as the shape `declared`, over `given`: the load's entry point.
-pub(super) fn typed(
-    marks: &dyn Marks,
+pub(super) fn typed<'x, U>(
+    marks: &dyn Derives<Unwalked = U>,
     native: Native,
     declared: KType,
     given: &[Given<'_>],
     types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-) -> Typed {
+    scratch: BumpAllocator<'x>,
+) -> Typed<'x> {
     let needs = needs(marks, native, declared, given, types, scratch);
     let dropped = (given.iter().zip(needs.iter()))
         .position(|(given, need)| {
-            judge::lower_end_outside(marks, types, scratch, given.typed, *need)
+            judge::lower_end_outside(marks, types, scratch, given.typed, need.checked())
         })
-        .map(|slot| (slot, lacks(native, given, slot, types)));
+        .map(|slot| match lacks(native, given, slot, types) {
+            Lackable::Rigid(lacks) => (slot, Some(lacks)),
+            Lackable::Nothing | Lackable::Named(_) => (slot, None),
+        });
     let read = returns(marks, native, declared, given, types, scratch);
-    Typed { dropped, read }
+    Typed {
+        dropped,
+        read,
+        needs,
+    }
 }
 
 /// The return of `native`'s call over `given`, with no need checked.
-fn returns(
-    marks: &dyn Marks,
+fn returns<U>(
+    marks: &dyn Derives<Unwalked = U>,
     native: Native,
     declared: KType,
     given: &[Given<'_>],
@@ -118,7 +165,7 @@ fn returns(
         }
         // An operand that never arrives reads nothing.
         (Native::ModuleMember, Some(_))
-            if judge::is(marks, types, given[0].typed.upper, KType::NEVER) =>
+            if judge::is(marks, types, scratch, given[0].typed.upper, KType::NEVER) =>
         {
             Interval::point(KType::NEVER.into())
         }
@@ -174,8 +221,8 @@ fn returns(
 /// its node itself, never a variable's bound, since the run reads the member through that very
 /// schema and retypes it to `declared` — and at most `declared` otherwise. Its lower end is the
 /// type on those two answers, so it is the same at load and under every binding.
-pub(super) fn member_read(
-    marks: &dyn Marks,
+pub(super) fn member_read<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     operand: Interval,
@@ -217,19 +264,30 @@ pub(super) fn member_read(
     }
 }
 
-/// What the argument at `slot` of `native`'s call lacks, where a need the rule narrowed by the
-/// names the call reads dropped it: the first name, in the order written, a record lower end lacks,
-/// or the one member a module read names. `None` where the rule narrowed nothing there.
-fn lacks(
+/// What the argument at `slot` of `native`'s call may lack, where a need the rule narrowed by the
+/// names the call reads drops it ([`Lackable`]): the first name, in the order written, a record
+/// lower end lacks, or the one member a module read names. A lower end that is a variable lacks
+/// what its binding lacks, a record its field or a signature its member.
+pub(super) fn lacks<'x>(
     native: Native,
-    given: &[Given<'_>],
+    given: &[Given<'x>],
     slot: usize,
     types: &Chain<'_, '_, '_, '_>,
-) -> Option<Lacks> {
-    let names = named(given, native)?;
-    // Wording only: a variable gives none, and a witnessing walk's refusal is worded closed.
-    let node = judge::node_unless_variable(types, given[slot].typed.lower)?;
-    match (native, slot, node) {
+) -> Lackable<'x> {
+    let Some(names) = named(given, native) else {
+        return Lackable::Nothing;
+    };
+    let read = matches!(
+        (native, slot),
+        (Native::Project, 1) | (Native::Field, 0) | (Native::ModuleMember, 0)
+    );
+    let Some(node) = judge::node_unless_variable(types, given[slot].typed.lower) else {
+        return match read {
+            true => Lackable::Named(names),
+            false => Lackable::Nothing,
+        };
+    };
+    let lacks = match (native, slot, node) {
         (Native::Project, 1, TypeNode::Record { fields })
         | (Native::Field, 0, TypeNode::Record { fields }) => (names.iter())
             .find(|name| fields.get(name.symbol()).is_none())
@@ -245,11 +303,13 @@ fn lacks(
             _ => None,
         },
         _ => None,
-    }
+    };
+    lacks.map_or(Lackable::Nothing, Lackable::Rigid)
 }
 
 /// The type each slot of `native`'s call needs: its declared slot, narrowed by a rule of its own
-/// to a record holding each name the call reads.
+/// to a record holding each name the call reads. A narrowing a binding may decide otherwise keeps
+/// its gate, the question it rests on.
 ///
 /// A need narrows only at a builtin expression shape's key, which no user overload joins: a
 /// candidate a need drops then leaves no other for the run to select, so the load refuses rather
@@ -262,30 +322,41 @@ fn needs<'x>(
     given: &[Given<'_>],
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
-) -> BumpVec<'x, KType> {
+) -> BumpVec<'x, SlotNeed<'x>> {
     let mut needs = BumpVec::with_capacity_in(given.len(), scratch);
-    needs.extend(shape_slots(declared, types));
+    needs.extend(shape_slots(declared, types).map(|need| SlotNeed {
+        need,
+        narrowed: None,
+    }));
     let holding = |names: &[BinderSymbol]| {
         record_type(types, scratch, names.iter().map(|name| (*name, KType::ANY)))
     };
     match (native, named(given, native)) {
-        (Native::Project, Some(names)) => needs[1] = holding(&distinct(names, scratch)),
+        (Native::Project, Some(names)) => needs[1].need = holding(&distinct(names, scratch)),
         // Over a lower end no record, `ATTR` reads a type, a tagged value or a module, and faults
         // on its own. Over a module it never reads a field, so a record holding the label is what
         // it needs, which no module is. A variable whose bound guarantees the field has it at
         // every binding, so it needs nothing narrower and asks nothing.
         (Native::Field, Some(names @ [name]))
             if judge::projection(types, scratch, given[0].typed.lower, Step::Field(*name))
-                .is_none()
-                && fielded(marks, types, scratch, given[0].typed.lower) =>
+                .is_none() =>
         {
-            needs[0] = holding(names);
+            let lower = given[0].typed.lower;
+            let (answered, gate) = fielded(marks, types, scratch, lower);
+            needs[0].narrowed = (answered != Some(false)).then(|| Narrowed {
+                gate,
+                answer: Answer::Bool(true),
+                need: holding(names),
+                taken: answered == Some(true),
+            });
         }
         // Over a lower end that is a signature, a module naming the label is what a read needs.
-        (Native::ModuleMember, Some([name]))
-            if judge::kind_decided(marks, types, scratch, given[0].typed.lower)
-                == Some(KKind::Signature) =>
-        {
+        (Native::ModuleMember, Some([name])) => {
+            let lower = given[0].typed.lower;
+            let kind = judge::kind_decided(marks, types, scratch, lower);
+            if kind.is_some_and(|kind| kind != KKind::Signature) {
+                return needs;
+            }
             let mut draft = SchemaDraft::new(scratch);
             draft.origin = SigOrigin::Declared;
             match name {
@@ -295,7 +366,12 @@ fn needs<'x>(
                 }
                 BinderSymbol::Registration(_) | BinderSymbol::Key(_) => return needs,
             }
-            needs[0] = types.signature(scratch, draft);
+            needs[0].narrowed = Some(Narrowed {
+                gate: Question::Kind { ty: lower },
+                answer: Answer::Kind(KKind::Signature),
+                need: types.signature(scratch, draft),
+                taken: kind.is_some(),
+            });
         }
         _ => {}
     }
@@ -329,8 +405,8 @@ pub(super) fn distinct<'x>(
 /// The record of each of `names` at the type `field` reads for it; `Never` where one reads `Never`,
 /// since no record holds a field at `Never` ([`judge::never_unless`]). `undecided` is the end
 /// outside a walk.
-fn projection(
-    marks: &dyn Marks,
+fn projection<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     names: &[BinderSymbol],
@@ -348,15 +424,16 @@ fn projection(
 /// record's field type, joined over a union's members; the projection there where a bound
 /// guarantees the field; else, over names, the derived name of the field a binding gives. `Any`
 /// where a value under `ktype` may hold no such field, and outside a walk over names.
-fn upper_field(
-    marks: &dyn Marks,
+fn upper_field<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     ktype: Parametric,
     name: BinderSymbol,
 ) -> Parametric {
     let operand = [DeclaredType::Type(ktype)];
-    judge::ruled_one(marks, types, scratch, Rule::FieldAbove(name), &operand)
+    (judge::ruled_one(marks, types, scratch, Rule::FieldAbove(name), &operand).ok())
+        .flatten()
         .unwrap_or(KType::ANY.into())
 }
 
@@ -364,28 +441,36 @@ fn upper_field(
 /// [`Rule::FieldUnder`]: a record's field type, the projection there where a bound guarantees
 /// the field, else, over names, the derived name of the field a binding gives; `Never` where it
 /// names no such field, and outside a walk over names.
-fn lower_field(
-    marks: &dyn Marks,
+fn lower_field<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     ktype: Parametric,
     name: BinderSymbol,
 ) -> Parametric {
     let operand = [DeclaredType::Type(ktype)];
-    judge::ruled_one(marks, types, scratch, Rule::FieldUnder(name), &operand)
+    (judge::ruled_one(marks, types, scratch, Rule::FieldUnder(name), &operand).ok())
+        .flatten()
         .unwrap_or(KType::NEVER.into())
 }
 
 /// Whether a value of `lower` names fields — a record or a signature — as [`Rule::Fielded`] asks:
-/// every binding's answer, else the witness's, and no where it is undecided.
-fn fielded(
+/// every binding's answer, `None` where it is undecided; beside the question.
+fn fielded<'x>(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
+    scratch: BumpAllocator<'x>,
     lower: Parametric,
-) -> bool {
-    let operands = [DeclaredType::Type(lower)];
-    judge::defined(marks, types, scratch, Rule::Fielded, &operands).0 == Some(true)
+) -> (Option<bool>, Question<'x>) {
+    let operands = collect(scratch, [DeclaredType::Type(lower)].into_iter());
+    let answered = judge::defined(marks, types, scratch, Rule::Fielded, operands).0;
+    (
+        answered,
+        Question::Defined {
+            rule: Rule::Fielded,
+            operands,
+        },
+    )
 }
 
 /// The return the builtin shape `declared` declares.

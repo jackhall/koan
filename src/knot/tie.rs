@@ -29,7 +29,7 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, Component, Located, ShapeKind, Stamp, Untieable, Written};
+use crate::scope::{BodyShape, Component, Located, ShapeKind, Untieable, Written};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{Chain, DepotRef, Retype, Weight, retype_target_as};
@@ -60,7 +60,7 @@ pub fn tie<'graph, 'cell, 'x>(
     activation: &KReading<'_, 'graph, 'cell>,
     written: Written<'graph, 'cell, '_>,
     component: &Component<'_>,
-    born: (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
+    born: DepotRef,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,

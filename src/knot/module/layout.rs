@@ -6,8 +6,10 @@
 //! Through a header, a reader sees what the carried signature declares: a named member retyped to
 //! its declared type, and at a key, per keyworded member, the most specific overloads covering it
 //! ([`covering`]), each retyped to its shape. A view's build makes the same pick. Where the load saw
-//! all of the module, it recorded the pick by registration position ([`header_picks`]), and the
-//! reader takes it in place of its own.
+//! all of the module and the carried type spells its applications, it recorded the pick by
+//! registration position ([`header_picks`]), and the reader takes it in place of its own; over a
+//! carried type no application spells — a derived name, a bare variable — the reader picks the
+//! covering overloads itself, which are a fresh load's under every binding.
 
 use crate::elaborate::{member_count, schema_member, schema_of, signature_member, type_members};
 use crate::knot::{KValue, Knotted};
@@ -145,7 +147,8 @@ pub fn named_count(
 /// registered shape ([`registered_shape`]) has that key. Through a header, each keyworded member
 /// the carried signature declares at `key` offers the module's overloads [`covering`] it, each
 /// retyped in `writer`'s region to the member's declared shape — or, where the load saw all of the
-/// module, the overloads `picks` names ([`header_picks`]).
+/// module and the carried type spells its applications, the overloads `picks` names
+/// ([`header_picks`]).
 pub fn functions_at<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     module: KValue<'graph, 'cell>,
@@ -204,7 +207,9 @@ pub fn functions_at<'graph, 'cell, 'x>(
 /// What a header carrying `carried`, written over names or not, offers for each keyworded member,
 /// by its position among [`keyworded_members`], over a body-born module whose registrations
 /// register at `registered` in their run's order: [`functions_at`]'s pick, recorded where the
-/// load sees all of the module. Over names, whether two members are one is `same`'s answer and
+/// load sees all of the module and `carried` spells its applications: a pick names its member by
+/// position, and the members of a type no application spells, and their order, change per
+/// binding. Over names, whether two members are one is `same`'s answer and
 /// whether a registration covers a member `covers`', as [`covered`] judges them closed: `None`
 /// where some cover is undecided, or `carried` spells no application.
 pub fn header_picks<'x>(

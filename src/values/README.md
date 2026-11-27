@@ -407,21 +407,17 @@ over the graph's type tiers and the build's writer and header.
 branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 The branch is kept in the habitat half's header, a struct of `scope`'s
-([`RegionHeader`](../scope/header.rs)): beside the branch it holds the
-decision memo of the cells whose results are built in the half
-([the build module](../build/README.md#activations)).
+([`RegionHeader`](../scope/header.rs)).
 `values` cannot name that struct, so a [`Half`](habitat.rs) holds its header
 door projected to the branch's slot ([`BranchSlot`](habitat.rs)): any header
 family that projects to it serves, and `values` reads and lays the header
 through that slot alone. Projecting lays nothing, so a half that never interns
 lays no header; its first intern lays the header and the branch.
-What the build depot's books are keyed and bounded by lives in
-[settlement.rs](settlement.rs): a settlement's key, a seek's binding image, the
-budget, and `DepotRef`, the opaque handle naming a depot slot above the
-scheduler — a slot and its generation — opened only by `values` and the
-scheduler
-([the build module](../build/README.md#references-between-frames-and-the-depot)),
-and `KeptCell`, the brand-free handle of a tree cell a fault keeps beside the
+What the build depot's books are bounded by lives in
+[depot.rs](depot.rs): the budget, and `DepotRef`, the opaque handle naming
+what a frame runs under above the scheduler — the root, or a composition's
+depot slot and its generation — opened only by `values` and the scheduler
+([the build depot](../scheduler/README.md#the-build-depot)), and `KeptCell`, the brand-free handle of a tree cell a fault keeps beside the
 depot slot it borrows, which only the scheduler makes and opens
 ([faults](../scheduler/README.md#faults)). A
 [`Chain`](habitat.rs) carries a pairing brand naming the writer it serves
@@ -692,11 +688,12 @@ over-distinction is sound: keying two equal things apart costs only a key.
 
 **A digest is computed on demand**, and kept where the load says the demand
 recurs: a view asks for its
-[underlying](../knot/module/README.md#birth)'s, a call of a keyed body for the argument
-at each keyed parameter ([keys](../build/README.md#keys-which-bindings-make-a-settlement)),
-and nothing else, so a value no view or key reaches never pays for one. A
-value carries no digest but a module, which keeps its content from the first
-view or key that reaches it; a slot the load marks as digested — the source of
+[underlying](../knot/module/README.md#birth)'s, and a frame a module its
+bind site binds, whose digest files the instance's view
+([instances at run](../build/README.md#instances-at-run)), and nothing else,
+so a value no view or bind site reaches never pays for one. A value carries
+no digest but a module, which keeps its content from the first view or bind
+site that reaches it; a slot the load marks as digested — the source of
 a capture of a module that a `:|` in the slot's activation, or a block inside
 it, views — keeps its
 value's digest beside it, filled by that view or handed in at the frame's

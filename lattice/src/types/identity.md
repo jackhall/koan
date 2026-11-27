@@ -309,7 +309,10 @@ the node. Two more see inside a signature: whether a sibling, and whether an
 opaque carrier, is reachable from the node through any handle a signature or
 an application holds too. A signature and a variable store these two beside
 their kind's constant, since a variable's bound may hold a sibling or a
-signature naming a carrier. The probes are the lattice's own;
+signature naming a carrier. A ninth sees inside a scheme: whether a lexical,
+path or derived variable, a head parameter or a projection is reachable
+outside sealed content, a scheme's body included — a variable no scheme
+binds. The flags fill a `u16`. The probes are the lattice's own;
 the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
 concreteness through `concrete` or `concrete_declared`.
 

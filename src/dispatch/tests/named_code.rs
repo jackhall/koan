@@ -365,11 +365,22 @@ fn a_body_that_can_never_be_code_is_refused_at_load() {
 fn a_body_found_not_code_where_the_callable_is_born_is_an_error_there() {
     assert_eq!(
         run(
+            "EXPR #(LIFT b :{code :Any}) -> Any = #((LET code = b.code) (FN :{x :Number} -> Number = code))
+LET g = (LIFT {code = 5})
+PRINT \"unreached\""
+        ),
+        "error: this body is Number, which is not code for a callable to run\n  in :(FN :{b :{code :Any}} -> Any) (LIFT {code = 5}) at <test>:2:9"
+    );
+    // A parameter declared `Any` is the name of the type it carries, which a call the text fixes
+    // passes it: the load refuses the body as a fresh load would.
+    assert_eq!(
+        run(
             "EXPR #(LIFT code :Any) -> Any = #(FN :{x :Number} -> Number = code)
 LET g = (LIFT 5)
 PRINT \"unreached\""
         ),
-        "error: this body is Number, which is not code for a callable to run\n  in :(FN :{code :Any} -> Any) (LIFT 5) at <test>:2:9"
+        "load: <test>:1:63: this body is Number, which can never be code: write the body as a \
+         quote, #(…), or name code\n  in (LIFT 5) at <test>:2:9"
     );
 }
 

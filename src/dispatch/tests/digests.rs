@@ -2,7 +2,7 @@
 //! module by its code as resolved over what it captures, and values that reach one another by the
 //! one knot they are tied into.
 
-use crate::program::tests::stores::frame_bound_back;
+use crate::program::tests::frame_bound::frame_bound_back;
 use crate::program::tests::{digest_back, syntax_back};
 use std::cell::RefCell;
 

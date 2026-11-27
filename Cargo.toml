@@ -25,10 +25,14 @@ dhat = ["dep:dhat"]
 # runs when the generated file does not compile. It does not turn on the lattice's feature of the
 # same name: the seed regenerates first, in its own crate.
 bootstrap-image = []
+# The binding graph's counters: the `NameQuestion`s asked and the stored questions evaluated.
+perf = ["bindgraph/perf"]
 
 [dependencies]
 # The cell tier's substrate: cells, their regions, the carrier states and the liveness matrix.
 cellgraph = { path = "cellgraph" }
+# The binding graph: bind sites over the program's text, and the instances made under bindings.
+bindgraph = { path = "bindgraph" }
 # The layout half of the parser: whitespace-sensitive s-expressions with glue, no vocabulary.
 sexlex = { path = "sexlex" }
 # The symbol vocabulary and the type lattice over it.

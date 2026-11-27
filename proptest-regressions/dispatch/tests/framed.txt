@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc bedc6a1f51e101d28b267162b7c7f957d436b59984e4c6e602aaf5cec911d95a # shrinks to case = Resumable { key: false, list: false, item: false, module: false, maker: false, picks: false, module_at: Counter, local: false, pair: None, both: false, statements: [Annotated(Elt)], bound: Bound { elt: Some(Number), key: None, item: None, module: None, local: None, held: None, built: None } }, seed = 0
+cc 032f6d133e6ba406618f157bb07823504e1fc09fb9a2a27ccfeee7ebbdc338a6 # shrinks to case = Resumable { key: false, list: false, item: false, module: false, maker: false, picks: false, module_at: Counter, local: false, pair: None, both: false, statements: [Call(X)], bound: Bound { elt: Some(Number), key: None, item: None, module: None, local: None, held: None, built: None } }
+cc d4c0703b4f10c432044f9c9eb9d277b6ba99a82855028bfc6597070ab757da62 # shrinks to case = Resumable { key: false, list: false, item: false, module: false, maker: false, picks: false, module_at: Counter, local: false, pair: None, both: false, statements: [VariableMember], bound: Bound { elt: Some(Number), key: None, item: None, module: None, local: None, held: None, built: None } }, seed = 0
+cc c2ebe92390efdcd2a5994c8a7c83dff75f6f01d8f3369e8b99db079c5732959c # shrinks to case = Resumable { key: false, list: false, item: false, module: false, maker: false, picks: false, module_at: Counter, local: false, pair: None, both: false, statements: [UndecidedModule(false), PrefixClass], bound: Bound { elt: Some(Number), key: None, item: None, module: None, local: None, held: None, built: None } }, seed = 0

@@ -18,15 +18,15 @@ use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
 
 use super::case_share;
-use super::harness::{Counting, Kept, handle, read};
+use super::harness::{Counting, EMPTY, Kept, handle, read};
 use super::reference::{Reference, Unknown, admission, reference};
 use super::toy::{
     Draw, Term, Toy, ToyAnswers, ToyText, Verdict, atom, bases, grows_by_terms, linear_order, list,
     node, placed, raw, site, toy_binding, toy_binding_with_answered, toy_text,
 };
 use crate::{
-    Binding, Bound, ComponentId, EdgeId, Graph, LayError, NameId, NodeId, QuestionId, Resting,
-    Source,
+    Binding, Bound, ComponentId, EdgeId, Graph, Handle, LayError, NameId, NodeId, QuestionId,
+    Resting, Source,
 };
 
 fn config() -> ProptestConfig {
@@ -95,6 +95,17 @@ proptest! {
         for index in 0..text.edges.len() {
             let id = EdgeId::new(index);
             let owners: Vec<NodeId> = nodes(&graph).filter(|&node| graph.node(node).follows().contains(&id)).collect();
+            // An onward call is owned before its target, no earlier than its inputs
+            // arrive, or dropped where its target is no node.
+            if let Some(target) = text.edges[index].onto {
+                prop_assert!(owners.len() <= 1);
+                if let Some(&owner) = owners.first() {
+                    prop_assert_eq!(graph.edge(id).owner(), owner);
+                    prop_assert!(graph.site_lt(graph.node(owner).site(), site(target)));
+                    prop_assert!(graph.site_le(latest(&bases.inputs[index]), graph.node(owner).site()));
+                }
+                continue;
+            }
             prop_assert_eq!(owners.len(), 1);
             prop_assert_eq!(graph.node(owners[0]).site(), latest(&bases.inputs[index]));
             prop_assert_eq!(graph.edge(id).owner(), owners[0]);
@@ -396,6 +407,67 @@ proptest! {
         }
     }
 
+    /// One answer is the node's: `Bound::answer` for each question a node owns equals that
+    /// question's element of `Bound::answers`, under a drawn budget, zero among them, so the
+    /// answer is read from where it rests or replayed alone.
+    #[test]
+    fn one_answer_is_the_nodes(raw in raw()) {
+        let mut draw = Draw::new(raw);
+        let text = toy_text(&mut draw, false);
+        let Some((graph, mut answers)) = laid(&text) else { return Ok(()) };
+        let lend = Bump::new();
+        let mut bound = Bound::new(&graph, &Toy, &EMPTY, &lend, None);
+        let run = Bump::new();
+        let resting = Resting::new(&run, [Some(0), Some(64), None][draw.pick(3)]);
+        for _ in 0..1 + draw.pick(4) {
+            let node = NodeId::new(draw.pick(graph.nodes().len()));
+            let binding = toy_binding_with_answered(&mut draw, &text);
+            let words = handle(&mut bound, resting, node, &binding, &mut answers);
+            let all = read(&mut bound, resting, node, &words, &mut answers);
+            for (&question, &expected) in graph.node(node).owns().iter().zip(&all) {
+                let one = bound.answer(resting, Handle::new(node, &words), question, &mut answers);
+                prop_assert_eq!(one, expected);
+            }
+        }
+    }
+
+    /// Content read again is the evaluation's: `Bound::content` for each answered name a node
+    /// binds equals the content the reference gives it under the same binding, whether the view
+    /// was filed or is made by the read. Reading it for a filed view, every answer resting, runs
+    /// the answer function only for a question an earlier node owns, which rests nowhere, and
+    /// rests nothing.
+    #[test]
+    fn content_read_again_is_the_evaluations(raw in raw()) {
+        let mut draw = Draw::new(raw);
+        let text = toy_text(&mut draw, false);
+        let Some((graph, mut answers)) = laid(&text) else { return Ok(()) };
+        let bump = Bump::new();
+        let mut kept = Kept::new(&graph, &bump);
+        for _ in 0..1 + draw.pick(4) {
+            let node = NodeId::new(draw.pick(graph.nodes().len()));
+            let binding = toy_binding_with_answered(&mut draw, &text);
+            if draw.chance(1, 2) {
+                kept.instance(node, &binding, &mut answers);
+            }
+            let full = reference(&graph, &mut answers, node, &binding).reached.swap_remove(0).full;
+            for &name in graph.node(node).answered() {
+                let filed = kept.bound.filed_view(node, &binding, &Toy).is_some();
+                let laid = kept.resting.laid();
+                let mut counting = Counting::new(&mut answers);
+                let content = kept.bound.content(kept.resting, node, &binding, name, &Toy, &mut counting);
+                let runs = counting.runs;
+                prop_assert_eq!(Some(content), full.get(name));
+                if filed {
+                    let borrowed = |question: &QuestionId| {
+                        nodes(&graph).any(|at| graph.borrows(at).contains(question))
+                    };
+                    prop_assert!(runs.iter().all(borrowed), "{runs:?} reran an owned question");
+                    prop_assert_eq!(kept.resting.laid(), laid);
+                }
+            }
+        }
+    }
+
     /// A repeated call walks nothing: repeating any `instance` call gives the same handle, walks
     /// no edge, runs no answer function and rests nothing.
     #[test]
@@ -538,4 +610,40 @@ fn generators_bite() {
         assert!(count >= least, "{count} of 256 texts {what}, under {least}");
     }
     assert!(refused > 0 && lays > 0, "{refused} refused and {lays} laid");
+}
+
+/// Against vacuity of the onward calls: of 256 texts, how many follow one, leave one waiting,
+/// and take a name from a statement node one reached.
+#[test]
+fn onward_generators_bite() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = raw();
+    let (mut followed, mut waited, mut taken) = (0, 0, 0);
+    for _ in 0..256 {
+        let mut draw = Draw::new(
+            strategy
+                .new_tree(&mut runner)
+                .expect("a raw stream")
+                .current(),
+        );
+        let text = toy_text(&mut draw, false);
+        let Some((graph, mut answers)) = laid(&text) else {
+            continue;
+        };
+        let binding = toy_binding(&mut draw, text.names.len());
+        let (mut follow, mut wait, mut take) = (false, false, false);
+        for node in nodes(&graph) {
+            let run = reference(&graph, &mut answers, node, &graph.bound_at(node, &binding));
+            follow |= run.onward > 0;
+            wait |= run.waited > 0;
+            take |= run.reached_takes > 0;
+        }
+        followed += usize::from(follow);
+        waited += usize::from(wait);
+        taken += usize::from(take);
+    }
+    assert!(
+        followed >= 32 && waited >= 32 && taken >= 12,
+        "{followed} {waited} {taken}"
+    );
 }

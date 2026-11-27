@@ -13,30 +13,41 @@
 //! A name is identified by its term's content ([`DerivedTerm::id`]), as a path class is, so every
 //! walk that meets a term names it alike. One function, [`handed`], gives a term its type — closed,
 //! written over names, or the term's name — and a binding gives a derived name what `handed` gives
-//! its term with the binding written in ([`rebound`]), so a unit record absorbed under a binding and
-//! one re-run under it hold one handle. A walk lays each name it meets that no layer beneath it
-//! holds ([`Derived`]), and a reader finds a name's term by its id ([`Binds::term`]).
+//! its term with the binding written in ([`rebound`]), so every reader writing one binding into a
+//! name holds one handle. A walk lays each name it meets ([`Derived`]), and a reader finds a name's
+//! term by its id ([`Binds::term`]).
 //!
 //! A derived name renders as its term: it is named through [`Spellings`], the symbols door, by the
 //! spelling its rule gives (`(ELEMENT OF Elt)`). The lattice's `Term` is a type's minting term, a
 //! different thing.
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
+use crate::source::SourceRef;
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    DeclaredType, DerivedId, KType, Parametric, PathClass, TypeHandle, TypeNode, bound_above,
-    display_name, join,
+    DeclaredType, DerivedId, KType, Parametric, PathClass, Variable, bound_above, display_name,
+    join,
 };
 use crate::values::Chain;
 use crate::values::digest::{DigestHasher, Tag};
 
 use super::facts::Unknown;
 use super::nominal::{Handed, Nominals, sealed_nominals};
-use super::question::{Answer, Question, answer, free_variables, rebound};
+use super::question::{Question, free_variables, rebound};
 use super::record_types::Closed;
+use super::rigid::rigid_answer;
 use super::rule::Rule;
+use super::shape::Segment;
 use super::signed::{Signed, sealed_signature};
 use super::typed::Resolved;
+
+/// How a [`DerivedTerm::Carried`] name is spelled: by the binder holding the module, or by the
+/// call or `EVAL` written in place that a holder holds.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Carrier {
+    Binder(ValueSymbol),
+    Written(SourceRef),
+}
 
 /// What a derived name stands for, every type it reads written over names.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,9 +79,68 @@ pub enum DerivedTerm<'a> {
         signed: &'a Signed<'a>,
         operands: &'a [DeclaredType<Parametric>],
     },
-    /// The type the module a binding binds to the `:Module` binder `binder`, named `name`, carries:
-    /// a signature at every binding, which no other node spells.
-    Carried { binder: Unknown, name: ValueSymbol },
+    /// The type the module a binding binds to the module binder `binder`, spelled `name`,
+    /// carries: a signature under `bound`, written over names, at every binding, which no other
+    /// node spells. A `:Module` parameter's bound is the empty signature; a module binder the run
+    /// builds lies under its static type's upper end.
+    Carried {
+        binder: Unknown,
+        name: Carrier,
+        bound: Parametric,
+    },
+    /// The rigid of the name at `name`: whatever the run binds there, where no answer gives the
+    /// name content, under `upper`. One per name, related to no other variable, so two names
+    /// numbered alike in two bodies never meet ([`NameAddress`]).
+    Rigid { name: NameAddress, upper: KType },
+    /// The name at `name` left open inside content a caller passes, or an ask's position whose
+    /// content is open or a rigid, under `upper`: its own unknown, apart from every name the
+    /// callee binds and every other position of the ask.
+    Open { name: NameAddress, upper: KType },
+}
+
+/// Where a name a rigid or an open variable stands for lies in its base, stable across loads of
+/// one text: a site name by its lexical address, an answered name by its deciding term's id, one
+/// position of an ask whose content held the variable `of`, a callable's result by its body, or
+/// what an answer through a call gives a holder, by the holder.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum NameAddress {
+    Site(Unknown),
+    Answered(DerivedId),
+    Asked { position: u16, of: DerivedId },
+    Returned(Segment),
+    Arrival(Unknown),
+}
+
+impl DerivedTerm<'_> {
+    /// Whether this is the type a module binder carries: a [`Carried`](DerivedTerm::Carried) name
+    /// under a signature, so a signature at every binding. One under `Any`, a parameter declared
+    /// `Any`, declares no bound.
+    pub fn carries_a_module(&self) -> bool {
+        matches!(*self, DerivedTerm::Carried { bound, .. }
+            if bound != Parametric::from(KType::ANY))
+    }
+}
+
+impl NameAddress {
+    fn fed(&self, hasher: &mut DigestHasher) {
+        match *self {
+            NameAddress::Site(unknown) => {
+                hasher.count(0).feed(unknown);
+            }
+            NameAddress::Answered(id) => {
+                hasher.count(1).feed(id);
+            }
+            NameAddress::Asked { position, of } => {
+                hasher.count(2).count(usize::from(position)).feed(of);
+            }
+            NameAddress::Returned(segment) => {
+                hasher.count(3).feed(segment);
+            }
+            NameAddress::Arrival(unknown) => {
+                hasher.count(4).feed(unknown);
+            }
+        }
+    }
 }
 
 /// What decides a [decided](DerivedTerm::Decided) name's answer.
@@ -123,6 +193,14 @@ pub trait Binds {
     /// one ([`DerivedTerm::Carried`]).
     fn carried(&self, binder: Unknown) -> Option<KType> {
         let _ = binder;
+        None
+    }
+
+    /// What the binding writes in for `variable` whole, consulted before every other door: a type
+    /// that may still be written over names, such as content holding an open variable. `None`
+    /// where it leaves the other doors to answer.
+    fn written(&self, types: &Chain<'_, '_, '_, '_>, variable: Variable) -> Option<Parametric> {
+        let _ = (types, variable);
         None
     }
 }
@@ -182,8 +260,18 @@ impl<'a> DerivedTerm<'a> {
                     hasher.feed(operand.digest());
                 }
             }
-            DerivedTerm::Carried { binder, .. } => {
-                hasher.count(4).feed(binder);
+            DerivedTerm::Carried { binder, bound, .. } => {
+                hasher.count(4).feed(binder).feed(bound.digest());
+            }
+            DerivedTerm::Rigid { name, upper } => {
+                hasher.count(5);
+                name.fed(&mut hasher);
+                hasher.feed(upper.digest());
+            }
+            DerivedTerm::Open { name, upper } => {
+                hasher.count(6);
+                name.fed(&mut hasher);
+                hasher.feed(upper.digest());
             }
         }
         let bits = hasher.finished().bits();
@@ -207,6 +295,9 @@ impl<'a> DerivedTerm<'a> {
             }
             DerivedTerm::Signature { operands, .. } => operands.iter().for_each(|ty| each(*ty)),
             DerivedTerm::Carried { .. } => {}
+            DerivedTerm::Rigid { upper, .. } | DerivedTerm::Open { upper, .. } => {
+                each(upper.into());
+            }
         }
     }
 
@@ -288,14 +379,49 @@ impl<'a> DerivedTerm<'a> {
                     operands: collect(scratch, each.iter().copied()),
                 }
             }
-            DerivedTerm::Carried { binder, name } => DerivedTerm::Carried { binder, name },
+            DerivedTerm::Carried {
+                binder,
+                name,
+                bound,
+            } => DerivedTerm::Carried {
+                binder,
+                name,
+                bound: match written(bound.into()) {
+                    DeclaredType::Type(bound) => bound,
+                    DeclaredType::Scheme(_) => unreachable!("a bound is a type"),
+                },
+            },
+            // A rigid's and an open variable's bound is closed: no binding writes into it.
+            DerivedTerm::Rigid { name, upper } => DerivedTerm::Rigid { name, upper },
+            DerivedTerm::Open { name, upper } => DerivedTerm::Open { name, upper },
         };
         (term, changed)
     }
 
     /// Closed ends holding what every binding gives the term: a rule's, or for a decided name
-    /// `Never` up to the join of its arms' bounds.
+    /// `Never` up to the join of its arms' bounds. An end holding an opaque carrier is widened past
+    /// it, a lower end to `Never` and an upper end to `Any`, since a name's bound holds no carrier
+    /// (the hidden-bound law); the carrier stays in the term.
     pub fn ends(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> (KType, KType) {
+        let (lower, bound) = self.carried_ends(types, scratch);
+        (
+            match types.holds_carrier(lower) {
+                true => KType::NEVER,
+                false => lower,
+            },
+            match types.holds_carrier(bound) {
+                true => KType::ANY,
+                false => bound,
+            },
+        )
+    }
+
+    /// [`ends`](Self::ends) before widening past a carrier.
+    fn carried_ends(
         &self,
         types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
@@ -314,8 +440,12 @@ impl<'a> DerivedTerm<'a> {
             }
             DerivedTerm::Nominal { .. } => (KType::NEVER, KType::ANY),
             // A signature lies under the empty signature at every binding.
-            DerivedTerm::Signature { .. } | DerivedTerm::Carried { .. } => {
-                (KType::NEVER, KType::EMPTY_SIGNATURE)
+            DerivedTerm::Signature { .. } => (KType::NEVER, KType::EMPTY_SIGNATURE),
+            DerivedTerm::Carried { bound, .. } => {
+                (KType::NEVER, bound_above(types, scratch, bound))
+            }
+            DerivedTerm::Rigid { upper, .. } | DerivedTerm::Open { upper, .. } => {
+                (KType::NEVER, upper)
             }
         }
     }
@@ -381,8 +511,23 @@ impl<'a> DerivedTerm<'a> {
                 }
                 f.write_str(")")
             }
-            DerivedTerm::Carried { name, .. } => {
-                write!(f, "(CARRIED BY {})", symbols.display(name.symbol()))
+            DerivedTerm::Carried {
+                name: Carrier::Binder(name),
+                ..
+            } => write!(f, "(CARRIED BY {})", symbols.display(name.symbol())),
+            DerivedTerm::Carried {
+                name: Carrier::Written(source),
+                ..
+            } => write!(f, "(CARRIED BY {})", source.text()),
+            DerivedTerm::Rigid { name, .. } => {
+                f.write_str("(RIGID ")?;
+                spell_address(f, name)?;
+                f.write_str(")")
+            }
+            DerivedTerm::Open { name, .. } => {
+                f.write_str("(OPEN ")?;
+                spell_address(f, name)?;
+                f.write_str(")")
             }
         }
     }
@@ -419,7 +564,32 @@ impl<'a> DerivedTerm<'a> {
                 signed: crate::memory::resident(lay, signed.laid(lay)),
                 operands: collect(lay, operands.iter().copied()),
             },
-            DerivedTerm::Carried { binder, name } => DerivedTerm::Carried { binder, name },
+            DerivedTerm::Carried {
+                binder,
+                name,
+                bound,
+            } => DerivedTerm::Carried {
+                binder,
+                name,
+                bound,
+            },
+            DerivedTerm::Rigid { name, upper } => DerivedTerm::Rigid { name, upper },
+            DerivedTerm::Open { name, upper } => DerivedTerm::Open { name, upper },
+        }
+    }
+}
+
+/// A name address as a rigid's or an open variable's spelling shows it: short, and unlike any
+/// other address.
+fn spell_address(f: &mut std::fmt::Formatter<'_>, name: NameAddress) -> std::fmt::Result {
+    let short = |id: DerivedId| id.0[0] >> 40;
+    match name {
+        NameAddress::Site(unknown) => write!(f, "{}.{:?}", unknown.segment.index(), unknown.at),
+        NameAddress::Answered(id) => write!(f, "{:x}", short(id)),
+        NameAddress::Asked { position, of } => write!(f, "{:x}.{position}", short(of)),
+        NameAddress::Returned(segment) => write!(f, "{}.returned", segment.index()),
+        NameAddress::Arrival(unknown) => {
+            write!(f, "{}.{:?}.arrival", unknown.segment.index(), unknown.at)
         }
     }
 }
@@ -429,13 +599,15 @@ impl<'a> DerivedTerm<'a> {
 /// arm is it, the arm of its rigid answer ([`rigid_answer`]), else `name`'s. A door hands back what
 /// this gives its term, and a binding gives a derived name what this gives its term with the
 /// binding written in, so a rule hands back one handle at load and under every binding. `None`
-/// where the closed rule has no answer over closed operands, or `name` names none.
-pub fn handed(
+/// where the closed rule has no answer over closed operands; `name`'s error where it names none.
+pub fn handed<E>(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     term: DerivedTerm<'_>,
-    name: &mut dyn FnMut(DerivedTerm<'_>) -> Option<Parametric>,
-) -> Option<Parametric> {
+    name: &mut dyn FnMut(DerivedTerm<'_>) -> Result<Parametric, E>,
+) -> Result<Option<Parametric>, E> {
+    let named =
+        |name: &mut dyn FnMut(DerivedTerm<'_>) -> Result<Parametric, E>| name(term).map(Some);
     match term {
         DerivedTerm::Output {
             rule,
@@ -445,13 +617,14 @@ pub fn handed(
             let mut closed = BumpVec::with_capacity_in(operands.len(), scratch);
             closed.extend(operands.iter().map_while(|ty| types.concrete_declared(*ty)));
             if closed.len() == operands.len() {
-                let outputs = rule.closed(types, scratch, &closed)?;
-                return outputs.get(usize::from(output)).map(|ty| (*ty).into());
+                let outputs = rule.closed(types, scratch, &closed);
+                return Ok(outputs
+                    .and_then(|outputs| outputs.get(usize::from(output)).map(|ty| (*ty).into())));
             }
             let spelled = rule.spelled(types, scratch, operands);
             match spelled.get(usize::from(output)).copied().flatten() {
-                Some(written) => Some(written),
-                None => name(term),
+                Some(written) => Ok(Some(written)),
+                None => named(name),
             }
         }
         DerivedTerm::Decided {
@@ -461,11 +634,12 @@ pub fn handed(
             if let [first, rest @ ..] = arms
                 && rest.iter().all(|arm| arm == first)
             {
-                return Some(*first);
+                return Ok(Some(*first));
             }
-            match rigid_answer(types, scratch, &question) {
-                Some(answer) => arms.get(answer.index_in(&question) as usize).copied(),
-                None => name(term),
+            // A decided name's question asks no module of a name, so it reads no term.
+            match rigid_answer(types, scratch, &|_| None, &question) {
+                Some(answer) => Ok(arms.get(answer.index_in(&question) as usize).copied()),
+                None => named(name),
             }
         }
         DerivedTerm::Nominal {
@@ -478,133 +652,26 @@ pub fn handed(
                 !free_variables(types, scratch, (*operand).into()).is_empty()
             };
             if operands.iter().any(names) {
-                return name(term);
+                return named(name);
             }
-            let sealed = sealed_nominals(types, scratch, group, operands)?;
-            sealed.get(usize::from(output)).map(|ty| (*ty).into())
+            let sealed = sealed_nominals(types, scratch, group, operands);
+            Ok(sealed.and_then(|sealed| sealed.get(usize::from(output)).map(|ty| (*ty).into())))
         }
         DerivedTerm::Signature { signed, operands } => {
             if operands
                 .iter()
                 .any(|operand| !free_variables(types, scratch, *operand).is_empty())
             {
-                return name(term);
+                return named(name);
             }
-            Some(sealed_signature(types, scratch, signed, operands).into())
+            Ok(Some(
+                sealed_signature(types, scratch, signed, operands).into(),
+            ))
         }
-        DerivedTerm::Carried { .. } => name(term),
-    }
-}
-
-/// The answer every binding gives `question`, where one does: the closed door's over closed types,
-/// *yes* for two types that are one, *no* for a type that is `Never` at no binding against
-/// `Never`, and the kind of a type whose head fixes it.
-pub fn rigid_answer(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    question: &Question<'_>,
-) -> Option<Answer> {
-    let mut closed = true;
-    question.each_type(&mut |ty| closed &= types.concrete_declared(ty).is_some());
-    if closed {
-        return answer(types, scratch, question);
-    }
-    let never = DeclaredType::Type(Parametric::from(KType::NEVER));
-    match *question {
-        Question::Same { a, b } if a == b => Some(Answer::Bool(true)),
-        Question::Same { a, b } if b == never && !may_be_never(types, a) => {
-            Some(Answer::Bool(false))
+        DerivedTerm::Carried { .. } | DerivedTerm::Rigid { .. } | DerivedTerm::Open { .. } => {
+            named(name)
         }
-        Question::Same { a, b } if a == never && !may_be_never(types, b) => {
-            Some(Answer::Bool(false))
-        }
-        Question::Kind { ty } if !kind_varies(types, ty) => {
-            Some(Answer::Kind(bound_above(types, scratch, ty).kind_of(types)))
-        }
-        Question::Runs { .. } | Question::Arms { .. } => answer(types, scratch, question),
-        Question::Overlaps {
-            registered,
-            against,
-        } if super::question::never_overlaps(types, scratch, registered, against) => {
-            Some(Answer::Overlaps(None))
-        }
-        // A signature is one at every pin, so a field read over it reads a module member.
-        Question::Defined {
-            rule: super::Rule::Fielded,
-            operands: [DeclaredType::Type(ty)],
-        } if matches!(
-            types.node(*ty),
-            TypeNode::Signature { .. }
-                | TypeNode::SignatureApply { .. }
-                | TypeNode::SignatureMeet { .. }
-        ) =>
-        {
-            Some(Answer::Bool(true))
-        }
-        // A run-bound name's binding lies under its bound, which a carrier never does: where the
-        // bound declares a value member, so does every binding's module, `Never` aside.
-        Question::Defined {
-            rule: super::Rule::SignatureValue(name),
-            operands: [DeclaredType::Type(ty)],
-        } => match types.node(*ty) {
-            TypeNode::Lexical { bound, .. } => (bound != KType::NEVER
-                && super::heads::signature_value(types, scratch, bound, name).is_some())
-            .then_some(Answer::Bool(true)),
-            _ => None,
-        },
-        // A head no binding changes says whether a type is a function.
-        Question::IsFunction { ty } => match types.node(ty) {
-            TypeNode::KFunction { .. } => Some(Answer::Bool(true)),
-            TypeNode::Union { .. } => None,
-            node if is_variable(&node) => None,
-            _ => Some(Answer::Bool(false)),
-        },
-        _ => None,
     }
-}
-
-/// Whether some binding makes `ty` `Never`: a variable may be bound to it, and a union is it where
-/// every member is; any other head is never `Never`.
-pub fn may_be_never(types: &Chain<'_, '_, '_, '_>, ty: DeclaredType<Parametric>) -> bool {
-    let DeclaredType::Type(ty) = ty else {
-        return false;
-    };
-    if let Some(closed) = types.concrete(ty) {
-        return closed == KType::NEVER;
-    }
-    match types.node(ty) {
-        TypeNode::Union { members } => members
-            .iter()
-            .all(|member| may_be_never(types, DeclaredType::Type(member))),
-        node => is_variable(&node),
-    }
-}
-
-/// Whether a binding decides the kind of `ty`: a variable, or a union holding one.
-pub fn kind_varies(types: &Chain<'_, '_, '_, '_>, ty: Parametric) -> bool {
-    bare_variable(types, DeclaredType::Type(ty))
-        || (matches!(types.node(ty), TypeNode::Union { .. }) && types.concrete(ty).is_none())
-}
-
-/// Whether `ty` is a variable itself, not a type built over one.
-pub fn bare_variable(types: &Chain<'_, '_, '_, '_>, ty: DeclaredType<Parametric>) -> bool {
-    match ty {
-        DeclaredType::Type(ty) => types.concrete(ty).is_none() && is_variable(&types.node(ty)),
-        DeclaredType::Scheme(_) => false,
-    }
-}
-
-/// Whether `node` is a variable's own node.
-pub fn is_variable<H: TypeHandle>(node: &TypeNode<'_, H>) -> bool {
-    matches!(
-        node,
-        TypeNode::Quantified { .. }
-            | TypeNode::Lexical { .. }
-            | TypeNode::Path { .. }
-            | TypeNode::Derived { .. }
-            | TypeNode::Parameter { .. }
-            | TypeNode::Projection { .. }
-    )
 }
 
 /// The **symbols door** a store names derived names through: each is named by its term's
@@ -675,8 +742,7 @@ impl DerivedName<'_> {
     }
 }
 
-/// The derived names one walk laid that no layer beneath it holds, sorted by id: the table a
-/// reader finds a name's term in.
+/// The derived names one walk laid, sorted by id: the table a reader finds a name's term in.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Derived<'a> {
     names: &'a [DerivedName<'a>],

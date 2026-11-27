@@ -114,3 +114,19 @@ fn a_site_of_one_shape_is_never_read_against_another() {
         fewest.sites().located(site);
     });
 }
+
+#[test]
+fn every_site_names_the_statement_that_holds_it() {
+    with_shapes(NESTED, |shapes, _, _, _| {
+        for shape in shapes.bodies() {
+            let sites = shape.sites();
+            for (index, statement) in shape.body().iter().enumerate() {
+                let head = shape.site_of_node(statement);
+                assert_eq!(sites.statement_of(head), index);
+                each_part(statement, |part| {
+                    assert_eq!(sites.statement_of(shape.site(part)), index);
+                });
+            }
+        }
+    });
+}

@@ -3,7 +3,8 @@
 //! `program` may name the layers it stands over — `build`, `builtin_image`, `knot`, `memory`,
 //! `parse`, `scheduler`, `scope`, `symbols`, `type_lattice` and `values`. Outside its tests it
 //! holds no owning heap type but a refused load's rendered shape error, reported once and never
-//! stored.
+//! stored, and the program's binding graph, which the `bindgraph` crate owns and the running state
+//! drops with the program.
 
 /// The path prefixes `program` may name.
 const PREFIXES: &[&str] = &[

@@ -59,7 +59,7 @@ use crate::values::{Chain, ContentDigest};
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
-use super::typed::{Elaboration, Root, Static, StaticCallable};
+use super::typed::{AsWritten, Elaboration, Rebounds, Root, Static, StaticCallable, written_or};
 
 mod build;
 mod sites;
@@ -80,7 +80,7 @@ pub struct CaptureSlot(pub(crate) u32);
 
 /// A body's index among the shapes one load builds, assigned in the order the shapes are sealed:
 /// distinct per shape, the same in every load of one source text, and unrelated to where the shape
-/// lies in memory. A settlement's key names its callee's body by it.
+/// lies in memory.
 ///
 /// A body's nested bodies take the indices before its own, in program order, so its index exceeds
 /// every body's it encloses, and along one chain indices fall from the root inward. A frontier's
@@ -639,10 +639,6 @@ pub struct BodyShape<'graph> {
     top_captures: &'graph [Option<Slot>],
     /// Each nested shape by its site, so in program order.
     nested: Keyed<'graph, (Site, &'graph BodyShape<'graph>)>,
-    /// Whether this body can birth a callable: a nested callable body, directly or through a
-    /// nested block or module body. A quote's callables are born by the `EVAL` that runs it, so a
-    /// quote counts for nothing.
-    births: bool,
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
     /// Each binder's record, by slot.
@@ -982,6 +978,11 @@ impl<'graph> BodyShape<'graph> {
         self.unit_of_statement[index]
     }
 
+    /// The unit that runs the statement holding `site`.
+    pub fn unit_of_site(&self, site: Site) -> UnitIndex {
+        self.unit_of_statement(self.sites.statement_of(site))
+    }
+
     /// The shapes nested in statement `index`, beside their sites, in program order: what the
     /// statement births or runs inline.
     pub fn nested_in(&self, index: usize) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
@@ -1040,12 +1041,6 @@ impl<'graph> BodyShape<'graph> {
         self.nested.entries()
     }
 
-    /// Whether this body can birth a callable, through its blocks and module bodies but not its
-    /// quotes.
-    pub fn births_callable(&self) -> bool {
-        self.births
-    }
-
     /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.
     pub fn arm(&self) -> Option<Arm<'graph>> {
         self.arm
@@ -1077,6 +1072,40 @@ impl<'graph> BodyShape<'graph> {
     /// from. `None` for a parameter, a type declaration and a module binder.
     pub fn rhs(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {
         self.binder(slot).rhs
+    }
+
+    /// The site of the node a `LET` binder at `slot` holds whole: its right-hand side, where that
+    /// is an expression.
+    pub fn held_site(&self, slot: Slot) -> Option<Site> {
+        match self.rhs(slot)? {
+            ExpressionPart::Expression(node) => Some(self.site_of_node(node)),
+            _ => None,
+        }
+    }
+
+    /// The site of the node the part at `site` holds, where the part is an expression: where a
+    /// part held in place has its calls.
+    pub fn held_node(&self, site: Site) -> Option<Site> {
+        match self.located(site) {
+            Located::Part(ExpressionPart::Expression(node)) => Some(self.site_of_node(node)),
+            _ => None,
+        }
+    }
+
+    /// Whether the part or node at `inner` lies within the expression part at `outer`, or is it.
+    pub fn within(&self, outer: Site, inner: Site) -> bool {
+        match self.located(outer) {
+            _ if outer == inner => true,
+            Located::Part(ExpressionPart::Expression(node)) => {
+                source_of(self, node, inner).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// The site of the body's last statement, the node whose value the body yields.
+    pub fn tail_site(&self) -> Option<Site> {
+        self.body().last().map(|node| self.site_of_node(node))
     }
 
     /// The type the value binder at `slot` is annotated with — the type part of the
@@ -1272,10 +1301,22 @@ pub enum ShapeError<'graph> {
         at: SourceRef,
     },
     /// A quantified function wanted at a type no instance of it lies under, named through its
-    /// bound.
+    /// bound. `rebounds` are the bounds its group writes over names, written into `scheme` once
+    /// they close.
     NoInstance {
         scheme: Scheme,
+        rebounds: Rebounds<'graph>,
         wanted: Parametric,
+        at: SourceRef,
+    },
+    /// The value member `name` of a module the load cannot see, read at an instance site at `at`
+    /// with no instance there under a binding: its module carries `carried`, and it is wanted at
+    /// `wanted`, each written over names. Worded once they close as a fresh load words the read,
+    /// [`Unfixed`](Self::Unfixed) or [`NoInstance`](Self::NoInstance).
+    MemberUninstanced {
+        name: ValueSymbol,
+        carried: Parametric,
+        wanted: Option<Parametric>,
         at: SourceRef,
     },
     /// A keyworded use whose kept candidates want a quantified function argument at different
@@ -1401,13 +1442,16 @@ pub enum ShapeError<'graph> {
         key: &'graph [KeyElement],
         arguments: &'graph [Interval],
         listed: &'graph [DeclaredType<Parametric>],
+        members: &'graph [ListedMember],
         shapes: &'graph [DeclaredType<Parametric>],
         at: SourceRef,
     },
     /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
-    /// type `of`, named through its bound, naming no field `field` the rule needs.
+    /// type `of`, named through its bound, naming no field `field` the rule needs; or a field read
+    /// through a run-bound name whose bound, `written` as the program spells it, declares none.
     NoField {
         of: Parametric,
+        written: Option<AsWritten>,
         field: BinderSymbol,
         at: SourceRef,
     },
@@ -1437,6 +1481,7 @@ pub enum ShapeError<'graph> {
     Ambiguous {
         key: &'graph [KeyElement],
         arguments: &'graph [DeclaredType<Parametric>],
+        members: &'graph [ListedMember],
         count: usize,
         at: SourceRef,
     },
@@ -1465,8 +1510,11 @@ pub enum ShapeError<'graph> {
     /// A call by name whose callee is exactly an unquantified function its argument's static type
     /// `payload` can never satisfy the parameters of, the record type `parameters`, or a quantified
     /// one whose group the argument's static type can never solve. Each is named through its bound.
+    /// `rebounds` are the bounds a quantified callee's group writes over names, written into
+    /// `callee` once they close.
     CallNeverSatisfied {
         callee: DeclaredType<Parametric>,
+        rebounds: Rebounds<'graph>,
         payload: Interval,
         parameters: Parametric,
         at: SourceRef,
@@ -1480,10 +1528,14 @@ pub enum ShapeError<'graph> {
     /// it is composed when it is born, before that knot is tied.
     SpliceInKnot { at: SourceRef },
     /// A read whose argument's static type can never read its list, dict or string head, each
-    /// named through its bound.
+    /// named through its bound; worded as a call by name's where a binding closes the head to a
+    /// function.
     ReadNeverSatisfied {
         container: Parametric,
         argument: Parametric,
+        /// Where the head is a value member of a module the load cannot see: its name and the
+        /// type the module carries, which a binding closes, the member read at its declaration.
+        member: Option<(ValueSymbol, Parametric)>,
         at: SourceRef,
     },
     /// An `EVAL` whose operand's static type can never be code.
@@ -1519,10 +1571,11 @@ pub enum ShapeError<'graph> {
     /// A `UNION` declaring one variant, which is the same type as that variant.
     LoneVariant { name: TypeSymbol, at: SourceRef },
     /// A `MATCH` none of whose arms can ever admit its scrutinee, of static type at most
-    /// `scrutinee`, named through its bound; `union` is the union clause of a `MATCH … UNDER`.
+    /// `scrutinee`, named through its bound; `union` is the union clause of a `MATCH … UNDER`,
+    /// named so too.
     NoAdmittingArm {
         scrutinee: Parametric,
-        union: Option<KType>,
+        union: Option<Parametric>,
         at: SourceRef,
     },
     /// A `MATCH` `count` of whose arms always admit its scrutinee, none ranking first: of static
@@ -1533,17 +1586,22 @@ pub enum ShapeError<'graph> {
         at: SourceRef,
     },
     /// A `MATCH … UNDER` clause that is no union.
-    NotUnion { clause: Parametric, at: SourceRef },
+    /// `written` is the bound a run-bound clause was written with, which the message suggests.
+    NotUnion {
+        clause: Parametric,
+        written: Option<AsWritten>,
+        at: SourceRef,
+    },
     /// A `MATCH … UNDER` arm's `label` naming no variant of `union`.
     NoVariant {
         label: Symbol,
-        union: KType,
+        union: Parametric,
         at: SourceRef,
     },
     /// A `MATCH … UNDER` with no `_` arm and no arm for the variant `variant` of `union`.
     Uncovered {
-        union: KType,
-        variant: KType,
+        union: Parametric,
+        variant: Parametric,
         at: SourceRef,
     },
     /// Two guards of one arm set that are one `guard`; `at` is the second's.
@@ -1552,12 +1610,16 @@ pub enum ShapeError<'graph> {
         first: SourceRef,
         at: SourceRef,
     },
-    /// A refusal the walk reached in a layer the load laid, under the binding the call at `call`
-    /// passes: the first such call in text order.
+    /// A refusal an instance the load made answered, under the binding the call at `call` passes:
+    /// the call that entered the refusing instance.
     UnderCall {
         call: SourceRef,
         refusal: &'graph ShapeError<'graph>,
     },
+    /// A recursion through the call at `at` whose calls, composed around it, give `name` a type
+    /// built over itself, which no binding the load can bound gives: the name needs a declared
+    /// recursive type.
+    Grows { name: BinderSymbol, at: SourceRef },
 }
 
 /// Which part of a form a quote, or a container of quotes, was wanted for.
@@ -1613,6 +1675,7 @@ impl ShapeError<'_> {
             | ShapeError::QuantifiedValue { at }
             | ShapeError::Unfixed { at, .. }
             | ShapeError::NoInstance { at, .. }
+            | ShapeError::MemberUninstanced { at, .. }
             | ShapeError::AmbiguousInstance { at, .. }
             | ShapeError::NoInstanceAtCandidates { at, .. }
             | ShapeError::QuantifiedRead { at, .. }
@@ -1667,7 +1730,8 @@ impl ShapeError<'_> {
             | ShapeError::NotASignature { at, .. }
             | ShapeError::EvalNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
-            | ShapeError::RepeatedGuard { at, .. } => *at,
+            | ShapeError::RepeatedGuard { at, .. }
+            | ShapeError::Grows { at, .. } => *at,
             ShapeError::UnderCall { refusal, .. } => refusal.at(),
         }
     }
@@ -1717,6 +1781,16 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                 let text = call.text();
                 write!(f, "\n  in ({}) at {call}", super::fault::ungrouped(&text))
             }
+            ShapeError::Grows { name: grown, at } => {
+                let text = at.text();
+                let grown = name(grown);
+                write!(
+                    f,
+                    "each turn of the recursion through ({}) builds the type of `{grown}` over \
+                     itself: declare `{grown}` at a recursive type",
+                    super::fault::ungrouped(&text)
+                )
+            }
             ShapeError::Rebind {
                 name: bound, first, ..
             } => write!(f, "`{}` is bound twice; first at {first}", name(bound)),
@@ -1747,9 +1821,9 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                         f.write_str("nothing fixes ")?;
                         types(f)?;
                         f.write_str(
-                            " here: a quantified function is read only at the head of a call, as \
-                             the binding of a `MODULE` member, or where the type it is wanted at solves \
-                             its group",
+                            " here: a quantified function is read only at the head of a call, \
+                             held by a `LET` whose value its body does not return, or where the \
+                             type it is wanted at solves its group",
                         )
                     }
                     Some(wanted) => {
@@ -1768,6 +1842,45 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                 display_name(*scheme, self.types, self.symbols),
                 display_name(above(*wanted), self.types, self.symbols)
             ),
+            ShapeError::MemberUninstanced {
+                name: member,
+                carried,
+                wanted,
+                at,
+            } => {
+                use super::application::{MemberInstance, member_instance_closed};
+                let closed = |ty: Parametric| self.types.concrete(ty);
+                let instanced = closed(*carried).and_then(|carried| {
+                    let wanted = match wanted {
+                        Some(wanted) => Some(closed(*wanted)?),
+                        None => None,
+                    };
+                    Some(member_instance_closed(
+                        self.types, scratch, carried, *member, wanted,
+                    ))
+                });
+                let fresh = match instanced {
+                    Some(MemberInstance::Unfixed { variables }) => ShapeError::Unfixed {
+                        variables,
+                        wanted: *wanted,
+                        at: *at,
+                    },
+                    Some(MemberInstance::NoInstance(scheme)) => ShapeError::NoInstance {
+                        scheme,
+                        rebounds: Rebounds::NONE,
+                        wanted: wanted.unwrap_or(KType::ANY.into()),
+                        at: *at,
+                    },
+                    _ => {
+                        return write!(
+                            f,
+                            "member {} has no instance here",
+                            self.symbols.display(member.symbol())
+                        );
+                    }
+                };
+                fresh.display(self.symbols, self.types).message(f)
+            }
             ShapeError::QuantifiedRead { name: read, .. } => write!(
                 f,
                 "`{}` is quantified, so it is read only at the head of a call; wrap it in an \
@@ -1853,7 +1966,14 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
             ),
             ShapeError::NoAdmittingArm {
                 scrutinee, union, ..
-            } => arm_refused(f, above(*scrutinee), *union, None, self.symbols, self.types),
+            } => arm_refused(
+                f,
+                above(*scrutinee),
+                union.map(above),
+                None,
+                self.symbols,
+                self.types,
+            ),
             ShapeError::AmbiguousArms {
                 count, scrutinee, ..
             } => arm_refused(
@@ -1864,7 +1984,9 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                 self.symbols,
                 self.types,
             ),
-            ShapeError::NotUnion { clause, .. } => {
+            ShapeError::NotUnion {
+                clause, written, ..
+            } => {
                 write!(
                     f,
                     "`MATCH … UNDER` takes a union, and {} is not one",
@@ -1872,6 +1994,21 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                 )?;
                 // A nominal or a family's application may be a variant, which names no union.
                 match self.types.node(*clause) {
+                    // A name a run binds may be bound to a lone variant at some binding.
+                    TypeNode::Lexical { bound, .. }
+                        if super::variants(self.types, bound).is_some() =>
+                    {
+                        f.write_str(
+                            ": it is bound where the program runs, maybe to a lone variant; \
+                             spell the clause UNDER ",
+                        )?;
+                        written_or(f, *written, bound, (self.symbols, self.types))
+                    }
+                    TypeNode::Lexical { bound, .. } => {
+                        f.write_str(": it is bound where the program runs, and its bound ")?;
+                        written_or(f, *written, bound, (self.symbols, self.types))?;
+                        f.write_str(" is no union")
+                    }
                     TypeNode::SetMember { .. } | TypeNode::ConstructorApply { .. } => {
                         write!(f, "; a lone variant is not its union")
                     }
@@ -1936,9 +2073,26 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                 key,
                 arguments,
                 listed: listing,
+                members,
                 shapes,
                 ..
             } => {
+                let listing = member_listed(self.types, scratch, listing, members);
+                // Listed against the whole shape only where some argument is quantified; else
+                // each argument against its slot, a member at the type its module declares it at.
+                let (arguments, listing) = match listing.iter().any(|ty| ty.as_scheme().is_some()) {
+                    true => (&arguments[..], listing),
+                    false => {
+                        let arguments = scratch.alloc_slice_copy(arguments);
+                        for (position, ..) in members.iter() {
+                            let at = usize::from(*position);
+                            if let Some(DeclaredType::Type(ty)) = listing.get(at) {
+                                arguments[at] = Interval::point(*ty);
+                            }
+                        }
+                        (&*arguments, &[][..])
+                    }
+                };
                 let noun = match arguments.len() {
                     1 => "this argument",
                     _ => "these arguments",
@@ -1976,6 +2130,29 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                     })?;
                 }
                 Ok(())
+            }
+            // A run-bound name's read is refused by its bound.
+            // A read through a run-bound name, or a union holding one, its bound licenses.
+            ShapeError::NoField {
+                of, written, field, ..
+            } if self.types.concrete(*of).is_none()
+                && matches!(
+                    self.types.node(*of),
+                    TypeNode::Lexical { .. } | TypeNode::Projection { .. } | TypeNode::Union { .. }
+                ) =>
+            {
+                write!(
+                    f,
+                    "{} has no field {}: its bound ",
+                    display_name(*of, self.types, self.symbols),
+                    name(field),
+                )?;
+                written_or(f, *written, above(*of), (self.symbols, self.types))?;
+                write!(
+                    f,
+                    " declares none; a body reads a field only some bindings have through \
+                     `MATCH … WITH`"
+                )
             }
             ShapeError::NoField { of, field, .. } => write!(
                 f,
@@ -2019,9 +2196,13 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::Ambiguous {
                 key,
                 arguments,
+                members,
                 count,
                 ..
-            } => selection_refused(f, key, arguments, Some(*count), self.symbols, self.types),
+            } => {
+                let arguments = member_listed(self.types, scratch, arguments, members);
+                selection_refused(f, key, arguments, Some(*count), self.symbols, self.types)
+            }
             ShapeError::ReturnNeverSatisfied { refused, .. } => {
                 let (body, returns) = refused.worded(self.types, scratch);
                 write!(
@@ -2103,13 +2284,38 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::ReadNeverSatisfied {
                 container,
                 argument,
-                ..
-            } => write!(
-                f,
-                "{} can never be read by {}",
-                display_name(above(*container), self.types, self.symbols),
-                display_name(above(*argument), self.types, self.symbols)
-            ),
+                member,
+                at,
+            } => {
+                // A head a binding closes to a function is a call by name's, worded as the walk
+                // words one it judges closed: a member read off a module at its declaration, a
+                // scheme included.
+                let declared = member.and_then(|(name, carried)| {
+                    let carried = self.types.concrete(carried)?;
+                    super::heads::member_declared(self.types, scratch, carried, name)
+                });
+                let callee = declared.map_or(DeclaredType::Type(*container), DeclaredType::into);
+                let function = match callee {
+                    DeclaredType::Type(head) => above(head).into(),
+                    DeclaredType::Scheme(_) => callee,
+                };
+                if let TypeNode::KFunction { params, .. } = function.view(self.types).body {
+                    let called = ShapeError::CallNeverSatisfied {
+                        rebounds: Rebounds::NONE,
+                        callee,
+                        payload: Interval::point(*argument),
+                        parameters: crate::values::record_type(self.types, scratch, params.iter()),
+                        at: *at,
+                    };
+                    return called.display(self.symbols, self.types).message(f);
+                }
+                write!(
+                    f,
+                    "{} can never be read by {}",
+                    display_name(above(*container), self.types, self.symbols),
+                    display_name(above(*argument), self.types, self.symbols)
+                )
+            }
             ShapeError::NotAModule { refused, .. } => view_refused(
                 f,
                 ViewRefused::NotAModule(refused.worded(self.types, scratch).0),
@@ -2173,6 +2379,30 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
     }
+}
+
+/// A member argument of a refused keyworded use, read off a module the load cannot see: its
+/// position, the member's name and the type the module carries, which a binding closes.
+pub type ListedMember = (u16, ValueSymbol, Parametric);
+
+/// `listed` with each of `members` whose module's carried type is closed listed at the type it
+/// declares the member at, a scheme included, as a load seeing the module lists it.
+fn member_listed<'x>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+    listed: &[DeclaredType<Parametric>],
+    members: &[ListedMember],
+) -> &'x [DeclaredType<Parametric>] {
+    let listed = scratch.alloc_slice_copy(listed);
+    for (position, name, carried) in members {
+        let declared = types
+            .concrete(*carried)
+            .and_then(|carried| super::heads::member_declared(types, scratch, carried, *name));
+        if let (Some(declared), Some(at)) = (declared, listed.get_mut(usize::from(*position))) {
+            *at = declared.into();
+        }
+    }
+    listed
 }
 
 /// A refused selection at `key` worded — no overload admits `arguments`, or (`ambiguous`) that

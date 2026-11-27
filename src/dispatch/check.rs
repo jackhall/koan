@@ -9,7 +9,9 @@
 //! checked nowhere until an `EVAL`'s activation types it with the names bound. One written over
 //! run-bound names asks which overload it overlaps ([`judge::overlapping`]): none where its bounds
 //! already miss each, else the binding's answer, so a binding that makes it overlap refuses it as
-//! a fresh load would.
+//! a fresh load would; the walk lays that question ([`SiteRule::Overlap`](crate::scope::SiteRule))
+//! at the registration's birth, in a quote's code too, where it refuses no load: the instance the
+//! `EVAL`'s frame holds answers it, and the frame faults.
 //! A `USING … SCOPE` block's surfaced head births no callable and is not checked here: the
 //! definition answering it is the module's own, checked where the module is built.
 //! A builtin overload whose operands are all `Any` is shadowable and overlaps nothing; any other
@@ -19,7 +21,7 @@ use crate::elaborate::judge::{self, Marks};
 use crate::knot::KBuiltins;
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::scope::{
-    BodyShape, Registration, ShapeError, ShapeKind, Slot, Static, StaticRegistered,
+    BodyShape, Question, Registration, ShapeError, ShapeKind, Slot, Static, StaticRegistered,
 };
 use crate::type_lattice::{DeclaredType, KType, shape_slots};
 use crate::values::Chain;
@@ -64,36 +66,41 @@ where
     Ok(())
 }
 
+/// What a registration's overlap check asks: the question, and the refusal of each builtin
+/// overload it may overlap, by the question's answer.
+pub(super) type Overlapping<'x, 'o> = (Question<'x>, &'x [ShapeError<'o>]);
+
 /// Refuse `registration`, one of `shape`'s typed `typed`, where it overlaps a builtin overload at
 /// its key: checked where it is closed or written over names, unquantified, and births a callable.
-pub(super) fn overlap<'graph, 'o>(
+/// Beside it, what it asks, where it asks anything.
+pub(super) fn overlap<'graph, 'o, 'x>(
     marks: &dyn Marks,
     shape: &'graph BodyShape<'graph>,
     registration: &Registration<'graph>,
     typed: StaticRegistered<'_>,
     builtins: &KBuiltins<'_, '_>,
     types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-) -> Result<(), ShapeError<'o>>
+    scratch: BumpAllocator<'x>,
+) -> Result<Option<Overlapping<'x, 'o>>, ShapeError<'o>>
 where
     'graph: 'o,
 {
     #[cfg(test)]
     CHECKS.with(|checks| checks.set(checks.get() + 1));
     if builtins.overloads(registration.key).next().is_none() {
-        return Ok(());
+        return Ok(None);
     }
     let Some(form) = shape.births(registration.slot).and_then(BodyShape::form) else {
-        return Ok(());
+        return Ok(None);
     };
     let registered = match typed {
         Static::Closed(registered) => registered.shape.into(),
         Static::Rigid { value, .. } => value.shape,
-        _ => return Ok(()),
+        _ => return Ok(None),
     };
     // A quantified registration's slots read its own group, which the meet does not relate.
     let DeclaredType::Type(registered) = registered else {
-        return Ok(());
+        return Ok(None);
     };
     let mut against = BumpVec::new_in(scratch);
     for index in builtins.overloads(registration.key) {
@@ -109,12 +116,19 @@ where
             against.push(builtin);
         }
     }
+    let refusal = |builtin| ShapeError::Overlaps {
+        key: registration.elements,
+        builtin,
+        at: form.source,
+    };
     if let Some(at) = judge::overlapping(marks, types, scratch, registered, &against) {
-        return Err(ShapeError::Overlaps {
-            key: registration.elements,
-            builtin: against[at],
-            at: form.source,
-        });
+        return Err(refusal(against[at]));
     }
-    Ok(())
+    let against = against.leak();
+    let question = Question::Overlaps {
+        registered,
+        against,
+    };
+    let refusals = scratch.alloc_slice_fill_iter(against.iter().map(|builtin| refusal(*builtin)));
+    Ok(Some((question, refusals)))
 }

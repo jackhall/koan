@@ -54,18 +54,15 @@
 //! In a caching body the step runs on the body's chain ([`evaluate`]), asks for blocks with `Keeps`,
 //! and adopts what leaves the body into its region through an [`Exit`]: a call's callee, arguments,
 //! contributions and the contract it hands on, and an `EVAL`'s code, offered record and declared
-//! type. A step lays nothing in the agent tier: an invariant site's
-//! types are there already, rested by the settlement its frame runs under.
+//! type. A step lays nothing in the agent tier.
 //!
 //! A tail call reads its route, which the load's walk wrote beside it where it knows the callee:
 //! whether each candidate keeps the frame's contract, where the frame's return and the candidate's
 //! solution are closed, and whether it hops into the frame's own body. Only what the route leaves
 //! open, and whether the callee is behind a barrier, is decided at the call.
 //!
-//! A call to a body keyed on its bindings is handed to the drain with what it seeks ([`seek`]): the
-//! request its frame's layer or the base carries for its site, else a key from its values. So its
-//! frame is born under its settlement; a hop its route marks runs under the frame's, with no
-//! lookup, unless the body rebinds a slot it keys on. The call reads its callee's keys once.
+//! A call is handed to the drain with the depot slot its callee was born under, which its frame
+//! runs under ([`called`]).
 //!
 //! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
 //! as it evaluates. Debug builds check that a finished value's carried type lies within its node's
@@ -74,7 +71,7 @@
 
 use std::cell::Cell;
 
-use crate::elaborate::{arm_shapes, variant_named};
+use crate::elaborate::{arm_shapes, closed_variant};
 use crate::knot::module::layout;
 use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{
@@ -87,15 +84,15 @@ use crate::parse::{
     ExpressionPart, KExpression, KLiteral, KTemplate, ListItem, TemplateSlot, template_fields,
 };
 use crate::program::{
-    ArmKept, BlockEntry, CallKind, Delivered, Entered, Evaluated, Exit, Handed, KBirth, KBundle,
-    Next, Node, Owed, Passing, Program, Tailed, Within, called_function, seek,
+    ArmKept, BlockEntry, CallKind, Delivered, Entered, Evaluated, Exit, Handed, KBundle, Next,
+    Node, Owed, Passing, Program, Within, born_under,
 };
 use crate::scheduler::{Held, KeptPart, Request, Slot as Asked, Step, StepError, Taken, Use};
 use crate::scope::Inner;
 use crate::scope::{
     AtRun, BodyShape, CandidateList, CandidateRoute, Coordinate, Elaboration, Elimination, Fault,
     Guard, HandedTo, IMPLICIT, InstanceRead, Located, Narrowing, ParameterBinding, Scalar,
-    ShapeKind, Site, SiteRequest, StaticType,
+    ShapeKind, Site, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode, Verdict};
@@ -668,7 +665,7 @@ fn matched<'step, 'graph, 'here, 'scratch>(
         unreachable!("a `MATCH`'s scrutinee is evaluated")
     };
     let (shape, facts) = (at.view.shape(), at.view.facts());
-    let Some(arms) = facts.arms(shape, shape.site_of_node(node)) else {
+    let Some(arms) = facts.arms(&scratch, shape, shape.site_of_node(node)) else {
         return Next::Failed(StepError::Refused);
     };
     let denoted = |part: &ExpressionPart<'_>| facts.denoted(types, shape, shape.site(part)).ok();
@@ -761,7 +758,7 @@ pub(super) fn arm_guards<'list, 'step>(
         let guard = body.arm().expect("an arm knows it is one").guard;
         let admits = match guard {
             Guard::Type(quote) => denoted(quote),
-            Guard::Label(label) => union.and_then(|union| variant_named(types, union, label)),
+            Guard::Label(label) => union.and_then(|union| closed_variant(types, union, label)),
             Guard::Value(_) | Guard::Default => None,
         };
         guards.push((guard, admits));
@@ -866,7 +863,6 @@ fn evaluated<'step, 'graph, 'here, 'scratch>(
         code,
         offered,
         (returns, node.source),
-        at.within.inherit,
         at.use_,
     ) {
         Ok(request) => {
@@ -1142,11 +1138,18 @@ fn call<'step, 'graph, 'here, 'scratch>(
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
     let site = at.view.shape().site_of_node(node);
-    let fixed = (at.view.facts()).use_statics(&at.types, &scratch, at.view.shape(), site);
+    // One read of the instance's answer serves the use's statics, selection and route.
+    let read = (at.view.facts()).use_read(&at.types, &scratch, at.view.shape(), site);
+    let fixed = (at.view.facts()).use_statics_by(&at.types, &scratch, at.view.shape(), site, read);
     let contributed = match contributed(at, site, fixed.contributions, &scratch) {
         Ok(contributed) => contributed,
         Err(refused) => return raise(step, Fault::Unelaborated(refused)),
     };
+    #[cfg(test)]
+    if let Some(chose) = CHOSE.with(std::cell::Cell::get) {
+        let selected = matches!(fixed.narrowing, Narrowing::Selected(_));
+        chose(at.view.shape().segment(), site, node.source, selected);
+    }
     let selection = match fixed.narrowing {
         Narrowing::Full => {
             let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
@@ -1171,22 +1174,17 @@ fn call<'step, 'graph, 'here, 'scratch>(
             )
         }
         Narrowing::Selected(coordinate) => {
-            #[cfg(test)]
-            if let Some(chose) = CHOSE.with(std::cell::Cell::get) {
-                let shape = at.view.shape();
-                chose(shape.segment(), shape.site_of_node(node));
-            }
-            let site = at.view.shape().site_of_node(node);
             let facts = at.view.facts();
-            let points = (facts.selection(&at.types, &scratch, at.view.shape(), site))
+            let points = (facts.selection_by(&at.types, &scratch, at.view.shape(), read))
                 .expect("a selected use records its points");
             select::chosen(at, coordinate, &points, &arguments, &contributed, &scratch)
         }
     };
     // Only a call in tail position reads its route.
-    let route = at
-        .owed
-        .and_then(|_| (at.view.facts()).route(at.view.shape(), at.view.shape().site_of_node(node)));
+    let route = at.owed.and_then(|_| {
+        let (shape, facts) = (at.view.shape(), at.view.facts());
+        facts.route_by(&scratch, shape, shape.site_of_node(node), read)
+    });
     #[cfg(debug_assertions)]
     if let Some(route) = route {
         let reads = match fixed.narrowing {
@@ -1280,9 +1278,6 @@ fn call<'step, 'graph, 'here, 'scratch>(
                     _ => None,
                 },
             );
-            // A call through a barrier never tails: its value crosses the barrier where its
-            // frame ends.
-            let hop = routed.is_some_and(|routed| routed.hop);
             let named = match registered.parameters {
                 ParameterBinding::Named(names) => names,
                 ParameterBinding::Operands => &[],
@@ -1307,14 +1302,11 @@ fn call<'step, 'graph, 'here, 'scratch>(
                     &[],
                     handed,
                     (node.source, owed),
-                    at.within.inherit,
                     Some(passing),
                     at.use_,
                 )
             };
-            let request =
-                (at.view.facts()).request(at.view.shape(), at.view.shape().site_of_node(node));
-            return called(step, at, callee, tails, hop, request, call);
+            return called(step, at, callee, tails, call);
         }
         Selection::NoOverload => Fault::NoOverload {
             key: list.elements,
@@ -1492,9 +1484,6 @@ fn apply<'step, 'graph, 'here, 'scratch>(
     let types = &at.types;
     let scratch = Bump::new();
     let (argument_part, argument_site) = (argument, at.view.shape().site(argument));
-    // A call by name's site is its head's, where the load lays its request.
-    let request = (at.view.facts().shapes().head_site(at.view.shape(), head))
-        .and_then(|site| at.view.facts().request(at.view.shape(), site));
     // A call's record literal is laid here over its fields, each evaluated as a part of the call,
     // so a tail hands each on through its own kept part. A type name's application is a
     // construction, built in the home its argument is asked into.
@@ -1597,7 +1586,8 @@ fn apply<'step, 'graph, 'here, 'scratch>(
     // A call keeps its contract by the type its callee shows; a barrier never tails, since its
     // value crosses the barrier where its frame ends.
     let routed = at.owed.and_then(|_| {
-        let route = (at.view.facts()).route(at.view.shape(), at.view.shape().site_of_node(node));
+        let (shape, facts) = (at.view.shape(), at.view.facts());
+        let route = facts.route(&at.types, &scratch, shape, shape.site_of_node(node));
         route.map(|route| route.per[0])
     });
     let tails = at.owed.filter(|owed| {
@@ -1616,7 +1606,6 @@ fn apply<'step, 'graph, 'here, 'scratch>(
         HandedTo::Field(name) => Some(name),
         HandedTo::Position(_) => None,
     });
-    let hop = routed.is_some_and(|routed| routed.hop);
     // A call hands on each field of a literal through its own kept part, and each of a record
     // held whole through the record's, the field's label appended; only a tail threads.
     let tail = tails.is_some();
@@ -1656,12 +1645,11 @@ fn apply<'step, 'graph, 'here, 'scratch>(
             contributed,
             handed,
             (node.source, owed),
-            at.within.inherit,
             Some(passing),
             at.use_,
         )
     };
-    called(step, at, head, tails, hop, request, call)
+    called(step, at, head, tails, call)
 }
 
 /// Whether a tail call's candidate keeps its frame's contract: as its route records it, and where
@@ -1684,8 +1672,6 @@ fn keeps(routed: Option<CandidateRoute>, kept_by: impl Fn() -> bool) -> bool {
 thread_local! {
     /// How many tail calls decided at the call whether their candidate keeps the frame's contract.
     pub(crate) static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// How many tail calls hopped under their frame's own settlement.
-    pub(crate) static HOPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The most bytes an asker's region had handed out at a call it spawned.
     pub(crate) static ASKER_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many `:|` views the run built at a site whose view tree its facts left open.
@@ -1693,58 +1679,27 @@ thread_local! {
 }
 
 /// Run the frame `call` asks for over `callee`: a hop owing `tails` where it keeps the contract,
-/// else a child this evaluation parks on. A frame keyed on its bindings is born borrowing its
-/// settlement: a hop of the frame this evaluation runs in borrows that frame's own where its route
-/// says it `hop`s — a self tail edge of a body whose name does not escape, so every hop into it is
-/// a tail edge the load read — and the body rebinds none of its keys; every other one is sought by
-/// the drain, with `request`, the one a layer carries for the call's site, where there is one. The
-/// callee's keys are read once.
+/// else a child this evaluation parks on. Either runs under the depot slot the callee was born
+/// under ([`born_under`]).
 fn called<'step, 'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_, '_>,
     callee: KValue<'graph, 'here>,
     tails: Option<Owed<'here>>,
-    hop: bool,
-    request: Option<&SiteRequest<'_>>,
     call: impl Fn(Option<Owed<'here>>) -> Request<'graph, 'here, KBundle>,
 ) -> Next<'graph, 'here> {
-    debug_assert!(
-        !hop || callee.as_callable() == at.view.callable(),
-        "a hop's callee is its frame's own"
-    );
     // A tail hop counts the frame it replaces in the table its successor carries.
-    let mut work = call(tails.map(|owed| owed.hopped(step.writer())));
-    let function = called_function(callee);
-    let keys = function.and_then(|function| function.body().keys);
+    let work = call(tails.map(|owed| owed.hopped(step.writer())));
+    let under = born_under(callee);
     if tails.is_some() {
-        // The frame's own callee, keyed, where the frame runs under a settlement: its depot slot
-        // is then not the one the callee was born under, which a frame born with none runs under.
-        if hop
-            && keys.is_some()
-            && function.is_some_and(|function| {
-                !function.body().rebinds && at.within.build != function.closure().build()
-            })
-        {
-            #[cfg(test)]
-            HOPPED.with(|hopped| hopped.set(hopped.get() + 1));
-            // The hop runs under the frame's own settlement, so it keeps the frame's level.
-            if let KBirth::Call { level, .. } = &mut work.work.state {
-                *level = at.within.stamp.map(|stamp| stamp.level);
-            }
-            return Next::Tail(Tailed::Under(work.work, at.within.build));
-        }
-        let types = step.types();
-        let seek = seek(&mut work.work.state, keys, request, &at.types, &types);
-        return Next::Tail(Tailed::Seeking(work.work, seek));
+        return Next::Tail(work.work, under);
     }
-    let types = step.types();
-    let seek = seek(&mut work.work.state, keys, request, &at.types, &types);
     #[cfg(test)]
     {
         let bytes = step.writer().in_use();
         ASKER_BYTES.with(|most| most.set(most.get().max(bytes)));
     }
-    let asked = step.spawn_seeking(work, seek);
+    let asked = step.spawn_under(work, under);
     park(at, asked, FINISHING)
 }
 
@@ -1762,12 +1717,12 @@ fn carried_under_static<'step, 'graph, 'here>(
     let node = at.node;
     let facts = at.view.facts();
     let expected = match node {
-        Evaluated::Part(site) => facts.value_type(types, shape, site),
-        Evaluated::Statement(index) => facts.statement_type(types, shape, index as usize),
+        Evaluated::Part(site) => facts.value_type(&at.types, shape, site),
+        Evaluated::Statement(index) => facts.statement_type(&at.types, shape, index as usize),
     };
-    // Under an activation the static type's ends are closed through the frame's chain, which a
-    // home build's chain need not reach: skip the ends it does not resolve, as `container`'s read
-    // of a load's decided type does.
+    // The static type closes under the frame's binding through the frame's chain, which a home
+    // build's chain need not reach: skip the ends it does not resolve, as `container`'s read of a
+    // load's decided type does.
     let Some(expected) = expected
         .filter(|expected| types.resolves(expected.upper) && types.resolves(expected.lower))
     else {
@@ -1852,9 +1807,15 @@ fn in_place<'step, 'graph, 'here>(
             let mention = shape.mention(shape.site(part))?;
             let read = at.view.read(mention.coordinate);
             let facts = at.view.facts();
-            let Some(InstanceRead::Solved(solution)) =
-                facts.instance_at(&at.types, scratch, shape, shape.site(part))
-            else {
+            let instanced = facts.instance_at(&at.types, scratch, shape, shape.site(part));
+            // A member read the binding leaves open has no instance.
+            if let Some(InstanceRead::Member { name, .. }) = instanced
+                && read.ktype().as_type().is_none()
+            {
+                let name = name.symbol();
+                return Some(Err(Fault::QuantifiedMember { name }));
+            }
+            let Some(InstanceRead::Solved(solution)) = instanced else {
                 let kept = kept_read(at, writer, mention.coordinate);
                 return Some(Ok(Held { value: read, kept }));
             };
@@ -1954,7 +1915,7 @@ fn gathered<'step, 'x, 'graph, 'here, 'scratch>(
                 match in_place(step, at, part, scratch) {
                     Some(Ok(value)) => Operand::Value(value),
                     Some(Err(fault)) => {
-                        let fault = resident(step.writer(), fault.relaid(step.writer(), scratch));
+                        let fault = resident(step.writer(), fault.relaid(step.writer()));
                         return Gathered::Raised(Inner::Fault(fault));
                     }
                     None => return Gathered::Broken(StepError::Refused),
@@ -2084,7 +2045,7 @@ fn raise<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     fault: Fault<'_, KValue<'graph, 'here>>,
 ) -> Next<'graph, 'here> {
-    let fault = resident(step.writer(), fault.relaid(step.writer(), &Bump::new()));
+    let fault = resident(step.writer(), fault.relaid(step.writer()));
     Next::Raised(Inner::Fault(fault))
 }
 
@@ -2121,15 +2082,15 @@ fn exits<'step, 'graph, 'here>(
     }
 }
 
-/// What a test hands each use a frame finds selected: its body's segment and its node's site.
+/// What a test hands each keyworded call a frame dispatches: its body's segment, its node's site,
+/// its source, and whether the frame found its selection in its facts.
 #[cfg(test)]
-type Chose = fn(crate::scope::Segment, Site);
+type Chose = fn(crate::scope::Segment, Site, crate::source::SourceRef, bool);
 
 #[cfg(test)]
 thread_local! {
-    /// What each use a frame finds selected in its facts is handed to, by its body's segment and
-    /// its node's site, while a test sets it: so a test sees a frame read the selection its facts
-    /// hold.
+    /// What each keyworded call a frame dispatches is handed to while a test sets it: so a test
+    /// sees whether a frame read the selection its facts hold or selected at the call.
     pub(super) static CHOSE: std::cell::Cell<Option<Chose>> = const { std::cell::Cell::new(None) };
 }
 

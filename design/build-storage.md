@@ -1,8 +1,8 @@
 # Build storage
 
 Where the work of deciding a program lives: the frozen load every agent
-shares, the tier an agent keeps for what its build rests, and the depot its
-settlements and compositions are evicted from. The story across
+shares, the tier an agent keeps for what its run rests, the instances its
+frames make, and the depot its compositions are evicted from. The story across
 [the type lattice](../lattice/src/types/identity.md#storage-a-root-and-its-branches),
 which keeps each tier's table, [the build](../src/build/README.md), which
 decides, [the scheduler](../src/scheduler/README.md), which runs, and
@@ -14,7 +14,7 @@ decides, [the scheduler](../src/scheduler/README.md), which runs, and
 |---|---|---|---|---|
 | builtin image | `'static`, one per binary, `Sync` | by no one: generated Rust source, compiled in | the lattice's fixed handles, every builtin overload's shape type, `Result` and `Error`, and the texts of the names they hold; no verdicts | never |
 | frozen load | `'load`, one per program, `Sync` | by the load alone, frozen at its end | load content: every type the load builds, its verdicts, the shape, builtins, symbols, sources, the facts it decides | at the program's end |
-| agent tier | `'agent`, one per agent | insert-only, by a settlement a miss builds under the root at its rest | what the agent's settlements under the root rest: their types and verdicts; verdicts over load pairs the load's table lacks; the agent's symbol overlay | at the agent's death, whole |
+| agent tier | `'agent`, one per agent | insert-only, by a run's verdict over load or agent types | verdicts over load pairs the load's table lacks; the agent's symbol overlay | at the agent's death, whole |
 | region, scratch | `'here`, `'scratch` | as [type tiers](type-tiers.md) says | runtime types: what a frame builds, mints in a loop, a deepening list | with the region; at the habitat's reset |
 
 The brands are ordered, `'load: 'agent: 'here: 'scratch`, and a chain reads
@@ -44,10 +44,7 @@ never read through a sealed claim. A depot slot is freed by eviction, so no
 byte laid in a region, a scratch, a parked state or a value references one:
 a step reads its depot slot's shape and facts at its own lifetime and copies
 out indexes, digests and type handles alone, which is what lets the borrower
-count drop at release. A settlement's pin on the composition whose shape its
-binding's tree names is a count between depot slots: a pinned composition is
-no eviction candidate while a pinner lives, and is held while one is held,
-and a borrowed depot slot is never evicted. The run's own halves keep the rules
+count drop at release, and a borrowed depot slot is never evicted. The run's own halves keep the rules
 [type tiers](type-tiers.md#a-node-lives-in-a-tier-its-children-outlive) gives
 them.
 
@@ -86,15 +83,13 @@ the load never asked is recorded in the agent's tier.
 declarations decide, in layers each agent then reads instead of recomputing:
 the load's types, schemes, signatures, shapes, builtins and symbols; a
 decision at every site whose types are all concrete, no binder reachable; the
-closed verdict table; for each generic body, which binders each site's types
-mention, so a settlement evaluates only its dependent sites; and dispatch
-candidates per site, narrowed by the load-known argument types. In program
-storage beside its base layer, the load lays the facts of each binding
-[the trace](../src/build/README.md#the-trace) names, a layer found by its
-parent and key and read by every agent as the base is, its types and those
-its call sites' requests name in the root. What the frozen load cannot
-hold is a node that mentions a binding's carried type, a verdict over
-one, a decision at a dependent site, and anything `EVAL` builds.
+closed verdict table; dispatch candidates per site, narrowed by the
+load-known argument types; each judgement a binding decides, stored whole as a
+question of the program's [binding graph](binding-graph.md); and the
+instances of that graph its text reaches from the root, frozen with it and
+shared by every agent. What the frozen load cannot hold is a node that
+mentions a binding's carried type, a verdict over one, an instance a run cell
+makes, and anything `EVAL` builds.
 
 **Covariance.** An agent's graph borrows storage at its own `'graph`, with
 `'load: 'graph`, and a node of any cell embeds load nodes through that
@@ -106,75 +101,52 @@ covariant in their lifetime.
 An insert-only tier of nodes and verdicts laid in a bump the agent owns. A
 node is handed out as `&'agent StoredNode<'agent>` and never moves, nothing in
 the tier is released before the tier is released whole, and the tier goes
-with its agent. Two things intern into it: a settlement a miss builds under the root at its rest, laying
-the types its facts name, the binding's nodes it relaid from its image, and
-the verdicts it reached; and a run's verdict over load or agent types, which
-no run may write into the load's table. A run cell reads the agent tier,
+with its agent. A run's verdict over load or agent types interns into it,
+since no run may write into the load's table. A run cell reads the agent tier,
 records verdicts there and interns no type into it: a type the run builds
 lives in the run's halves. The agent's symbol overlay,
 the names its `EVAL`s parse, sits beside it; a render reads the overlay, the
 frozen table, then the builtin image's texts, and they never disagree, since a
 symbol is its text's digest.
 
-## Settlements and compositions
+## Instances and compositions
 
-The **build depot** holds two kinds of slot under one root. A **settlement**
-is the open facts of one frontier class settled under one binding, keyed on
-every name its seam binds, each of those names bound to content the frozen
-load names: a type whose in-root bit is set, a type value naming such a type,
-or a module whose content tree is closed, computed by the load under the root
-and by the load or a composition under one. Where the trace names the
-binding, the load lays the layer itself, in program storage, its walk
-interning through the load's chain before the root freezes; a seek under the
-root or another layer the load laid finds it there, by parent and key,
-before probing the depot, and nothing evicts it. Every layer, the load's and
-a settlement alike, carries the request of each call site of its body whose
-slot map its binding fixes, so a call there finds its layer with no key
-computed
-([the build module](../src/build/README.md#references-between-frames-and-the-depot)).
-A binding
-to anything else births no settlement; the site it reaches is decided in the
-frame's own activation, over the carried types, in the frame's own tiers
-([the build module](../src/build/README.md#activations)). A
-**composition** is the shape of code composed at run time and the facts that
-wait on nothing but its syntax, keyed on the code's syntax digest, as a
-module's shape is its text while its captures bind at their statements. The
-drain finds it by digest at each `EVAL` of the code and each call of a
-callable born in it, and rebuilds it on a miss from the syntax the value
-carries.
+**Instances.** What a binding decides is an instance of a base's
+[binding graph](binding-graph.md#instances), made by evaluating the questions
+the load stored, never by typing the text again. The instances the load makes
+are frozen with it. Those a run cell makes rest in one bump the agent lends
+its base's instances, under a budget, filed by view: the digests of the
+content the node's names are bound to. A view whose every content the load
+names is kept for the agent's life; any other rests in a small table of its
+node's own, where a newer view may take its place. A frame holds a handle per
+node, which names no storage, so nothing in a region references an instance.
 
-| the key names | decided in | lives |
+**Compositions.** The **build depot** holds one kind of slot under one root:
+a **composition**, the shape of code composed at run time, the facts that wait
+on nothing but its syntax, its own binding graph and the instances frames
+under it make, keyed on the code's syntax digest, as a module's shape is its
+text while its captures bind at their statements. The drain finds it by
+digest at each `EVAL` of the code and each call of a callable born in it, and
+rebuilds it on a miss from the syntax the value carries.
+
+| what decides | decided in | lives |
 |---|---|---|
-| load content | a layer the load laid in program storage, its types in the root, where the trace names the binding; otherwise a settlement a miss builds, its types rested in the agent tier under the root | the program's life for the load's; for a settlement, the agent's life, shared by every frame under the binding |
-| run content | the frame's activation | the frame |
+| the text alone | the load, its types in the root | the program's life |
+| a binding the text reaches from the root | an instance the load makes, frozen with it | the program's life |
+| a binding a run cell reaches | an instance in the agent's bump, filed by view | the agent's life, within its budget |
 | composed syntax | a composition | until its eviction, shared by every `EVAL` of the code |
 
-A depot slot holds its facts, its residual and its children's table, and a
-composition its shape; no depot slot holds a type. The depot is the agent's
-own, outside the cell graph, with parent links, a borrower count that drops
-at the borrower's release, and one budget over the bytes of the depot slots
-no frame holds through its borrow, a parent link or a pin, evicted least
-recently used, leaf first, since evicting a held one frees nothing
-([the scheduler](../src/scheduler/README.md#the-build-depot)). A
-settlement binds a module by the closed tree its layer computed, the load's
-under the root and the load's or a composition's under one, pinning the
-computing composition; each layer indexes the closed trees it
-computes by their identity, the content's digest, so a request resolves a
-module's digest to its tree in the chain it reaches; an activation binds
-one by the value's digest. A callable carries the requests that built its
-chain, so a call after an eviction rebuilds the settlements it ran under
-rather than being born cold. A settlement under the root rests its types and
-verdicts in the agent tier, where they outlive it: its binding is load
-content, finitely many per text, so what it rests may live in an insert-only
-tier. So a loop calling a keyed callee on load-named content holds O(1)
-settlements, since the budget evicts their facts, while the types they rested
-stay for the agent's life. A composition and every settlement under it rest
-nothing there, since their number is bounded by the run: a type composed code
-declares is run content the frame mints at the declaring statement, routed by
-its mint-site class, and a fact names a type by its digest, resolved in the
-root, in the frame's chain or against the handles the frame's key carries,
-or minted by the frame as a term over those handles.
-The cell graph holds run cells alone, and the drain keeps the build's books.
+A depot slot holds its facts and its graph, and no type a frame reads. The
+depot is the agent's own, outside the cell graph, with a borrower count that
+drops at the borrower's release, and one budget over the bytes of the depot
+slots no frame holds, evicted least recently used, since evicting a held one
+frees nothing ([the scheduler](../src/scheduler/README.md#the-build-depot)).
+A composition rests nothing in the agent tier, since their number is bounded
+by the run: a type composed code declares is run content the frame mints at
+the declaring statement, and a fact names a
+type by its digest, resolved in the root or in the frame's chain, or minted by
+the frame as a term. The cell graph holds run cells alone, and the drain
+keeps the build's books.
 
 ## Agents
 
@@ -191,8 +163,6 @@ agent, its budget and its stack
 ## Open work
 
 - [Agents](../roadmap/features/agents.md) — threads sharing the frozen load.
-- [The build over the binding graph](../roadmap/one-build/build-over-the-binding-graph.md)
-  — the depot holding compositions alone.
 - [What the agent tier keeps](../roadmap/one-build/agent-tier-keeps.md) — the
   tier's content once nothing settles into it.
 - [The build image](../roadmap/one-build/build-image.md) — the frozen load

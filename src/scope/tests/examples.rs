@@ -881,6 +881,21 @@ fn a_callable_in_a_using_body_captures_a_surfaced_name_by_reading_it() {
     });
 }
 
+/// A written paren around a declaring statement is the same statement, so the operand's names read
+/// through it.
+#[test]
+fn an_operand_declared_by_a_parenthesized_statement_surfaces_its_names() {
+    let source = "(MODULE m = (LET x = 1))\n(LET n = m)\nUSING n SCOPE (x)";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.expect("the program shapes");
+        let block = only_block(shape);
+        assert!(
+            block.slot(value(fixture, "x")).is_some(),
+            "`x` is a parameter"
+        );
+    });
+}
+
 #[test]
 fn an_operand_whose_names_cannot_be_read_is_refused() {
     let module = "MODULE m = (LET x = 1)";
@@ -989,6 +1004,11 @@ fn a_call_only_quantified_function_is_read_only_at_the_head_of_a_call() {
     for (source, name) in [
         (
             "LET pick = FN EXPR FOR ALL #[Elt] #(PICK x :Elt) -> Elt = #(x)\nLET keep = [pick]"
+                .to_string(),
+            "pick",
+        ),
+        (
+            "(LET pick = FN EXPR FOR ALL #[Elt] #(PICK x :Elt) -> Elt = #(x))\nLET keep = [pick]"
                 .to_string(),
             "pick",
         ),

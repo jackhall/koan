@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9318f0527d806fcedecba758b30f29b27b0a94bc56b09c2791e120183e89d9ed # shrinks to program = Held { holds: Frame, units: [Both(Eval(false), Eval(true)), Both(Eval(false), Eval(true))], calls: [(false, false), (true, false)] }, written = 68
+cc 295f54c430b00929a23d87b0a91474272a63bb2049e2083be23f39a4c94c49b3 # shrinks to program = Held { holds: Top, units: [Both(Eval(false), Reboxed(false))], calls: [(false, false)] }, written = 100

@@ -155,15 +155,18 @@ fn a_splice_naming_a_fellow_member_is_refused() {
 
 #[test]
 fn a_splice_of_no_list_or_of_no_code_faults() {
+    // `x` reads a field typed `Any`, which no binding closes: the run splices what it holds.
     for splice in ["$..x", "[($..x)]"] {
-        let splicer = format!("LET f = (FN :{{x :Any}} -> Any = #(#(PRINT {splice})))\n");
-        assert_eq!(
-            run(&format!("{splicer}PRINT (f {{x = 5}})")),
-            "error: `$..` splices a list of code, and Number is none\n  in :(FN :{x :Any} -> Any) (f {x = 5}) at <test>:2:7"
+        let splicer = format!(
+            "LET f = (FN :{{b :{{x :Any}}}} -> Any = #((LET x = b.x) (#(PRINT {splice}))))\n"
         );
         assert_eq!(
-            run(&format!("{splicer}PRINT (f {{x = [1]}})")),
-            "error: a spliced element is no code: Number\n  in :(FN :{x :Any} -> Any) (f {x = [1]}) at \
+            run(&format!("{splicer}PRINT (f {{b = {{x = 5}}}})")),
+            "error: `$..` splices a list of code, and Number is none\n  in :(FN :{b :{x :Any}} -> Any) (f {b = {x = 5}}) at <test>:2:7"
+        );
+        assert_eq!(
+            run(&format!("{splicer}PRINT (f {{b = {{x = [1]}}}})")),
+            "error: a spliced element is no code: Number\n  in :(FN :{b :{x :Any}} -> Any) (f {b = {x = [1]}}) at \
              <test>:2:7"
         );
     }

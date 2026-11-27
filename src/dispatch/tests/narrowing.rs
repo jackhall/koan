@@ -1,7 +1,9 @@
 //! The narrowing law: the load's narrowing of a keyworded use, and its refusal of one, stand for
 //! what selection over the use's full candidate list does at the call. Each drawn
 //! [`Dispatched`](super::generate::Dispatched) program is run as loaded and again under
-//! [`unnarrowed`], which leaves every use whole and refuses none.
+//! [`unnarrowed`], which leaves every use whole and refuses none. A frame's instance refuses as
+//! the load does under its binding: a parameter declared `Any` is the name of what its value
+//! carries.
 
 use proptest::prelude::*;
 
@@ -16,8 +18,8 @@ proptest! {
     })]
 
     /// Static narrowing is transparent: a call over a narrowed candidate list runs what selection
-    /// over the full list would, and a use the load refuses faults at every call within its
-    /// arguments' static types.
+    /// over the full list would, and a use the load, or a frame's binding, refuses faults at every
+    /// call within its arguments' static types.
     #[test]
     fn static_narrowing_is_transparent(program in dispatched()) {
         let rendered = program.render();
@@ -25,11 +27,12 @@ proptest! {
         // A registration whose union ties is refused where it is declared: no use to compare.
         prop_assume!(!narrowed.contains(TIED), "{}", narrowed);
         let whole = unnarrowed(|| run(&rendered.source));
-        if !narrowed.starts_with("load: ") {
+        let framed = narrowed.starts_with(&format!("error: {}: ", rendered.use_at));
+        if !narrowed.starts_with("load: ") && !framed {
             prop_assert_eq!(narrowed, whole, "in\n{}", rendered.source);
         } else {
             prop_assert!(
-                narrowed.starts_with(&format!("load: {}: ", rendered.use_at)),
+                framed || narrowed.starts_with(&format!("load: {}: ", rendered.use_at)),
                 "refused away from the use: {}\nin\n{}",
                 narrowed,
                 rendered.source

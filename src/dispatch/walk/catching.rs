@@ -40,7 +40,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             {
                 return Err(ShapeError::NoVariant {
                     label,
-                    union: error,
+                    union: error.into(),
                     at: node.source,
                 });
             }
@@ -49,14 +49,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             lower: KType::NEVER.into(),
             upper: error.into(),
         };
-        let arms = self.armed(
-            level,
-            node,
-            scrutinee,
-            Some(error.into()),
-            Some(error),
-            true,
-        )?;
+        let arms = self.armed(level, node, scrutinee, Some(error.into()), true)?;
         Ok(spanned(self, types, scratch, &[body, arms]))
     }
 

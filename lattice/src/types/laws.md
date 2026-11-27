@@ -49,7 +49,10 @@ handle only because no variable reaches it.
 every door is generic over its children's handle, and a `KType` asked of a
 parametric child is a compile error, pinned by a `compile_fail` doctest on
 `TypeChain::list`. `TypeChain::concrete` is the one checked conversion, and
-`TypeChain::concrete_declared`, its lift over a declared type, is built on it.
+`TypeChain::concrete_declared`, its lift over a declared type, is built on it:
+a scheme is closed only where no variable but its own group's is reachable
+from it, its body included, so a member scheme over a module parameter's
+path reads as open.
 
 ## The order is a partial order
 

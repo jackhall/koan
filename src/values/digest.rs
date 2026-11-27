@@ -32,7 +32,7 @@
 //! a copy of the knot keeps it. That over-distinction is sound: a digest keys what is equal by
 //! content, and keying two equal things apart costs only a key.
 //!
-//! A digest is computed on demand — by a view, or by a settlement's key — and kept only by a
+//! A digest is computed on demand — by a view, or by a frame binding a module — and kept only by a
 //! module, as its content, and by a slot the load marks digested, beside its value; a value no
 //! demand reaches never pays for one. A demand walks what the value reaches through one
 //! [`Digests`] memo over the demand's scratch, so a part shared many times over, and a knot met
@@ -129,8 +129,6 @@ pub enum Tag {
     /// What the load cannot see of a module's content, keyed on its binder: a load-time key, never
     /// a value's digest.
     Leaf = 0x30,
-    /// A settlement's key: a body's segment index and the argument digests it is keyed on.
-    Settlement = 0x31,
     /// Code as lowered syntax: what code equality compares, spans and caches left out.
     Syntax = 0x32,
     /// A `$..` splice of a quote's syntax, by the name it spreads.
@@ -145,17 +143,13 @@ pub enum Tag {
     PathClass = 0x37,
     /// A path no type spells: its root, member chain, label and application.
     PathEntry = 0x38,
-    /// A witnessed layer: its event's site, the names it witnessed, the module binders it binds
-    /// and the questions its admission keeps.
-    Witnessed = 0x39,
-    /// A layer walked closed: every name it was walked under.
-    Binding = 0x3A,
     /// The spine beneath a cell's first event: each of its layers' digests, innermost first.
     Spine = 0x3B,
-    /// An answered question: the question, its types and the answer.
-    Answered = 0x3C,
     /// A derived name's term: a rule's output over its operands, or a question beside its arms.
     Derived = 0x3D,
+    /// A binding graph name's content: a type, a carried type, or a module's digest beside its
+    /// bare signature and sealing.
+    Content = 0x3E,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's

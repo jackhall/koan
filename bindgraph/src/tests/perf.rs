@@ -10,7 +10,7 @@ use super::harness::{EMPTY, Kept, handle, read};
 use super::laws::laid;
 use super::reference::reference;
 use super::toy::{Draw, Probe, Toy, atom, list, raw, toy_binding_with_answered, toy_text};
-use crate::{Bound, Counts, NodeId, Resting, Site};
+use crate::{Bound, Counts, Handle, NodeId, Resting, Site};
 
 #[test]
 fn counts_asks_and_runs() {
@@ -60,6 +60,42 @@ fn counts_asks_and_runs() {
             ..Counts::default()
         }
     );
+    // One answer replays its question alone.
+    let first = graph.node(entry).owns()[0];
+    bound.answer(resting, Handle::new(entry, &words), first, &mut answers);
+    assert_eq!(
+        bound.counts(),
+        Counts {
+            asks: 2,
+            runs: 5,
+            ..Counts::default()
+        }
+    );
+}
+
+/// Where every answer rests, one answer and an answered name of a filed view run nothing.
+#[test]
+fn a_rested_read_runs_nothing() {
+    let mut case = Case::new();
+    let body = case.text.body(case.text.root());
+    let x = case.text.name(Site::Entry(body));
+    let tagged = case.text.answered_name();
+    let tag = case.ask(Site::Entry(body), &[x], &[(x, Probe::Leaf)], 2);
+    case.text.answers(tag, 0, tagged, atom(0));
+    case.text.answers(tag, 1, tagged, list(atom(0)));
+    let (graph, mut answers) = case.lay();
+    let entry = graph.entry(body);
+    let binding = bind(&[(x, atom(2))]);
+
+    let bump = Bump::new();
+    let mut kept = Kept::new(&graph, &bump);
+    let words = kept.instance(entry, &binding, &mut answers);
+    let counts = kept.bound.counts();
+    kept.bound
+        .answer(kept.resting, Handle::new(entry, &words), tag, &mut answers);
+    kept.bound
+        .content(kept.resting, entry, &binding, tagged, &Toy, &mut answers);
+    assert_eq!(kept.bound.counts(), counts);
 }
 
 proptest! {

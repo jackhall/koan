@@ -88,9 +88,10 @@ WRONG 5
 error: <input>:1:35: this body returns Number, which can never satisfy its declared return Str
 ```
 
-Where the body's type is only known once it runs — here `x` may be anything —
-its value is checked every time the function returns, and a mismatch is an
-error:
+A parameter declared `Any` takes whatever its argument is, and the body is
+checked again for each call, against the type that argument has. `LOOSE 5`
+hands `x` a `Number`, so for that call the body is refused as `WRONG`'s is for
+every call:
 
 ```koan
 EXPR #(LOOSE x :Any) -> Str = #(x)
@@ -98,8 +99,23 @@ LOOSE 5
 ```
 
 ```text
-error: :(FN :{x :Any} -> Str) returned Number, which does not satisfy Str
-  in :(FN :{x :Any} -> Str) (LOOSE 5) at <input>:2:1
+error: <input>:1:32: this body returns Number, which can never satisfy its declared return Str
+  in (LOOSE 5) at <input>:2:1
+```
+
+The line beneath the message names the call the body was checked for. Where
+the body's type is only known once it runs — here `box.x`, a record field
+declared `Any`, may hold anything — its value is checked every time the
+function returns, and a mismatch is an error:
+
+```koan
+EXPR #(LOOSE box :{x :Any}) -> Str = #(box.x)
+LOOSE {x = 5}
+```
+
+```text
+error: :(FN :{box :{x :Any}} -> Str) returned Number, which does not satisfy Str
+  in :(FN :{box :{x :Any}} -> Str) (LOOSE {x = 5}) at <input>:2:1
 ```
 
 The message names the function by its type, and the line beneath it the call

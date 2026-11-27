@@ -5,9 +5,10 @@ Type expressions and type declarations turned into
 `elaborate` sits above [`scope`](../scope/README.md) and below
 [`knot`](../knot/README.md): [the type half of the load's walk](#the-type-channel-at-load)
 types every type expression, callable signature and component of type binders in
-a loaded program, a component through [one door](#declarations), and leaves
-only what names a type a run binds to the walk that runs under that binding —
-a settlement's or a frame's activation — so the run elaborates no type. Nothing below `scope` can read a
+a loaded program, a component through [one door](#declarations), and writes
+what names a type a run binds over that name, or as a question an instance of
+the [binding graph](../../design/binding-graph.md) answers, so the run
+elaborates no type. Nothing below `scope` can read a
 name.
 
 ## What a type expression is
@@ -22,8 +23,7 @@ through `BodyShape::mention` and reads its coordinate through a **reader**
 reader**, which reads no activation and answers from the builtin table and the
 load-time types of the shapes enclosing the expression
 ([below](#the-type-channel-at-load)) — a type, a rigid variable standing for a
-type a run binds, or *unknown*. Under a binding, the same reader answers a
-bound name with the type the binding gives it. The tests also read through an
+type a run binds, or *unknown*. The tests also read through an
 activation's view, to hold the load's types to what reading the bound slots
 gives.
 
@@ -40,7 +40,9 @@ name at load as its lexical variable. A quantified callable's type is a
 reads an operand concrete — an application's head, a `NEEDING` kind, a
 `WITH`'s signature — an operand naming a `FOR ALL` variable or a head parameter
 is unsupported, and a projection's owner naming one declares no member. A
-run-bound name there is left to the run ([below](#the-type-channel-at-load)).
+run-bound name there is licensed by its bound
+([below](#the-type-channel-at-load)): a field projection off one is the
+lattice's projection, and every other such spelling is refused.
 
 Every composite is built from the handles its parts elaborate to, through the
 registry's own doors:
@@ -84,7 +86,9 @@ registry's own doors:
   with, read through every newtype layer above the record type — a `NEWTYPE`'s
   representation, a union variant's payload — so a field's type is reached the
   way its value is. The read chains where a field is itself record-shaped:
-  `Outer.inner.x`, `Shape.Circle.r`;
+  `Outer.inner.x`, `Shape.Circle.r`. Over a union of record types that each
+  declare the field it is the union of their types for it:
+  `:((:{size :Number} | :{size :Str}).size)` is `Number | Str`;
 - `m.Carrier`, `outer.inner.Carrier` and `(MAKESET ints).Set` — a **path**,
   whose owner is a value name holding a module, a chain of value members rooted
   at one, or such a chain rooted at an expression written in place — are the
@@ -560,7 +564,10 @@ application, read off a parameter's type or an annotated binder's. Dispatch's
 [walk](../dispatch/README.md#paths) resolves every path a unit spells, before
 the unit's declarations, to a closed type or a class off the module's content
 tree, and the reader reads each through that resolution: closed as it is, and
-in `Typing` mode a class as its class's variable. A path variable
+in `Typing` mode a class as its class's variable. A path the walk has not
+resolved, which the reader can meet inside a root written in place, stops the
+entry point with a request (`Stop::Unresolved`): the walk resolves the path and
+types the fact again. A path variable
 is closed by its root's binding: a module binder's binding is written into the
 variables of the classes its paths read
 ([module substitution](../build/README.md#derived-names)). A **type binder over
@@ -582,11 +589,36 @@ typed where the body is, so its closed registered shape is the entry. The
 function the key's list holds where the block runs answers each call, so the
 entry carries no quantifier map and binds no parameter.
 
+**What a bound licenses.** A spelling that reads an operand concrete, over a
+run-bound name, loads only where the name's bound guarantees it at every
+binding, so no binding refuses a spelling
+([what a body may ask of a `FOR ALL` name](../../design/quantified-types.md#what-a-body-may-ask-of-a-for-all-name)).
+`Elt.size` is the
+[projection](../../lattice/src/types/vocabulary.md#the-node-vocabulary)
+`(FIELD size OF Elt)` where `Elt`'s bound lies under `:{size :Any}`, which is
+exactly where the lattice's door builds one, and `Unlicensed`, worded over
+the bound, elsewhere. Substituting a binding rebuilds it into the binding's
+field, which is what the closed spelling gives a load with that binding
+declared, a union of record types included. A variant read off a run-bound
+name, and an application, a `WITH`, a `NEEDING` or an `UNBUILT` whose head is
+one, are `Unlicensed` too, each naming the bound's own spelling where it has
+one: a binding under a union may be a lone variant, and the type a value
+carries is always applied. A `MATCH … UNDER` over a bare run-bound name is
+`NotUnion`. A name with no declared bound — a `:Type` parameter, a surfaced
+name its module's signature leaves abstract, a quote's hole or `$` name, a path
+over a head parameter its signature leaves unpinned — lies under `Any`, which
+licenses nothing. A name a `USING … SCOPE` surfaces is the type its module's
+static signature declares it at, where it declares it exactly: a manifest
+member, or a head parameter the signature's application pins. A type declared
+in a body over a run-bound name — `UNION Chain = #{Link: :{v :Elt}, …}` — is
+no run-bound name: its declaration licenses what it shows, `Chain.Link`, an
+application, a `WITH` or a `MATCH … UNDER Chain`, each checked at load
+against the declaration.
+
 **What a binding is written into.** A spelling whose value over a rigid
 variable can differ from substituting first and elaborating after elaborates
 to a **derived name**: a meet (`Elt & Number` meets to `Never` over a rigid
-`Elt`, but is `Number` where `Elt` is `Number`), a projection's owner, an
-application's head, `Elt WITH {…}`, a `NEEDING` kind, and a `NEWTYPE` or
+`Elt`, but is `Number` where `Elt` is `Number`), and a `NEWTYPE` or
 `UNION` over a run-bound name. A derived name is a
 lexical variable of its own, between ends that hold every binding's value, and
 its **term** is the spelling, written over the names it reads. A binding gives
@@ -594,16 +626,19 @@ it the type its term elaborates to with the binding written in, which is what a
 load with that binding declared elaborates the spelling to
 ([derived names](../build/README.md#derived-names)). So a `NEWTYPE` over a
 `FOR ALL` name is one rigid type at load: two calls at one binding build one
-nominal, and calls at two bindings build two. A `MATCH … UNDER`'s union clause
-over a bare run-bound name asks which variants the binding has, and each arm
-reads its payload as a derived name, so [its check](#a-unions-variants) is a
-question the binding answers. A type binder is closed or rigid: an alias or a
+nominal, and calls at two bindings build two. A type binder is closed or rigid: an alias or a
 `SIG` over a run-bound name is rigid as written, and any other spelling through
-a derived name. The declaration door reads through the load-time reader in a
+a derived name. An alias or `SIG` fellow of a nominal over a run-bound name
+is read relative over that name and sealed with the group, so it is the
+derived name of its sealed twin at each binding. The declaration door reads through the load-time reader in a
 mode that answers a run-bound name rigid. A callable whose `FOR ALL` bound
-names a run-bound name is left to the run, its registration marked
-`ForAllBound`: binding the outer name re-bounds its quantifier without closing
-it, so its scheme is no derived name.
+names a run-bound name carries its scheme's **recipe**, the bound written over
+names, beside its static type; its body is typed once with the quantifier
+bounded by the upper end of that bound, which holds at every binding, and a
+question over the recipe builds the scheme with the binding written in
+([a bound over an encloser's name](../../design/binding-graph.md#what-a-bind-site-binds)).
+A `FOR ALL` bound inside a type — a `SIG`'s `VAL` scheme or a `SIG`'s own
+group — that names a run-bound name is refused, `BoundOverRunBound`.
 
 **Order.** Within a unit the type half runs in the walk's second and third
 steps, after the paths the unit spells are resolved:
@@ -626,7 +661,8 @@ steps, after the paths the unit spells are resolved:
 `:(Str | Number)`, a `FOR ALL` name spelled twice — refuse the shape as
 `RepeatedGuard`, naming both. Of several repeats, the refusal names the first
 in program order, against the first guard written of its type. Two `FOR ALL`
-names a settlement binds to one type repeat there. A repeated label, value
+names a binding gives one type repeat under it: the check is a stored
+question, which that binding's instance answers. A repeated label, value
 guard or `_` is syntax, which [the scope builder](../scope/README.md#three-tiers)
 refuses where it reads the arm set.
 
@@ -637,13 +673,15 @@ stored order ([`variants`](variants.rs)). A label names the member of its name: 
 declared variant by its own name, and a variant applied to arguments,
 `:(Number -> Option)`'s `Some`, by its constructor's. A structural member,
 `Number` in `:(Maybe | Number)`, has no name, so no label names it and only `_`
-covers it. [`arms_under`](variants.rs) checks each `MATCH … UNDER` whose clause
-the walk closes, beside the guards: a clause that is no `Union` node refuses as
-`NotUnion`, a label naming no variant as `NoVariant`, and, where no `_` arm is
-written, a variant no label names as `Uncovered`. The check runs once under each
-binding that closes the clause — the load for a closed union, a settlement for
-one over a `FOR ALL` name — before any arm is selected under it, never where the
-`MATCH` runs.
+covers it. [`arms_under`](variants.rs) checks each `MATCH … UNDER` where the
+program loads, beside the guards, over the variants its clause's text shows: a
+clause that is no `Union` type node refuses as `NotUnion`, a bare run-bound
+name among them; a label naming no variant as `NoVariant`; and, where no `_`
+arm is written, a variant no label names as `Uncovered`. A family applied at a
+run-bound name shows its variants whatever the name is bound to, so
+`MATCH x UNDER :(Elt -> Option) WITH #{Some: (it)}` is refused at load for want
+of a `None` arm. The check runs once, before any arm is selected, and never
+under a binding or where the `MATCH` runs.
 
 A variant's identity is its name, kind and payload, not its union: it unifies
 with its standalone twin ([identity](../../lattice/src/types/identity.md)). So a
@@ -656,9 +694,9 @@ between `Some` and `Maybe` where `Sized`'s payload is `Maybe`, and a
 construction through a [family](#families)'s variant at most the union applied
 at what the payload's static upper end pins, each parameter the payload says
 nothing about at `Never` — while the value still carries the variant
-([static types](../dispatch/README.md#static-types)). So a clause over a
-`FOR ALL` name a call binds at such a construction — `PICK (Maybe.Some 3)` over
-`MATCH x UNDER Un` — reads the union, and the check runs under it.
+([static types](../dispatch/README.md#static-types)). So a `FOR ALL` name a
+call binds at such a construction is bound to the union: `PICK (Maybe.Some 3)`
+over `x :Un` binds `Un` to `Maybe`.
 
 **Refusals.** A closed type that does not elaborate refuses the load as
 `ShapeError::Type`, located at the part the refusal is about, else at the type
@@ -667,17 +705,13 @@ in the code's closing record instead, and the `EVAL` that runs the code
 reports it, since a quote is checked where its code runs
 ([quotes](../scope/README.md#building-code)).
 
-**Frontiers and resumption.** The reader reads every fact through its
+**Frontiers.** The reader reads every fact through its
 `TypeContext`, which gathers each unknown it reads
 ([what a fact waits on](../build/README.md#the-store)): every name in
 [what a run binds](#the-type-channel-at-load) — a `FOR ALL` name, a `:Type`
 parameter, a surfaced type name, a quote's hole, mark or `$` name — in either
 mode, and a derived name reads as the names its term reads, so a type binder
-declared over a run-bound name waits on it. Under a
-binding a bound name reads as the closed type it binds, in either mode, so a
-type binder over it declares closed, and a callable body's own bound
-`FOR ALL` name is that type at its level. The rules never ask whether they run
-at the load or in a resumption: they hold no writer, lay every fact through
+declared over a run-bound name waits on it. The rules hold no writer, lay every fact through
 the walk's `lay` and every other value in the scratch they are handed, which
 [`tests::boundary`](tests/boundary.rs) holds them to.
 
@@ -691,7 +725,14 @@ never a guess:
 - `NoSuchMember` — a projection naming a union tag or record field its owner
   does not declare, or off an owner with neither — `Number.z`, or a ring of
   newtypes with no record type under it;
+- `Unlicensed` — a spelling over a run-bound name its bound does not license
+  ([what a bound licenses](#the-type-channel-at-load)): a field projection the
+  bound does not guarantee, a variant read, or an application, a `WITH`, a
+  `NEEDING` or an `UNBUILT` whose head is the name, worded over the bound as
+  written;
 - `Bound` — a bound that names a type variable or is `Never`;
+- `BoundOverRunBound` — a `FOR ALL` bound inside a type, a `SIG`'s `VAL`
+  scheme or a `SIG`'s own group, that names a run-bound name;
 - `Quantified` — a quantified function type or expression shape written
   anywhere but as the whole type of a signature's `VAL` member or a signature's
   keyworded head;
@@ -706,6 +747,10 @@ never a guess:
   [tie](../../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind): an
   argument both admit would solve the group by whichever member the union stores
   first. It names the two members;
+- `TooWide` — a quantified function type or expression shape whose `FOR ALL`
+  group holds 64 or more names, or with 64 or more parameters or slots: a call's
+  stored solve names each slot and pinned variable by a bit
+  ([static types](../dispatch/README.md#static-types));
 - `ParameterChain` — a head's type reading a type member of its parameter
   through another member, `elem.inner.Carrier`;
 - `ParameterCycle` — a parameter whose type reads itself through its head's
@@ -715,7 +760,8 @@ never a guess:
   binder's. It names the operand;
 - `Unsupported` — any other spelling: a `_` field, a `TYPE OF` operand that is
   no name or member chain rooted at one, an outer quantifier read
-  under a nested group, an application whose arguments are not exactly the
+  under a nested group, a head that is a run-bound name, an application whose
+  arguments are not exactly the
   parameters its constructor declares, a `WITH` over anything but a declared
   signature or pinning a name it does not declare as a parameter, a bound on a
   `NEWTYPE` family or a parameterized union, and every declaration the
@@ -726,8 +772,15 @@ never a guess:
   `Unsupported` for the same reason a group head that would chain a symbol twice
   is: [`!=` is rewritten, never declared](../scope/README.md#operator-groups).
 
-A reader's *unknown* comes back as `Unknown`, the walk's cue to leave the
-type to the run; it is never reported.
+A type the elaborator cannot know where no binding is written in is
+`Unknown`, never reported. `Unknown` carries an `Unwalked` token, which only a
+reader outside a walk, whose namer names no derived name, and a path whose root
+lands past the reader's chain (`Shapes::path_level`) construct. A walk's namer
+is total (its `Derives::Unwalked` is `Infallible`), so over a run-bound name the
+walk's elaborator gives a type, a derived name or a refusal. It leaves a type
+unknown only past its chain, as in a quote's code over a name the quote leaves
+open. `OpenAtRun` is the run's refusal for a type the load left open that no
+binding closed.
 
 Elaboration writes nothing to a region: its transient runs live in the scratch
 arena it is handed, and every node it builds is interned in the registry. A
@@ -815,7 +868,9 @@ every fact through its `TypeContext`.
 - [Families as parameters](../../roadmap/features/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [A `FOR ALL` bound over a run-bound name](../../roadmap/types/run-bound-for-all-bounds.md)
-  — a callable whose quantifier's bound names a run-bound name, typed at load.
+- [A scheme inside a type over an encloser's names](../../roadmap/types/schemes-inside-types.md)
+  — a `FOR ALL` bound inside a type naming a run-bound name, which
+  `BoundOverRunBound` refuses.
 - [Unplanned work](../../roadmap/types/README.md#unplanned-work) — a
-  family's variance, which no declaration states.
+  family's variance, which no declaration states, and a head projecting a
+  `FOR ALL` name.

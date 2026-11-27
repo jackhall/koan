@@ -95,6 +95,11 @@ impl Signed<'_> {
         None
     }
 
+    /// Whether the skeleton declares the head parameter `name`.
+    pub fn declares_parameter(&self, name: TypeSymbol) -> bool {
+        self.entries.contains(&Entry::Parameter(name))
+    }
+
     /// The skeleton laid through `lay`.
     pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Signed<'to> {
         let entries = self.entries.iter().map(|entry| match *entry {

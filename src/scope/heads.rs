@@ -128,27 +128,49 @@ pub fn applied_union(
 /// so no label names it.
 pub fn variants<'tier>(
     types: &Chain<'tier, '_, '_, '_>,
-    union: KType,
-) -> Option<impl Iterator<Item = KType> + 'tier> {
-    match types.node(union) {
+    union: impl Into<Parametric>,
+) -> Option<impl Iterator<Item = Parametric> + 'tier> {
+    match types.node(union.into()) {
         TypeNode::Union { members } => Some(members.iter()),
         _ => None,
     }
 }
 
 /// The member of `union` that `label` names, or `None` where none does or `union` is no union.
-pub fn variant_named(types: &Chain<'_, '_, '_, '_>, union: KType, label: Symbol) -> Option<KType> {
+pub fn variant_named(
+    types: &Chain<'_, '_, '_, '_>,
+    union: impl Into<Parametric>,
+    label: Symbol,
+) -> Option<Parametric> {
     variants(types, union)?.find(|member| variant_label(types, *member) == Some(label))
+}
+
+/// [`variant_named`] over a closed union.
+pub fn closed_variant(types: &Chain<'_, '_, '_, '_>, union: KType, label: Symbol) -> Option<KType> {
+    let variant = variant_named(types, union, label)?;
+    Some(
+        types
+            .concrete(variant)
+            .expect("a closed union's variants are closed"),
+    )
 }
 
 /// The name a label gives `variant`: a declared variant's own, an applied one's constructor's, and
 /// `None` for a structural member.
-pub fn variant_label(types: &Chain<'_, '_, '_, '_>, variant: KType) -> Option<Symbol> {
-    let declared = match types.node(variant) {
+pub fn variant_label(
+    types: &Chain<'_, '_, '_, '_>,
+    variant: impl Into<Parametric>,
+) -> Option<Symbol> {
+    let declared = match types.node(variant.into()) {
         TypeNode::ConstructorApply { constructor, .. } => constructor,
-        _ => variant,
+        node => return set_member_name(node),
     };
-    match types.node(declared) {
+    set_member_name(types.node(declared))
+}
+
+/// A declared variant's name: a sealed set member's own.
+fn set_member_name(node: TypeNode<'_, Parametric>) -> Option<Symbol> {
+    match node {
         TypeNode::SetMember { name, .. } => Some(name.symbol()),
         _ => None,
     }
@@ -293,8 +315,8 @@ pub fn view_signature(
 /// The type every module under the closed `signature` declares its value member `name` at: a
 /// signature's or an application's under its pins, a union's the join of its members', a meet's
 /// the meet of what each member declaring it declares, and `Never`'s `Never`, since no module
-/// reaches the read. `None` where it declares no such member, declares it at a scheme, or leaves a
-/// head parameter unpinned.
+/// reaches the read; `Any` where it declares the member at a scheme or over a head parameter it
+/// leaves unpinned, a read the run judges by value. `None` where it declares no such member.
 pub fn signature_value(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
@@ -317,7 +339,7 @@ pub fn signature_value(
             for each in members.iter() {
                 let read = match declared_value(types, scratch, each, name) {
                     Declared::No => continue,
-                    Declared::Unread => return None,
+                    Declared::Unread => return Some(KType::ANY),
                     Declared::At(read) => read,
                 };
                 met = Some(met.map_or(read, |held| {
@@ -328,9 +350,59 @@ pub fn signature_value(
         }
         _ => match declared_value(types, scratch, signature, name) {
             Declared::At(read) => Some(read),
-            Declared::No | Declared::Unread => None,
+            Declared::Unread => Some(KType::ANY),
+            Declared::No => None,
         },
     }
+}
+
+/// What every module under the closed `signature` declares its value member `name` at, a scheme
+/// included: a signature's or an application's under its pins, read whole, where it closes; any
+/// other head's as [`signature_value`] reads it. `None` where it declares no such member.
+pub fn member_declared(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    signature: KType,
+    name: ValueSymbol,
+) -> Option<DeclaredType<KType>> {
+    if let TypeNode::Signature { .. } | TypeNode::SignatureApply { .. } = types.node(signature)
+        && let Some(read) = declared_read(types, scratch, signature, name)
+        && let Some(closed) = types.concrete_declared(read)
+    {
+        return Some(closed);
+    }
+    signature_value(types, scratch, signature, name).map(DeclaredType::Type)
+}
+
+/// The value member `name` the closed `signature`, a signature or an application of one, declares,
+/// read under its pins: a parameter it leaves unpinned stays in the read. `None` where it declares
+/// none.
+fn declared_read(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    signature: KType,
+    name: ValueSymbol,
+) -> Option<DeclaredType<Parametric>> {
+    let (declared, pins) = match types.node(signature) {
+        TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
+        _ => (signature, None),
+    };
+    let TypeNode::Signature { schema, .. } = types.node(declared) else {
+        return None;
+    };
+    let (_, read) = schema.value_slots.iter().find(|(held, _)| *held == name)?;
+    let mut to = BumpVec::new_in(scratch);
+    for (parameter, _) in schema.parameters.iter() {
+        if let Some(pin) = pins.and_then(|pins| pins.get(BinderSymbol::Type(*parameter).symbol())) {
+            to.push((*parameter, pin));
+        }
+    }
+    Some(substitute_parameters(
+        types,
+        scratch,
+        *read,
+        Members::from_pairs(scratch, to),
+    ))
 }
 
 /// What a signature or an application of one declares a value member at.
@@ -351,24 +423,10 @@ fn declared_value(
     signature: KType,
     name: ValueSymbol,
 ) -> Declared {
-    let (declared, pins) = match types.node(signature) {
-        TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
-        _ => (signature, None),
-    };
-    let TypeNode::Signature { schema, .. } = types.node(declared) else {
-        return Declared::No;
-    };
-    let Some((_, read)) = schema.value_slots.iter().find(|(held, _)| *held == name) else {
+    let Some(read) = declared_read(types, scratch, signature, name) else {
         return Declared::No;
     };
     // A parameter the application leaves unpinned stays in the read, which is then not closed.
-    let mut to = BumpVec::new_in(scratch);
-    for (parameter, _) in schema.parameters.iter() {
-        if let Some(pin) = pins.and_then(|pins| pins.get(BinderSymbol::Type(*parameter).symbol())) {
-            to.push((*parameter, pin));
-        }
-    }
-    let read = substitute_parameters(types, scratch, *read, Members::from_pairs(scratch, to));
     match read.as_type().and_then(|read| types.concrete(read)) {
         Some(read) => Declared::At(read),
         None => Declared::Unread,
@@ -395,6 +453,21 @@ pub fn signature_outside(types: &Chain<'_, '_, '_, '_>, lower: Parametric, asked
         }
         _ => false,
     }
+}
+
+/// Whether `ty`, a signature, an application of one or a meet of those, declares no member `name`:
+/// a value slot for a value name, a manifest member or head parameter for a type name. `false` for
+/// any other head.
+pub fn signature_lacks(types: &Chain<'_, '_, '_, '_>, ty: Parametric, name: BinderSymbol) -> bool {
+    let declares = |schema: &SigSchema<'_>| match name {
+        BinderSymbol::Value(value) => member(schema.value_slots, value).is_some(),
+        BinderSymbol::Type(held) => {
+            member(schema.manifest_members, held).is_some()
+                || member(schema.parameters, held).is_some()
+        }
+        BinderSymbol::Registration(_) | BinderSymbol::Key(_) => true,
+    };
+    offered_declares(types, ty, &declares) == Some(false)
 }
 
 /// [`judge_by_class`] of `shape` over `arguments`, judged *never* also where some argument's lower

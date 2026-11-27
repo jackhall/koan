@@ -1,48 +1,55 @@
-//! A `MATCH … UNDER`'s arms against its union clause, whose variants
-//! [`variants`](crate::scope::variants) reads.
+//! A `MATCH … UNDER`'s arms against its union clause's variants.
 //!
 //! [`arms_under`] checks a `MATCH … UNDER`'s arms against its clause beside the guards' check
-//! ([`guards`](super::guards)), wherever the walk closes the clause: its labels and its coverage.
+//! ([`guards`](super::guards)), once, where the program loads: its labels and its coverage, over
+//! the variants the clause's text shows. A family applied at a run-bound name shows its variants
+//! whatever the name is bound to, and a union declared over one shows its declaration's; a bare
+//! run-bound name shows none, so it is no union.
 //!
 //! See [elaborate/README.md](README.md).
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    BodyShape, Guard, ShapeError, Static, StaticType, TypeExpression, each_part, source_of,
-    variant_label, variant_named, variants,
+    AsWritten, BodyShape, Guard, ShapeError, Static, StaticType, TypeExpression, each_part,
+    source_of,
 };
-use crate::values::Chain;
+use crate::symbols::Symbol;
+use crate::type_lattice::Parametric;
 
-/// Check each `MATCH … UNDER` among `shape`'s `expressions` whose union clause `typed` closes:
-/// the clause is a union, each label names one of its variants, and, where no `_` arm is written,
-/// each of its variants has an arm — refusing the first failure in program order. A clause the load
-/// leaves unknown is checked where the binding that closes it is walked.
-pub fn arms_under<'graph, 'o>(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
+/// Check each `MATCH … UNDER` among `shape`'s `expressions` whose union clause `typed` knows: the
+/// clause shows variants (`shown`: each one's label, beside the variant), each label names one of
+/// them, and, where no `_` arm is written, each has an arm — refusing the first failure in program
+/// order. A clause the load does not know, past a quote's chain, is code another load checks.
+pub fn arms_under<'graph, 'o, 'x>(
+    scratch: BumpAllocator<'x>,
     shape: &'graph BodyShape<'graph>,
     expressions: &[&TypeExpression<'graph>],
     typed: impl Fn(&TypeExpression<'graph>) -> StaticType<'o>,
+    shown: impl Fn(Parametric) -> Option<BumpVec<'x, (Option<Symbol>, Parametric)>>,
+    written: impl Fn(Parametric) -> Option<AsWritten>,
 ) -> Result<(), ShapeError<'o>> {
     for expression in expressions.iter().filter(|expression| expression.clause) {
-        let Static::Closed(union) = typed(expression) else {
-            continue;
+        let union: Parametric = match typed(expression) {
+            Static::Closed(union) => union.into(),
+            Static::Rigid { value, .. } => value,
+            Static::Unknown => continue,
         };
         let statement = &shape.body()[expression.statement as usize];
         let at = source_of(shape, statement, expression.site).unwrap_or(statement.source);
-        if variants(types, union).is_none() {
+        let Some(variants) = shown(union) else {
             return Err(ShapeError::NotUnion {
-                clause: union.into(),
+                clause: union,
+                written: written(union),
                 at,
             });
-        }
+        };
         let node = clause_node(statement, expression.part);
         let mut labels = BumpVec::new_in(scratch);
         let mut defaulted = false;
         for guard in arm_guards(shape, node) {
             match guard {
-                Guard::Label(label) if variant_named(types, union, label).is_none() => {
+                Guard::Label(label) if !variants.iter().any(|(named, _)| *named == Some(label)) => {
                     return Err(ShapeError::NoVariant { label, union, at });
                 }
                 Guard::Label(label) => labels.push(label),
@@ -52,9 +59,9 @@ pub fn arms_under<'graph, 'o>(
                 }
             }
         }
-        let uncovered = (variants(types, union).into_iter().flatten()).find(|variant| {
-            variant_label(types, *variant).is_none_or(|label| !labels.contains(&label))
-        });
+        let uncovered = (variants.iter())
+            .find(|(label, _)| label.is_none_or(|label| !labels.contains(&label)))
+            .map(|(_, variant)| *variant);
         if let Some(variant) = uncovered.filter(|_| !defaulted) {
             return Err(ShapeError::Uncovered {
                 union,

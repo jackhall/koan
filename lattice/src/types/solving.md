@@ -129,7 +129,11 @@ both a lower and an upper contribution: a module fits at one type, the one the
 run re-stamps it at and its path reads, so `ints` fixes `Cr` at `Number`, and
 where one class holds both `elem` and an `x :Cr`, an `x` of `"s"` is refused
 rather than widening `Cr` to `Number | Str`. A solution naming a parameter the
-carried type leaves open fixes nothing, and the slot does not admit. At a
+carried type leaves open, or a run-bound name — a lexical, path or derived
+variable — the carried type holds only inside its signature, fixes nothing,
+and the slot does not admit: a binding never enters sealed content, so a
+solution read through it would name the variable unbound at the run where the
+load's, bound, named it bound. At a
 contravariant position, each pin a carried application holds must be pinned by
 the declared one, an open pin solved alike.
 

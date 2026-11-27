@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8f634e2f3d418b9bbe480e347af54cd4fb09cc024886b58356130ca685d1a564 # shrinks to program = Dispatched { ranked: false, registrations: [Registration { quantified: 2, slots: [Variable(1), List(Record([(0, Variable(0))]))] }], parameters: [(Any, "null"), (Record([]), "{}")], arguments: [None, Some("[]")] }

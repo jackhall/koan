@@ -8,7 +8,8 @@
 //! question reads that the name's node binds; from a name typed on a site to each answered name
 //! its term mentions that the name's node binds; and from a name typed through a call to each
 //! answered name the call passes that the name's node binds, and to the callee name it takes
-//! where the callee's entry binds it.
+//! where the callee's entry binds it or a chain of onward calls reaches the node that does, and to
+//! each answered name an onward call on that chain passes that its owner binds.
 //!
 //! The arcs come from every arm the text lays, so every knot under every binding lies in one
 //! component that holds a cycle: a **text component**. The evaluation keeps a demand outside
@@ -17,7 +18,7 @@
 //! ([the crate's README](../../README.md#instances)). Components are [`grows`]'s Kosaraju.
 
 use super::{Graph, Source, grows};
-use crate::domain::Facts;
+use crate::domain::Kept;
 use crate::id::{ComponentId, NameId, NodeId, QuestionId};
 
 /// Each name's and each question's text component.
@@ -28,7 +29,7 @@ pub(super) struct TextComponents {
 
 /// The text components of `graph`'s arcs of need, numbered in order of each one's first vertex:
 /// names in `NameId` order, then questions in `QuestionId` order.
-pub(super) fn text_components<F: Facts>(graph: &Graph<F>) -> TextComponents {
+pub(super) fn text_components<K: Kept>(graph: &Graph<K>) -> TextComponents {
     // Vertices: each name at its index, then each question after every name.
     let names = graph.names.len();
     let vertices = names + graph.questions.len();
@@ -54,9 +55,21 @@ pub(super) fn text_components<F: Facts>(graph: &Graph<F>) -> TextComponents {
                 }
                 Source::Call { edge: call, takes } => {
                     arcs.extend(waited(placed.node, graph.edge(call).passes()));
-                    let entry = graph.entry(graph.edge(call).callee());
+                    let callee = graph.edge(call).callee();
+                    let entry = graph.entry(callee);
                     if graph.answered_at(takes) == Some(entry) {
                         arcs.push(takes.index());
+                    }
+                    // A name taken from a statement node waits on it, and on what each
+                    // onward call on the way passes that its owner binds.
+                    if let Some((_, chain)) = graph.reach(callee, takes) {
+                        arcs.push(takes.index());
+                        for &onward in chain {
+                            if graph.owned_inside(onward) {
+                                let owner = graph.edge(onward).owner();
+                                arcs.extend(waited(owner, graph.edge(onward).passes()));
+                            }
+                        }
                     }
                 }
             }

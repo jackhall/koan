@@ -34,16 +34,13 @@ candidate whatever `Item` is, yet the program loads.
 
 - *Opt-in — decided.* The default load does no work a run may never use, and
   CI runs the flag.
-- *Where the flag is named — open.* A flag of the interpreter, or a setting
-  beside [the build budget](../features/bound-settings.md). Recommended: a
+- *Where the flag is named — open.* A flag of the interpreter, or a
+  declaration in the program's text. Recommended: a
   flag, since it prices a load and says nothing about what the program
   means.
 
 ## Dependencies
 
-**Requires:**
-
-- [The build over the binding graph](build-over-the-binding-graph.md) — the
-  instances and the root the pass starts beside.
+**Requires:** none.
 
 **Unblocks:** none.

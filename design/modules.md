@@ -27,10 +27,10 @@ to: each is bound once per program, so it stands for its value, and the load
 knows it without running anything.
 
 Values are immutable, so a value's digest is a fact about it. It is computed
-on demand, when a view or a settlement's key asks for it, and composed
+on demand, when a view or a bind site binding the module asks for it, and composed
 from its parts' digests, as a type's digest is composed from its children's;
 one demand digests a part shared many times over once. A module's content is
-computed where a view or a key first reaches the module and kept on the
+computed where a view or a bind site first reaches the module and kept on the
 module, which holds what it captures, as a closure does, so a module only
 surfaced, read or passed on digests nothing. A slot a module captures keeps
 its value's digest beside it where a view reaches the module in the slot's
@@ -209,7 +209,7 @@ A building node is closed where its parts are, and digests as the run digests
 the record or variant at the type it is built at. An arm node is never closed,
 since the run picks the arm from the scrutinee's value; its identity is keyed
 on the arm and the scrutinee's tree, as a leaf's is on its binder.
-[The trace](../src/build/README.md#the-trace) evaluates one over closed
+[Tree application](../src/dispatch/graph/README.md#the-domain) evaluates one over closed
 content, and only where the run would take that arm: under `UNDER`, it is the
 payload of the building node's variant; under `WITH`, the scrutinee retyped to
 the guard.
@@ -243,7 +243,9 @@ substitutes the tree's leaves.
 A keyworded call whose text selects no one overload is a leaf keyed on the
 call — its candidates and its arguments' trees — so two writes of one call are
 one tree at load and under every binding, and a binding that selects one
-overload unfolds it there as a load with that binding declared does. Any
+overload unfolds it there as a load with that binding declared does. Two
+`LET` binders holding the call hold one tree, so a binding of either gives
+both that content. Any
 other call that does not unfold is a leaf too: one of a function a parameter
 holds, one of a recursive function, or one whose result is chosen by a `MATCH`
 or read out of a list or a dictionary. Bound by a `LET`, it is keyed on that

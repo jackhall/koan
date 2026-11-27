@@ -223,8 +223,8 @@ Where the load does not know the bare member as a view, or does not know the
 carried type, the view is open; a fully pinned application over a source known
 to hide nothing still solves its pins. A frame binding a module records it as a
 view beside its digest
-([activations](../../build/README.md#activations)), so a view over a module
-parameter is settled for each binding. [`nested_types`](view.rs) is the same half of an
+([instances at run](../../build/README.md#instances-at-run)), so a view over a
+module parameter is answered for each binding. [`nested_types`](view.rs) is the same half of an
 inward re-view (below). A nested view at a slot whose application pins every
 parameter needs no operand: *fits* solves a fully pinned application to its
 pins over any module, so [`pinned_view`](view.rs) computes its `from*`, `to`,

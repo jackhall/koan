@@ -107,9 +107,9 @@ fn a_record_naming_neither_bound_is_refused_where_the_load_can_tell_and_faults_o
         "load: <test>:1:7: :(LIST OF Number) can never be read by :{from :Str}"
     );
     assert_eq!(
-        run("LET f = (FN :{v :Any} -> Any = #([1 2] v))\nPRINT (f {v = {x = 1}})"),
+        run("LET f = (FN :{b :{v :Any}} -> Any = #([1 2] b.v))\nPRINT (f {b = {v = {x = 1}}})"),
         "error: :(LIST OF Number) is read by a `Number` or by a slice record naming `from` or \
-         `to` as `Number`s, not by :{x :Number}\n  in :(FN :{v :Any} -> Any) (f {v = {x = 1}}) at <test>:2:7"
+         `to` as `Number`s, not by :{x :Number}\n  in :(FN :{b :{v :Any}} -> Any) (f {b = {v = {x = 1}}}) at <test>:2:7"
     );
 }
 
@@ -117,18 +117,25 @@ fn a_record_naming_neither_bound_is_refused_where_the_load_can_tell_and_faults_o
 fn a_dict_applied_to_a_key_looks_it_up() {
     let source = "LET d = {\"a\": 1, \"b\": 2}\n\
                   PRINT (d \"b\")\nPRINT (d \"z\")\n\
-                  LET f = (FN :{k :Any} -> Any = #(d k))\n\
-                  PRINT (f {k = 7})\nPRINT (f {k = \"a\"})\nPRINT (f {k = [1]})";
+                  LET f = (FN :{b :{k :Any}} -> Any = #(d b.k))\n\
+                  PRINT (f {b = {k = 7}})\nPRINT (f {b = {k = \"a\"}})\nPRINT (f {b = {k = [1]}})";
     let expected = [
         ok("Number", "2"),
         error("Str", "z"),
         error("Number", "7"),
         ok("Number", "1"),
-        "error: :(LIST OF Number) cannot be a dict key\n  in :(FN :{k :Any} -> Any) (f {k = [1]}) at \
-         <test>:7:7"
+        "error: :(LIST OF Number) cannot be a dict key\n  in :(FN :{b :{k :Any}} -> Any) \
+         (f {b = {k = [1]}}) at <test>:7:7"
             .to_string(),
     ];
     assert_eq!(run(source), expected.join("\n"));
+    // A key declared `Any` is the name of the type it carries, which a call the text fixes passes
+    // it: the load reads the dict as a fresh load reads it, and refuses a key outside its key type.
+    assert_eq!(
+        run("LET d = {\"a\": 1}\nLET f = (FN :{k :Any} -> Any = #(d k))\nPRINT (f {k = 7})"),
+        "load: <test>:2:33: :(MAP Str -> Number) can never be read by Number\n  \
+         in (f {k = 7}) at <test>:3:7"
+    );
     assert_eq!(
         run("PRINT ({\"a\": 1} 5)"),
         "load: <test>:1:7: :(MAP Str -> Number) can never be read by Number"
@@ -178,7 +185,7 @@ fn the_load_types_a_read_from_both_ends_of_its_head() {
         format!(":({})", result("Number", "Str"))
     );
     assert_eq!(
-        read("LET f = (FN :{k :Any} -> Any = #(d k))\nLET r = (d (f {k = 1}))"),
+        read("LET f = (FN :{k :Any} -> Any = #(d k))\nLET r = (d (f {k = \"k\"}))"),
         format!(":({})", result("Number", "Any"))
     );
 }
@@ -353,12 +360,19 @@ fn a_head_typed_by_a_list_bounded_variable_reads_its_element() {
 }
 
 /// A head typed by a dict-bounded lexical variable is read as that dict: its key refusal reads the
-/// bound's key, which every binding's lies under, and the lookup's `Error` holds the variable's key
-/// beside the argument, which may lie outside it.
+/// bound's key, which every binding's lies under, and the lookup's `Error` is the decided name on
+/// whether the argument fits the variable's key: the key alone where it does, the key beside the
+/// argument where it may lie outside it.
 #[test]
 fn a_head_typed_by_a_dict_bounded_variable_reads_its_value() {
     over_variable("Dd: :(MAP Str -> Number)", "LET y = (xs \"k\")", |binder| {
-        assert_eq!(binder("y"), result(":((KEY OF Dd) | Str)", "(VALUE OF Dd)"));
+        assert_eq!(
+            binder("y"),
+            result(
+                "(ONE OF :((KEY OF Dd) | Str), (KEY OF Dd))",
+                "(VALUE OF Dd)"
+            )
+        );
     });
     assert_eq!(
         run("EXPR FOR ALL #{Dd: :(MAP Str -> Number)} #(AT d :Dd) -> Any = #((d 1))"),

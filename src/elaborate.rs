@@ -1,6 +1,5 @@
-//! Type expressions elaborated into lattice handles: where the program loads and, for what the load
-//! leaves unknown, in the walk a settlement or a frame's activation runs under the binding that
-//! closes it. The run elaborates none.
+//! Type expressions elaborated into lattice handles: where the program loads, and where a
+//! composition's miss walks its code. The run elaborates none.
 //!
 //! A type expression is syntax in program storage; its type names are mentions the shape builder
 //! already resolved to coordinates. [`type_expression`](expression::type_expression) turns one into a [`KType`] by reading each
@@ -56,7 +55,7 @@ mod variants;
 mod tests;
 
 pub use crate::scope::{applied_union, declared_field, declared_variant, tag_union};
-pub use crate::scope::{variant_label, variant_named, variants};
+pub use crate::scope::{closed_variant, variant_label, variant_named, variants};
 #[cfg(test)]
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
 pub use declaration::declares_nominal;
@@ -68,8 +67,8 @@ pub use module::{module_signature, module_signing, self_signature};
 pub use paths::{declared_through, path_binding};
 pub use reads::{Reads, TypeAt};
 pub use unit::{
-    Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards, own_levels,
-    registration,
+    Reader, Repeats, Signatures, Stop, Tools, TypeContext, callable, declarations, expression,
+    guards, own_levels, registration,
 };
 pub use variants::{arm_guards, arm_shapes, arms_under};
 

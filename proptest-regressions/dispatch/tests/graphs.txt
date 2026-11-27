@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a7c913ecba0914e7a1a8a908c744e454d6bc9aadf491b96b5f9ab9b5a4d792a1 # shrinks to case = UnseenMember { member: "(FN FOR ALL #[Item] :{x :Item} -> Item = #(x))", body: "(PRINT (APPLY MOD.missing))" }

@@ -1,17 +1,15 @@
 //! The **writes** one walk makes into its [`Store`](super::Store): each unit's record and each
 //! owning body's closing record, beside its frontier. The load writes every unit the shape table
 //! holds, so its [`Writes`] are dense: one cell per unit, numbered by segment, then by unit. A write
-//! sets its cell once, a read costs one index, and nothing needs a lock or a map. A layer writes the
-//! few units its binding wakes, so its [`KeyedWrites`] are a table keyed by unit, sized by what it
-//! wrote. Each store keeps one, and lays it into a [`LoadFacts`] once its walk returns.
+//! sets its cell once, a read costs one index, and nothing needs a lock or a map. The store lays
+//! them into a [`LoadFacts`] once its walk returns.
 
-use super::closed::ClosedTypes;
-use super::derived::{Derived, DerivedName};
+use super::derived::Derived;
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, resident};
+use crate::memory::{BumpAllocator, BumpVec, Lays};
 
-use super::facts::{Binding, Frontier, UnitId};
+use super::facts::{Frontier, UnitId};
 use super::records::{Closing, LoadFacts, UnitRecord};
 use super::shape::{Segment, UnitIndex};
 use super::shapes::Shapes;
@@ -21,12 +19,6 @@ type Unit<'o> = UnitRecord<'o>;
 
 /// An owning body's closing record beside its frontier.
 type Close<'o> = (&'o Closing<'o>, Frontier<'o>);
-
-/// One walk's writes sorted by id: its units, then its closings.
-type Sorted<'x, 'o> = (
-    BumpVec<'x, (UnitId, Unit<'o>)>,
-    BumpVec<'x, (Segment, Close<'o>)>,
-);
 
 /// One cell per unit of a shape table, numbered by segment, then by unit: set once, read by index.
 struct UnitTable<'p, T> {
@@ -125,15 +117,12 @@ impl<'o, 'p> Writes<'o, 'p> {
         cell.set(Some((closing, frontier)));
     }
 
-    /// Every write, laid through `lay` as the facts of a walk over `base` under `binding`, not yet
-    /// folded. The units come out by segment, then by unit: sorted by id.
+    /// Every write, laid through `lay` as the facts of a walk, not yet folded. The units come out by segment, then by unit: sorted by id.
     pub fn laid(
         &self,
         lay: impl Lays<'o>,
         scratch: BumpAllocator<'_>,
-        base: Option<&'o LoadFacts<'o>>,
         derived: Derived<'o>,
-        binding: Binding<'o>,
     ) -> LoadFacts<'o> {
         let mut units = BumpVec::new_in(scratch);
         self.units
@@ -144,158 +133,6 @@ impl<'o, 'p> Writes<'o, 'p> {
                 closings.push((self.shapes.bodies()[at].segment(), record));
             }
         }
-        LoadFacts::of_records(
-            lay,
-            scratch,
-            self.shapes,
-            base,
-            derived,
-            binding,
-            &units,
-            &closings,
-        )
-    }
-}
-
-/// One walk's writes keyed by unit and by body, in the walk's scratch: a layer's, which writes only
-/// the units its binding wakes. Each table is taken out while a read or a write holds it.
-pub struct KeyedWrites<'o, 'p> {
-    scratch: BumpAllocator<'p>,
-    units: Cell<BumpBackedMap<'p, UnitId, Unit<'o>>>,
-    closings: Cell<BumpBackedMap<'p, Segment, Close<'o>>>,
-    /// The table of closed types the walk laid for what it absorbed.
-    closed: Cell<ClosedTypes<'o>>,
-    /// Each derived name the walk met that no layer beneath held, in the order met.
-    derived: Cell<BumpVec<'p, DerivedName<'p>>>,
-}
-
-impl<'o, 'p> KeyedWrites<'o, 'p> {
-    /// No writes yet.
-    pub fn new(scratch: BumpAllocator<'p>) -> Self {
-        KeyedWrites {
-            scratch,
-            units: Cell::new(bump_table(scratch)),
-            closings: Cell::new(bump_table(scratch)),
-            closed: Cell::new(ClosedTypes::EMPTY),
-            derived: Cell::new(BumpVec::new_in(scratch)),
-        }
-    }
-
-    /// `read` of the derived names laid so far, which it holds meanwhile.
-    fn names<R>(&self, read: impl FnOnce(&mut BumpVec<'p, DerivedName<'p>>) -> R) -> R {
-        let mut names = self.derived.replace(BumpVec::new_in(self.scratch));
-        let read = read(&mut names);
-        self.derived.set(names);
-        read
-    }
-
-    /// The derived name the walk laid whose id is `id`, where it laid one.
-    pub fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'p>> {
-        self.names(|names| names.iter().find(|name| name.id == id).copied())
-    }
-
-    /// Keep `name`, a derived name the walk met that no layer beneath holds, its term laid in the
-    /// walk's scratch.
-    pub fn write_derived(&self, name: DerivedName<'_>) -> DerivedName<'p> {
-        let name = name.laid(self.scratch);
-        self.names(|names| names.push(name));
-        name
-    }
-
-    /// The derived names the walk laid, as a table laid through `lay`.
-    pub fn derived<'to>(&self, lay: impl Lays<'to>, scratch: BumpAllocator<'_>) -> Derived<'to> {
-        self.names(|names| Derived::sorted(lay, scratch, names))
-    }
-
-    /// The table of closed types the walk laid for what it absorbed.
-    pub fn closed(&self) -> ClosedTypes<'o> {
-        self.closed.get()
-    }
-
-    /// Keep `closed`, the table the walk laid for what it absorbed.
-    pub fn write_closed(&self, closed: ClosedTypes<'o>) {
-        self.closed.set(closed);
-    }
-
-    /// `read` of the unit table, which it holds meanwhile.
-    fn units<R>(&self, read: impl FnOnce(&mut BumpBackedMap<'p, UnitId, Unit<'o>>) -> R) -> R {
-        let mut units = self.units.replace(bump_table(self.scratch));
-        let read = read(&mut units);
-        self.units.set(units);
-        read
-    }
-
-    /// `read` of the closing table, which it holds meanwhile.
-    fn closings<R>(&self, read: impl FnOnce(&mut BumpBackedMap<'p, Segment, Close<'o>>) -> R) -> R {
-        let mut closings = self.closings.replace(bump_table(self.scratch));
-        let read = read(&mut closings);
-        self.closings.set(closings);
-        read
-    }
-
-    /// Whether the walk wrote any unit.
-    pub fn wrote_units(&self) -> bool {
-        self.units(|units| !units.is_empty())
-    }
-
-    /// The record this walk wrote for `unit`, where it wrote one.
-    pub fn unit(&self, unit: UnitId) -> Option<Unit<'o>> {
-        self.units(|units| units.get(&unit).copied())
-    }
-
-    /// The closing record this walk wrote for the owning body `body`, where it wrote one.
-    pub fn closing(&self, body: Segment) -> Option<Close<'o>> {
-        self.closings(|closings| closings.get(&body).copied())
-    }
-
-    pub fn write(&self, unit: UnitId, record: Unit<'o>) {
-        let held = self.units(|units| units.insert(unit, record));
-        debug_assert!(held.is_none(), "a walk runs each unit once");
-    }
-
-    pub fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
-        let held = self.closings(|closings| closings.insert(body, (closing, frontier)));
-        debug_assert!(held.is_none(), "a walk closes each body once");
-    }
-
-    /// Every write, sorted by id: the units, then the closings.
-    pub fn sorted<'x>(&self, scratch: BumpAllocator<'x>) -> Sorted<'x, 'o> {
-        let mut units = BumpVec::new_in(scratch);
-        self.units(|held| units.extend(held.iter().map(|(unit, record)| (*unit, *record))));
-        units.sort_unstable_by_key(|(unit, _)| *unit);
-        let mut closings = BumpVec::new_in(scratch);
-        self.closings(|held| closings.extend(held.iter().map(|(body, record)| (*body, *record))));
-        closings.sort_unstable_by_key(|(body, _)| *body);
-        (units, closings)
-    }
-
-    /// Every write, laid through `lay` as the facts of a walk over `shapes` and `base` under
-    /// `binding`, not yet folded.
-    pub fn laid(
-        &self,
-        lay: impl Lays<'o>,
-        scratch: BumpAllocator<'_>,
-        shapes: &'o Shapes<'o>,
-        base: Option<&'o LoadFacts<'o>>,
-        binding: Binding<'o>,
-    ) -> LoadFacts<'o> {
-        let (units, closings) = self.sorted(scratch);
-        let facts = LoadFacts::of_records(
-            lay,
-            scratch,
-            shapes,
-            base,
-            self.derived(lay, scratch),
-            binding,
-            &units,
-            &closings,
-        );
-        match self.closed().is_empty() {
-            true => facts,
-            false => facts.rebased(resident(
-                lay,
-                (*facts.base_layer()).with_closed(self.closed().copied(lay, |tree| tree)),
-            )),
-        }
+        LoadFacts::of_records(lay, scratch, self.shapes, derived, &units, &closings)
     }
 }

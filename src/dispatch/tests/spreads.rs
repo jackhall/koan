@@ -24,8 +24,15 @@ fn a_spread_of_what_is_no_list_is_refused_where_the_load_can_tell_and_faults_oth
         "load: <test>:1:7: `..` spreads a list, and this value is Number, which can never be one"
     );
     assert_eq!(
+        run("LET f = (FN :{b :{v :Any}} -> Any = #([..b.v]))\nPRINT (f {b = {v = 5}})"),
+        "error: `..` spreads a list, and Number is none\n  in :(FN :{b :{v :Any}} -> Any) (f {b = {v = 5}}) at <test>:2:7"
+    );
+    // A parameter declared `Any` is the name of the type it carries, which a call the text fixes
+    // passes it: a fresh load's refusal, at the load.
+    assert_eq!(
         run("LET f = (FN :{v :Any} -> Any = #([..v]))\nPRINT (f {v = 5})"),
-        "error: `..` spreads a list, and Number is none\n  in :(FN :{v :Any} -> Any) (f {v = 5}) at <test>:2:7"
+        "load: <test>:1:34: `..` spreads a list, and this value is Number, which can never be one\n  \
+         in (f {v = 5}) at <test>:2:7"
     );
 }
 

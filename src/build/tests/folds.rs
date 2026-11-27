@@ -115,6 +115,7 @@ proptest! {
             let keyable = |segment: Segment, at: Address| match at {
                 Address::Slot(slot) => !(segment.index() + slot.0).is_multiple_of(3),
                 Address::Capture(capture) => capture.0.is_multiple_of(2),
+                Address::Held(site) => site.index().is_multiple_of(2),
             };
             for entered in [
                 &[ShapeKind::Callable][..],

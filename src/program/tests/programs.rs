@@ -400,9 +400,7 @@ fn a_call_whose_argument_does_not_fit_its_parameter_is_refused() {
 fn a_call_returning_its_argument_hands_back_its_storage() {
     // The frame keeps the argument at the home it was handed from, so its value is handed back
     // from there rather than copied: `r` reads back at the very address `xs` was built at, though
-    // the list is long enough that copying it would never cost less than pinning. `ID`'s entry
-    // witnesses `Elt`, so its frame's region holds the witnessed layer beside the binding layer,
-    // and pinning it costs more than a shorter list's copy.
+    // the list is long enough that copying it would never cost less than pinning.
     let elements = (1..=256)
         .map(|n| n.to_string())
         .collect::<Vec<_>>()

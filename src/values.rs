@@ -32,6 +32,7 @@
 mod admission;
 mod circular;
 mod crossing;
+mod depot;
 mod dict;
 pub mod digest;
 mod equality;
@@ -45,7 +46,6 @@ mod record;
 mod render;
 mod retyped;
 mod settled;
-mod settlement;
 mod surface;
 mod tagged;
 mod text;
@@ -59,7 +59,7 @@ pub(crate) mod tests;
 
 pub use admission::{
     ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,
-    part_ktype, record_type, representation, satisfies, sealing, solves_identity,
+    part_ktype, payload_of, record_type, representation, satisfies, sealing, solves_identity,
 };
 pub use circular::{Binding, Circular, CodeView, FunctionIdentity, Resolved, binding_at};
 #[cfg(test)]
@@ -70,6 +70,7 @@ pub use crossing::{
 };
 #[cfg(debug_assertions)]
 pub use crossing::{check_habitat, check_pinned_habitat};
+pub use depot::{BuildBudget, DepotRef, KeptCell};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use digest::{ContentDigest, Digests};
 #[cfg(test)]
@@ -85,7 +86,6 @@ pub use list::{LinkedPiece, List, Piece};
 pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
-pub use settlement::{BindingImage, BuildBudget, DepotRef, KeptCell, KeyedTypes, LayerKey};
 #[cfg(test)]
 pub(crate) use surface::TARGETS;
 pub use surface::{

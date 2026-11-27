@@ -26,7 +26,7 @@ pub mod substrate;
 mod tests;
 
 pub use bumpstorage::{
-    Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, LaysRuns,
+    Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, DigestTable, LaysRuns,
     strongly_connected_components,
 };
 pub(crate) use bumpstorage::{bump_set, bump_table};

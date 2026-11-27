@@ -2,7 +2,8 @@
 //! lambdas, type parameters, frames' contracts, record access, construction, blocks, faults,
 //! and programs nested to the syntax depth limit, run on the stack the interpreter sizes for it.
 
-use super::run;
+use super::{output, run};
+use crate::values::BuildBudget;
 
 #[test]
 fn the_builtin_library_runs_over_literals_containers_and_names() {
@@ -173,10 +174,10 @@ fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
     );
     assert_eq!(
         run(
-            "LET call = (FN :{f :(FN :{x :Number} -> Str), y :Any} -> Str = #(f {x = y}))\n\
-             PRINT (call {f = (FN :{x :Number} -> Str = #(\"ran\")), y = \"s\"})"
+            "LET call = (FN :{f :(FN :{x :Number} -> Str), b :{y :Any}} -> Str = #(f {x = b.y}))\n\
+             PRINT (call {f = (FN :{x :Number} -> Str = #(\"ran\")), b = {y = \"s\"}})"
         ),
-        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}\n  in :(FN :{x :Number} -> Str) (f {x = y}) at <test>:1:65\n  in :(FN :{f :(FN :{x :Number} -> Str) y :Any} -> Str) (call {f = (FN :{x :Number} -> Str = #(\"ran\")), y = \"s\"}) at <test>:2:7",
+        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}\n  in :(FN :{x :Number} -> Str) (f {x = b.y}) at <test>:1:70\n  in :(FN :{f :(FN :{x :Number} -> Str) b :{y :Any}} -> Str) (call {f = (FN :{x :Number} -> Str = #(\"ran\")), b = {y = \"s\"}}) at <test>:2:7",
         "a callee the load knows at most is the call's to admit"
     );
     let pair = |call: &str| {
@@ -507,8 +508,8 @@ fn a_quantified_function_runs_through_a_call() {
             "LET q = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\nPRINT (EVAL q -> Any)"
         ),
         "error: <test>:1:10: nothing fixes `Elt` here: a quantified function is read only at the \
-         head of a call, as the binding of a `MODULE` member, or where the type it is wanted at \
-         solves its group"
+         head of a call, held by a `LET` whose value its body does not return, or where the type \
+         it is wanted at solves its group"
     );
     assert_eq!(
         run(&module(
@@ -696,4 +697,109 @@ fn the_records_index_is_no_larger_than_the_facts_it_keys() {
 fn printed_code_reads_back() {
     let source = "LET q = #((LET x = 4) (PRINT \"a 'b'\" 'c'))\nPRINT q\nPRINT (q == #((LET x = 4) (PRINT \"a 'b'\" \"c\")))";
     assert_eq!(run(source), "(LET x = 4) (PRINT \"a 'b'\" \"c\")\ntrue");
+}
+
+/// Each runnable tutorial snippet — a `koan` block followed directly by a `text` block of its
+/// output, as `tools/verify_snippets.py` runs them — beside its file's name.
+fn tutorial_snippets() -> Vec<(String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tutorial");
+    let mut files: Vec<_> = (std::fs::read_dir(&root).expect("the tutorial is readable"))
+        .map(|entry| entry.expect("a tutorial entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .collect();
+    files.sort();
+    let mut snippets = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a tutorial file is readable");
+        // Each fenced block, its language beside its body and the text after it.
+        let mut blocks = Vec::new();
+        let mut rest = text.as_str();
+        while let Some(open) = rest.find("```") {
+            let after = &rest[open + 3..];
+            let Some(line) = after.find('\n') else {
+                break;
+            };
+            let language = after[..line].trim().to_string();
+            let body = &after[line + 1..];
+            let Some(close) = body.find("\n```") else {
+                break;
+            };
+            rest = &body[close + 4..];
+            blocks.push((language, body[..close].to_string(), rest));
+        }
+        for pair in blocks.windows(2) {
+            let [(language, code, between), (next, _, _)] = pair else {
+                continue;
+            };
+            let gap = between.find("```").map_or(*between, |at| &between[..at]);
+            if language == "koan" && next == "text" && gap.trim().is_empty() {
+                let name = file
+                    .file_name()
+                    .expect("a file name")
+                    .to_string_lossy()
+                    .to_string();
+                snippets.push((name, code.clone()));
+            }
+        }
+    }
+    snippets
+}
+
+/// Every door that leaves a judgement undecided poses its question whole first: each load checks
+/// that an open mark judges the types of the undecided question its door last posed, and the
+/// tutorial's loads pose some.
+#[test]
+fn every_open_mark_poses_its_question_whole() {
+    use crate::program::CellSubstrate;
+    let snippets = tutorial_snippets();
+    let mut posed = 0;
+    for (_, code) in &snippets {
+        let source = format!("{code}\n");
+        let (_, counts) = crate::dispatch::walk::counted(|| {
+            CellSubstrate::load::<super::Koan>(
+                &source,
+                "<test>",
+                8,
+                BuildBudget::default(),
+                output(),
+            )
+            .map(drop)
+        });
+        posed += counts.posed;
+    }
+    assert!(posed > 0, "the tutorial's doors pose questions");
+}
+
+/// A unit record holding an undecided mark of its own lays an undecided question it posed: over
+/// every tutorial program, the record keeps each door's question whole beside the marks.
+#[test]
+fn a_unit_record_marked_undecided_lays_its_question() {
+    use crate::program::CellSubstrate;
+    let mut bare = Vec::new();
+    let mut laid = 0;
+    for (file, code) in &tutorial_snippets() {
+        let source = format!("{code}\n");
+        let Ok(mut substrate) = CellSubstrate::load::<super::Koan>(
+            &source,
+            "<test>",
+            8,
+            BuildBudget::default(),
+            output(),
+        ) else {
+            continue;
+        };
+        substrate.with(|running| {
+            for (unit, (facts, frontier)) in running.program().facts().own_units() {
+                let undecided = (frontier.own().iter())
+                    .any(|noted| matches!(noted.mark, crate::scope::Mark::Open(_)));
+                let posed = facts.posed.iter().any(|posed| posed.rigid.is_none());
+                laid += facts.posed.len();
+                if undecided && !posed {
+                    bare.push(format!("{file}: {unit:?}"));
+                }
+            }
+        });
+    }
+    assert!(laid > 0, "the tutorial's records lay questions");
+    assert!(bare.is_empty(), "{bare:#?}");
 }

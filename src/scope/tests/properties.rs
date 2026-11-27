@@ -720,8 +720,8 @@ fn activate<'g, 'c>(
                 let bindings = ClosureBindings::of(
                     writer,
                     &captures,
-                    (crate::values::DepotRef::ROOT, None),
-                    None,
+                    crate::values::DepotRef::ROOT,
+                    crate::scope::Encloser::default(),
                 );
                 // A captured value is the enclosing binding's word — the sibling a capture of the
                 // enclosing knot names — and a fellow is an edge.
@@ -895,7 +895,7 @@ proptest! {
     fn activations_read_what_their_coordinates_name(choices in plan::choices()) {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
-            let facts = Facts::of(shaped.load);
+            let facts = Facts::under(shaped.load);
             let activation: Activation<'_, '_, ProbeFamily> =
                 Activation::of_program(shaped.writer, shaped.shape, &facts, shaped.table);
             let mut chain = Vec::new();
@@ -1055,8 +1055,6 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
         assert_eq!(a.layout(segment), b.layout(segment));
         if left.kind() == ShapeKind::Callable {
             assert_eq!(a.escapes(segment), b.escapes(segment));
-            assert_eq!(a.rebound(segment), b.rebound(segment));
-            assert_eq!(a.invariant(segment), b.invariant(segment));
         }
         assert_eq!(left.spelled().len(), right.spelled().len());
         for (index, (mine, theirs)) in left.spelled().iter().zip(right.spelled()).enumerate() {

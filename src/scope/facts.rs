@@ -1,34 +1,35 @@
-//! The vocabulary of the load's facts: what a unit waits on, and the binding that wakes it
+//! The vocabulary of the load's facts: what a unit waits on, and what a frame's binding gives it
 //! ([the build module's design](../build/README.md#type-facts-and-the-solver)).
 //!
 //! The load keys its facts by unit ([`UnitId`]): one record per unit, beside its **frontier** — the
 //! [`Unknown`]s it read itself and the frontiers it read, together every unknown that could change
 //! it, transitively — kept in a [`Store`]. A unit with an empty frontier is fixed. A [`Binding`]
-//! gives each unknown a [`Bound`] — a closed type, or for a module binder a closed content tree —
-//! and **wakes** every unit whose frontier meets it.
+//! gives each unknown a [`Bound`] — a closed type, or for a module binder a closed content tree:
+//! what a frame reads a unit's facts under ([frontiers and seams](../build/README.md#frontiers-and-seams)).
 //!
 //! An unknown is named by its **lexical address** — the segment of the body that declares it and
 //! the slot or capture its activation holds it at — never by its symbol or its lattice node, since
 //! every body numbering its chain alike shares one node per level. `scope` holds the vocabulary,
 //! since `elaborate` and `dispatch` both name it and neither names `build`; the walk computes it,
-//! and `build` folds the keys it decides.
+//! and `build` folds what a frame's entry and seams bind.
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeDigest};
-use crate::values::{Chain, ContentDigest};
+use crate::values::Chain;
 
 use super::derived::{DerivedName, DerivedTerm};
-use super::question::{Answered, Question};
 use super::records::{Closing, UnitFacts, UnitRecord};
-use super::shape::{CaptureSlot, Segment, Slot, UnitIndex};
+use super::shape::{CaptureSlot, Segment, Site, Slot, UnitIndex};
 use super::tree::Tree;
 
-/// Where a body's activation holds an unknown: a slot, or — for a name a quote's code is run
-/// with — a capture.
+/// Where a body holds an unknown: an activation's slot, or — for a name a quote's code is run
+/// with — a capture, or, for a value whose type the text does not fix written where no `LET`
+/// holds it, the site of the expression holding it, for its unit.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Address {
     Slot(Slot),
     Capture(CaptureSlot),
+    Held(Site),
 }
 
 /// A name a binding may remove, by its lexical address: the segment of the body declaring it, and
@@ -39,8 +40,9 @@ pub struct Unknown {
     pub at: Address,
 }
 
-/// The judgement a door left undecided over a variable: what a parametric layer must decide once
-/// to share the unit record ([marks](../build/README.md#resumption)). One per judgement door.
+/// The judgement a door left undecided over a variable, which the question laid beside the unit
+/// record decides under a binding ([stored questions](../build/README.md#stored-questions)). One
+/// per judgement door.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum OpenKind {
     /// A verdict *maybe*.
@@ -59,9 +61,6 @@ pub enum OpenKind {
     Spells,
     /// A retype not the point at its declared type.
     Retype,
-    /// A `FOR ALL` bound naming a run-bound name, which the run registers: what it bounds is left
-    /// unknown over the name.
-    ForAllBound,
     Unequal,
     /// Whether one type lies under another in the order.
     Under,
@@ -70,16 +69,16 @@ pub enum OpenKind {
     Kind,
     /// Whether a binder declared at a variable is a module binder.
     ModuleBinder,
-    /// A solve a run may solve otherwise that no stored solve stands for: one over an argument the
-    /// load left untyped, or too wide for a stored solve's bits.
-    Unreproduced,
-    ModuleContent,
 }
 
 impl OpenKind {
+    /// How many kinds there are: the length of [`ALL`](Self::ALL).
+    #[cfg(test)]
+    pub const COUNT: usize = OpenKind::ModuleBinder as usize + 1;
+
     /// Every kind, in discriminant order: what the tests tally marks by.
     #[cfg(test)]
-    pub const ALL: [OpenKind; OpenKind::ModuleContent as usize + 1] = [
+    pub const ALL: [OpenKind; OpenKind::COUNT] = [
         OpenKind::Verdict,
         OpenKind::NeverSatisfies,
         OpenKind::Fits,
@@ -89,71 +88,47 @@ impl OpenKind {
         OpenKind::Instance,
         OpenKind::Spells,
         OpenKind::Retype,
-        OpenKind::ForAllBound,
         OpenKind::Unequal,
         OpenKind::Under,
         OpenKind::Overlap,
         OpenKind::Kind,
         OpenKind::ModuleBinder,
-        OpenKind::Unreproduced,
-        OpenKind::ModuleContent,
     ];
-
-    /// Whether a unit left undecided by this kind **holds** — re-runs under every binding — since
-    /// no question stands for what its door read: a `FOR ALL` bound over a run-bound name, a read
-    /// of a module binder's content, or a solve no stored solve stands for. Every other kind is a
-    /// question's ([`Question::kind`](crate::scope::Question::kind)), whose answer a binding keeps
-    /// or changes.
-    pub fn holds(self) -> bool {
-        matches!(
-            self,
-            OpenKind::ForAllBound | OpenKind::ModuleContent | OpenKind::Unreproduced
-        )
-    }
 }
 
 /// An open mark: the judgement left undecided, the slot type it was judged against (`None` where
-/// there is none) and the type it judged, beside the question and the answer a witnessing walk
-/// took (`None` where undecided, as the load leaves it).
+/// there is none) and the type it judged.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct OpenMark<'a> {
+pub struct OpenMark {
     pub kind: OpenKind,
     pub slot: Option<DeclaredType<Parametric>>,
     pub judged: DeclaredType<Parametric>,
-    pub answered: Option<&'a Answered<'a>>,
 }
 
-impl OpenMark<'_> {
+impl OpenMark {
     /// The mark of `kind` over `judged` against `slot`, undecided.
     pub fn undecided(
         kind: OpenKind,
         slot: Option<DeclaredType<Parametric>>,
         judged: DeclaredType<Parametric>,
     ) -> Self {
-        OpenMark {
-            kind,
-            slot,
-            judged,
-            answered: None,
-        }
+        OpenMark { kind, slot, judged }
     }
 }
 
-/// Why a unit waits on an unknown: its unit record only names it — under a binding it is the
-/// load's with the bound type written in — or a rule judged it and reached no answer that holds at
-/// every binding within its ends.
+/// Why a unit waits on an unknown: its unit record only names it, or a rule judged it and reached no
+/// answer that holds at every binding within its ends.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Mark<'a> {
+pub enum Mark {
     Named,
-    Open(OpenMark<'a>),
+    Open(OpenMark),
 }
 
-/// The order a frontier sorts the marks on one unknown by, short of the answer.
+/// The order a frontier sorts the marks on one unknown by.
 type MarkKey = (u8, OpenKind, Option<TypeDigest>, Option<TypeDigest>);
 
-impl Mark<'_> {
-    /// The order a frontier sorts the marks on one unknown by, short of the answer: `Named`
-    /// lowest.
+impl Mark {
+    /// The order a frontier sorts the marks on one unknown by: `Named` lowest.
     fn key(self) -> MarkKey {
         match self {
             Mark::Named => (0, OpenKind::Verdict, None, None),
@@ -165,24 +140,16 @@ impl Mark<'_> {
             ),
         }
     }
-
-    /// The answer's digest, which orders marks the [`key`](Self::key) ties: hashed only then.
-    fn answered(self) -> Option<ContentDigest> {
-        match self {
-            Mark::Named => None,
-            Mark::Open(open) => open.answered.map(Answered::digest),
-        }
-    }
 }
 
 /// One unknown a unit gathered, beside why it waits on it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Noted<'a> {
+pub struct Noted {
     pub unknown: Unknown,
-    pub mark: Mark<'a>,
+    pub mark: Mark,
 }
 
-impl Noted<'_> {
+impl Noted {
     /// `unknown`, only named.
     pub fn named(unknown: Unknown) -> Self {
         Noted {
@@ -195,31 +162,16 @@ impl Noted<'_> {
         matches!(self.mark, Mark::Open(_))
     }
 
-    /// The order a frontier sorts its marks by: by unknown, then mark. A tie on one answer, as a
-    /// flattened frontier's duplicates mostly are, needs no digest.
+    /// The order a frontier sorts its marks by: by unknown, then mark.
     fn order(&self, other: &Self) -> std::cmp::Ordering {
         let key = |noted: &Self| (noted.unknown, noted.mark.key());
-        (key(self).cmp(&key(other))).then_with(|| match (self.mark, other.mark) {
-            (
-                Mark::Open(OpenMark {
-                    answered: Some(mine),
-                    ..
-                }),
-                Mark::Open(theirs),
-            ) if theirs
-                .answered
-                .is_some_and(|theirs| std::ptr::eq(mine, theirs)) =>
-            {
-                std::cmp::Ordering::Equal
-            }
-            _ => self.mark.answered().cmp(&other.mark.answered()),
-        })
+        key(self).cmp(&key(other))
     }
 }
 
 /// `noted` sorted by unknown, then mark, each held once, and a `Named` dropped where the same
 /// unknown holds an `Open`: what a frontier keeps of its own.
-pub fn settle_marks(noted: &mut BumpVec<'_, Noted<'_>>) {
+pub fn settle_marks(noted: &mut BumpVec<'_, Noted>) {
     noted.sort_unstable_by(Noted::order);
     noted.dedup();
     let mut kept = 0;
@@ -247,7 +199,7 @@ pub fn settle_marks(noted: &mut BumpVec<'_, Noted<'_>>) {
 /// since a chain of k reads is k deep.
 #[derive(Clone, Copy)]
 pub struct Frontier<'a> {
-    own: &'a [Noted<'a>],
+    own: &'a [Noted],
     reads: &'a [Cut<'a>],
     /// The latest segment among its unknowns, where it holds some.
     top: Segment,
@@ -304,7 +256,7 @@ impl<'a> Frontier<'a> {
     };
 
     /// `noted`, already settled ([`settle_marks`]), read from no other frontier.
-    pub fn from_sorted(noted: &'a [Noted<'a>]) -> Self {
+    pub fn from_sorted(noted: &'a [Noted]) -> Self {
         debug_assert!(
             noted.is_sorted_by(|a, b| a.order(b).is_le())
                 && noted.windows(2).all(|pair| pair[0] != pair[1])
@@ -321,7 +273,7 @@ impl<'a> Frontier<'a> {
     /// `own` sorted and deduplicated, beside each frontier of `reads` read once at its widest cut,
     /// in the order first read, laid down through `lay`. A read whose cut keeps none of its
     /// unknowns is dropped, so a frontier is empty exactly where it holds no unknown.
-    pub fn laid(lay: impl Lays<'a>, own: &mut BumpVec<'_, Noted<'a>>, reads: &[Cut<'a>]) -> Self {
+    pub fn laid(lay: impl Lays<'a>, own: &mut BumpVec<'_, Noted>, reads: &[Cut<'a>]) -> Self {
         settle_marks(own);
         let mut ordered = BumpVec::with_capacity_in(reads.len(), *own.allocator());
         ordered.extend(
@@ -361,7 +313,7 @@ impl<'a> Frontier<'a> {
     }
 
     /// The unknowns its unit gathered itself, each beside why, sorted by unknown then mark.
-    pub fn own(self) -> &'a [Noted<'a>] {
+    pub fn own(self) -> &'a [Noted] {
         self.own
     }
 
@@ -379,9 +331,6 @@ impl<'a> Frontier<'a> {
             if let Mark::Open(open) = noted.mark {
                 open.slot.into_iter().for_each(&mut *each);
                 each(open.judged);
-                if let Some(answered) = open.answered {
-                    answered.question.each_type(each);
-                }
             }
         }
     }
@@ -410,15 +359,14 @@ impl<'a> Frontier<'a> {
 }
 
 /// Each frontier's marks laid flat — its own and each read's past its cut, transitively, settled
-/// by [`settle_marks`] — memoized by identity in `scratch`: what the
-/// [records copier](super::relay) lays, and what a witnessed layer's admission gathers its
-/// questions from. One flattener serves both, so an activation flattens each frontier once.
-pub(crate) struct Flattened<'x, 'a> {
+/// by [`settle_marks`] — memoized by identity in `scratch`: what the load's folds read, each
+/// frontier flattened once.
+pub(crate) struct Flattened<'x> {
     scratch: BumpAllocator<'x>,
-    flat: BumpBackedMap<'x, (usize, usize), &'x [Noted<'a>]>,
+    flat: BumpBackedMap<'x, (usize, usize), &'x [Noted]>,
 }
 
-impl<'x, 'a> Flattened<'x, 'a> {
+impl<'x> Flattened<'x> {
     /// A flattener memoizing in `scratch`.
     pub(crate) fn new(scratch: BumpAllocator<'x>) -> Self {
         Flattened {
@@ -429,7 +377,7 @@ impl<'x, 'a> Flattened<'x, 'a> {
 
     /// `frontier`'s marks laid flat: a frontier met before, as itself or as a read, is not walked
     /// again.
-    pub(crate) fn of(&mut self, frontier: Frontier<'a>) -> &'x [Noted<'a>] {
+    pub(crate) fn of(&mut self, frontier: Frontier<'_>) -> &'x [Noted] {
         // A post-order over the reads: each frontier laid once its reads are.
         let mut stack = BumpVec::new_in(self.scratch);
         stack.push((frontier, false));
@@ -470,6 +418,8 @@ pub enum Bound<'a> {
     Type(KType),
     /// A module binder: the closed content tree the load computes, and the exact type it carries.
     Module { carried: KType, tree: &'a Tree<'a> },
+    /// A value binder declared `Any`: the exact type its value carries, which has no content.
+    Carried(KType),
 }
 
 impl<'a> Bound<'a> {
@@ -484,6 +434,7 @@ impl<'a> Bound<'a> {
                     tree: theirs,
                 },
             ) => carried == other && tree.same_as(theirs),
+            (Bound::Carried(mine), Bound::Carried(theirs)) => mine == theirs,
             _ => false,
         }
     }
@@ -533,121 +484,32 @@ impl<'a> Binding<'a> {
     }
 }
 
-/// How a record stands under a walk's binding ([the wake memo](../build/wake.rs)).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Wake {
-    /// It reaches no mark on a name the binding binds: it stands as laid.
-    Untouched,
-    /// It reaches only marks that name what the binding binds: it stands, read closed.
-    Named,
-    /// It reaches an open mark on a name the walk's fresh binding binds: it re-runs.
-    Open,
-}
-
 /// Where one walk keeps its records, and what it binds: the walk reads and writes
 /// every unit's record through it, and never names where they rest
 /// ([the store](../build/README.md#the-store)). The load's store keeps the load's
-/// records; a layer keeps a resumption's over the facts it extends.
+/// records, and a composition's.
 pub trait Store<'o> {
     /// Where every record a unit keeps is laid.
     type Lay: Lays<'o> + Copy;
 
     fn lay(&self) -> Self::Lay;
 
-    /// What the binding gives `unknown`, where it binds it.
-    fn binding(&self, unknown: Unknown) -> Option<Bound<'o>>;
-
-    /// The newest record of `unit` beside its frontier: this walk's write, else a base layer's.
+    /// The record of `unit` beside its frontier, where this walk wrote it.
     fn fact(&self, unit: UnitId) -> Option<(&'o UnitFacts<'o>, Frontier<'o>)>;
 
     /// The newest closing record of the owning body `body`, beside its frontier.
     fn close(&self, body: Segment) -> Option<(&'o Closing<'o>, Frontier<'o>)>;
 
-    /// How a record whose frontier is `frontier` stands under this store's binding: judging
-    /// whether the binding keeps an answered question reads `types`.
-    fn wakes(&self, frontier: Frontier<'_>, types: &Chain<'_, '_, '_, '_>) -> Wake;
-
-    /// Whether a record whose frontier is `frontier` reaches an open mark on a name this store
-    /// checks, which no record below the walk's chain does. A mark on a witnessed name may: a
-    /// cell's witnessing walk witnesses its enclosers' names again, and reads such a record rigid.
-    fn checks_open(&self, frontier: Frontier<'_>, types: &Chain<'_, '_, '_, '_>) -> bool {
-        self.wakes(frontier, types) == Wake::Open
-    }
-
-    /// The witness's answer to `question`, laid beside it, where this store witnesses a name the
-    /// question's types hold, by `unknown_of`, the unknown each lexical level is: the closed door
-    /// asked with the witness written in. `None` where it witnesses none, or where the answer
-    /// cannot be written in the question's rigid terms. No type of the witness leaves the store.
-    /// Only the walk's marks ask (`the_witness_is_asked_only_through_the_marks`).
-    fn answer(
-        &self,
-        question: Question<'_>,
-        unknown_of: &dyn Fn(usize) -> Option<Unknown>,
-        types: &Chain<'_, '_, '_, '_>,
-        scratch: BumpAllocator<'_>,
-    ) -> Option<&'o Answered<'o>> {
-        let _ = (question, unknown_of, types, scratch);
-        None
-    }
-
-    /// Hand `each` every name this store witnesses, its witness kept: none outside a witnessing
-    /// walk.
-    fn each_witnessed(&self, each: &mut dyn FnMut(Unknown)) {
-        let _ = each;
-    }
-
-    /// The unit whose record holds `held` among the records this store extends, beside that
-    /// record, which a newer record of the unit may replace: what a rooted walk reads a standing
-    /// body's site or path fact from, and a class's recipe. None in the load's store, which
-    /// stands no chain.
-    fn holding(&self, held: super::Held) -> Option<(UnitId, &'o super::UnitFacts<'o>)> {
-        let _ = held;
-        None
-    }
-
-    /// Hand `each` every holder in `segment` the records this store extends say holds a module of
-    /// `identity`'s tree, beside the unit holding its content: what a rooted walk finds
-    /// a standing body's holders of a class by. Nothing in the load's store, which stands no chain.
-    fn holders(
-        &self,
-        segment: Segment,
-        identity: super::Identity,
-        each: &mut dyn FnMut(UnitId, super::Holder),
-    ) {
-        let _ = (segment, identity, each);
-    }
-
-    /// Whether the walk records each traced call: only the load's walk, whose traced calls the
-    /// load lays layers for; no other walk's are read.
-    fn traces(&self) -> bool {
-        false
-    }
-
-    /// Test-only: whether this is a closing walk over a witnessed layer and a record whose
-    /// frontier is `frontier` reaches an undecided open mark on a name it checks — a unit that
-    /// held through the witnessing walk.
-    #[cfg(test)]
-    fn held(&self, frontier: Frontier<'_>) -> bool {
-        let _ = frontier;
-        false
-    }
-
-    /// The derived name for `term`: the one a layer beneath holds, else the one this store's walk
-    /// laid, else laid now in this store's own table, named through its
+    /// The derived name for `term`: the one this store's walk laid, else laid now in this store's
+    /// own table, named through its
     /// [`Spellings`](super::Spellings). Every walk names a term alike.
     fn derived(&self, types: &Chain<'_, '_, '_, '_>, term: DerivedTerm<'_>) -> DerivedName<'_>;
 
-    /// The derived name `id`, where this store's table or a layer beneath holds it.
+    /// The derived name `id`, where this store's table holds it.
     fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'_>>;
 
     /// Write this walk's record of `unit`: its facts, or the mark that the walk did not reach it.
     fn write(&self, unit: UnitId, record: UnitRecord<'o>);
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>);
-
-    /// Keep `closed`, the table of closed types for the records the walk read closed. The load's
-    /// store reads none closed: its binding binds nothing.
-    fn write_closed(&self, closed: super::ClosedTypes<'o>) {
-        let _ = closed;
-    }
 }

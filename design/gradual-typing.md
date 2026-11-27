@@ -61,8 +61,11 @@ left open.
 type expression into a handle. A `FOR ALL` name reads as its variable, so a
 callable's declared type is parametric, or a scheme where it declares a group.
 A spelling that needs a concrete operand — `&`, an application's head — and is
-given a variable is refused or left to the run, since its value could differ
-at each call.
+given a quantified variable is refused, since its value could differ at each
+call. Over a name a run binds, a meet is taken where the name is bound, and
+every other such spelling loads only where the name's bound guarantees it at
+every binding, so a binding never decides whether a spelling is a type
+([what a body may ask of a `FOR ALL` name](quantified-types.md#what-a-body-may-ask-of-a-for-all-name)).
 
 ### Where the program loads
 
@@ -79,7 +82,12 @@ expression a **static type**: an *interval* of types within which
 whatever a run carries there must lie. A literal is exact — its two ends meet.
 A parameter declared `:(Number | Str)` is at most that. An expression nothing
 ascribes is at most `Any`. A generic call is solved over its arguments'
-intervals to an interval per variable, and its return is read through them.
+intervals to an interval per variable, and its return is read through them. A
+parameter declared `Any` is the name of the type its value carries
+([`Any` declares no bound](binding-graph.md#what-a-bind-site-binds)), and a
+solve reads it, and a name a question decides over it such as a `MATCH` arm's
+type, at its own ends: `Never` up to the join of its closed arms, else `Any`,
+never at the point `Any`.
 
 Each candidate of each keyworded call then gets a verdict:
 
@@ -105,8 +113,9 @@ A quantified function written anywhere but the head of a call or a `MODULE` or
 `GROUP` member's binding is an instance site, instantiated at the type it is
 wanted at there — an annotation, an ascription, a declared return, a slot — or
 refused where nothing fixes that type. The load makes the instance where the
-text fixes the type, a binding where the type names what a run binds, and the
-call where only the type an argument carries fixes it
+text fixes the type, and a binding where the type names what a run binds. A
+site whose solve would read the type an argument carries is refused, and asks
+for a `FOR ALL` name
 ([quantified types](quantified-types.md#where-a-quantified-function-is-instantiated)).
 
 ### Where a call runs
@@ -231,17 +240,18 @@ changes what a reader sees and which overload runs.
 | Binding arguments and holding the return contract | [program: the body runner](../src/program/README.md#the-body-runner) |
 | Where a load-time type is stored | [scope: load-time types](../src/scope/README.md#load-time-types) |
 | Where a run-built type lives, and how it crosses with a value | [type lattice: storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches), [values: crossing](../src/values/README.md#crossing) |
-| A fact the load left open, decided in a settlement or a frame's activation | [build storage](build-storage.md#settlements-and-compositions), [build: activations](../src/build/README.md#activations) |
+| A fact the load left open, decided by an instance of the binding graph | [the binding graph](binding-graph.md#instances), [build: instances at run](../src/build/README.md#instances-at-run) |
 
 ## Open work
 
 - [Types](../roadmap/types/README.md) — the project's open
   items.
 - [A nested projection](../roadmap/types/nested-projection.md)
-- [A value retyped in place, pinned at its paths](../roadmap/types/pinned-in-place.md)
+- [A module pinned at its paths however it is held](../roadmap/types/module-binder-by-hold.md)
 - [What a barrier rebuilds](../roadmap/types/barrier-coercion.md)
 - [A carried union at a contravariant position](../roadmap/types/contravariant-union-solve.md)
-- [An instance made by the call](../roadmap/types/instance-made-by-the-call.md)
 - [A head reading its parameters' types](../roadmap/types/head-parameter-reads.md)
   — a signature's types reading a type member of its own parameters, and
   `TYPE OF` naming a value's type.
+- [A check over a `FOR ALL` name holds at every binding](../roadmap/types/checks-at-every-binding.md)
+  — a check a binding decides, refused at load.

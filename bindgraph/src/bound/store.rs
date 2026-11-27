@@ -22,7 +22,7 @@ use std::mem::{align_of, size_of};
 
 use bumpstorage::{Bump, BumpAllocator, DigestTable, LaysRuns, Slot};
 
-use crate::domain::Facts;
+use crate::domain::Kept;
 use crate::id::NodeId;
 
 /// A view's key: per name the node can read, its content's digest, `None` where the binding
@@ -62,29 +62,29 @@ pub(super) fn view_word(node: NodeId, key: &[Option<u128>]) -> u64 {
 }
 
 /// An instance's answers at rest, under its node and handle words.
-pub(super) struct AnswerEntry<'r, F: Facts> {
+pub(super) struct AnswerEntry<'r, K: Kept> {
     node: NodeId,
     words: &'r [u64],
-    answers: &'r [F::SiteAnswer],
+    answers: &'r [K::SiteAnswer],
 }
 
 // Manual impls: `#[derive(Clone, Copy)]` would demand `F: Copy`.
-impl<F: Facts> Clone for AnswerEntry<'_, F> {
+impl<K: Kept> Clone for AnswerEntry<'_, K> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<F: Facts> Copy for AnswerEntry<'_, F> {}
+impl<K: Kept> Copy for AnswerEntry<'_, K> {}
 
-impl<'r, F: Facts> AnswerEntry<'r, F> {
+impl<'r, K: Kept> AnswerEntry<'r, K> {
     /// Whether this is the entry of `node`'s handle `words`.
     pub(super) fn is(&self, node: NodeId, words: &[u64]) -> bool {
         self.node == node && self.words == words
     }
 
     /// One answer per question the node owns.
-    pub(super) fn answers(&self) -> &'r [F::SiteAnswer] {
+    pub(super) fn answers(&self) -> &'r [K::SiteAnswer] {
         self.answers
     }
 
@@ -160,14 +160,14 @@ impl<'b> LaysRuns<'b> for Counted<'b> {
 /// nothing more; a read through a handle whose answers are not here replays. Laid in its own bump
 /// and written through shared borrows, so a `Bound` names none of it, and the embedder may drop it
 /// and reset the bump between any two calls.
-pub struct Resting<'b, F: Facts> {
+pub struct Resting<'b, K: Kept> {
     lay: Counted<'b>,
-    table: DigestTable<'b, AnswerEntry<'b, F>>,
+    table: DigestTable<'b, AnswerEntry<'b, K>>,
     budget: Option<usize>,
     passed: Cell<bool>,
 }
 
-impl<'b, F: Facts> Resting<'b, F> {
+impl<'b, K: Kept> Resting<'b, K> {
     /// A store over `bump`, laid there and counting itself against `budget` bytes; `None` sets no
     /// budget. A bump made with a capacity of the budget never grows a second chunk for it.
     pub fn new(bump: &'b Bump, budget: Option<usize>) -> &'b Self {
@@ -214,26 +214,26 @@ impl<'b, F: Facts> Resting<'b, F> {
         word: u64,
         node: NodeId,
         words: &[u64],
-    ) -> Option<&'b AnswerEntry<'b, F>> {
+    ) -> Option<&'b AnswerEntry<'b, K>> {
         self.table.find(word, |entry| entry.is(node, words))
     }
 
     /// Every entry beside its word.
-    pub(super) fn entries(&self) -> impl Iterator<Item = (u64, &'b AnswerEntry<'b, F>)> {
+    pub(super) fn entries(&self) -> impl Iterator<Item = (u64, &'b AnswerEntry<'b, K>)> {
         self.table.words()
     }
 
     /// Lays `node`'s answers under its handle `words`, homed at `word`, where they fit the budget;
     /// otherwise marks the store passed and lays nothing. The caller guarantees they are absent.
-    pub(super) fn rest(&self, word: u64, node: NodeId, words: &[u64], answers: &[F::SiteAnswer]) {
+    pub(super) fn rest(&self, word: u64, node: NodeId, words: &[u64], answers: &[K::SiteAnswer]) {
         if self.passed.get() {
             return;
         }
-        let mut needs = cost::<AnswerEntry<'b, F>>(1)
+        let mut needs = cost::<AnswerEntry<'b, K>>(1)
             + cost::<u64>(words.len())
-            + cost::<F::SiteAnswer>(answers.len());
+            + cost::<K::SiteAnswer>(answers.len());
         if (self.table.len() + 1) * 2 > self.table.slots() {
-            needs += cost::<Cell<Slot<'b, AnswerEntry<'b, F>>>>(self.table.slots() * 2);
+            needs += cost::<Cell<Slot<'b, AnswerEntry<'b, K>>>>(self.table.slots() * 2);
         }
         if self
             .budget

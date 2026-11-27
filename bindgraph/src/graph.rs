@@ -28,7 +28,7 @@ mod needs;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::domain::{Answers, Binding, Domain, Doors, Facts};
+use crate::domain::{Answers, Binding, Domain, Doors, Facts, Kept};
 use crate::id::{AnswersId, BodyId, ComponentId, EdgeId, NameId, NodeId, QuestionId, Site};
 
 /// One bind site in the graph: the names bound there, the `SiteQuestion`s it owns, the calls it
@@ -143,13 +143,13 @@ impl Field {
 
 /// An ask a question declares its answer may make: a `NameQuestion` over one or more of its reads,
 /// in order.
-pub struct Ask<F: Facts> {
+pub struct Ask<K: Kept> {
     names: Vec<NameId>,
-    question: F::NameQuestion,
+    question: K::NameQuestion,
 }
 
-impl<F: Facts> Ask<F> {
-    pub(crate) fn new(names: Vec<NameId>, question: F::NameQuestion) -> Self {
+impl<K: Kept> Ask<K> {
+    pub(crate) fn new(names: Vec<NameId>, question: K::NameQuestion) -> Self {
         Self { names, question }
     }
 
@@ -159,18 +159,18 @@ impl<F: Facts> Ask<F> {
     }
 
     /// What is asked of them.
-    pub fn question(&self) -> F::NameQuestion {
+    pub fn question(&self) -> K::NameQuestion {
         self.question
     }
 }
 
-impl<F: Facts> PartialEq for Ask<F> {
+impl<K: Kept> PartialEq for Ask<K> {
     fn eq(&self, other: &Self) -> bool {
         self.names == other.names && self.question == other.question
     }
 }
 
-impl<F: Facts> fmt::Debug for Ask<F> {
+impl<K: Kept> fmt::Debug for Ask<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ask")
             .field("names", &self.names)
@@ -198,17 +198,17 @@ impl BindsAfter {
 pub struct OpenCaller;
 
 /// What the text asks at one site, with the node that owns it and the asks its answer may make.
-pub struct SiteQuestion<F: Facts> {
+pub struct SiteQuestion<K: Kept> {
     site: Site,
     reads: Vec<NameId>,
     owner: NodeId,
     branches: Vec<AnswerBranch>,
-    asks: Vec<Ask<F>>,
+    asks: Vec<Ask<K>>,
     /// Per declared ask, its field among the owner's.
     pub(crate) fields: Vec<u32>,
 }
 
-impl<F: Facts> SiteQuestion<F> {
+impl<K: Kept> SiteQuestion<K> {
     /// The site the question sits at.
     pub fn site(&self) -> Site {
         self.site
@@ -230,12 +230,12 @@ impl<F: Facts> SiteQuestion<F> {
     }
 
     /// The asks the answer may make, in declaration order.
-    pub fn asks(&self) -> &[Ask<F>] {
+    pub fn asks(&self) -> &[Ask<K>] {
         &self.asks
     }
 }
 
-impl<F: Facts> fmt::Debug for SiteQuestion<F> {
+impl<K: Kept> fmt::Debug for SiteQuestion<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SiteQuestion")
             .field("site", &self.site)
@@ -282,17 +282,19 @@ pub enum On {
     Site(Site),
 }
 
-/// An edge: a call gives its callee's entry names their content.
-pub struct PassesName<F: Facts> {
+/// An edge: a call gives its callee's entry names their content, or an onward call gives a
+/// statement's names theirs.
+pub struct PassesName<K: Kept> {
     on: On,
     owner: NodeId,
-    callee: BodyId,
-    mapping: Vec<(NameId, F::Term)>,
+    /// The site whose names the call binds: the callee's entry, or an onward call's statement.
+    target: Site,
+    mapping: Vec<(NameId, K::Term)>,
     answers: Vec<AnswersId>,
     passes: Vec<NameId>,
 }
 
-impl<F: Facts> PassesName<F> {
+impl<K: Kept> PassesName<K> {
     /// What selects this call.
     pub fn on(&self) -> On {
         self.on
@@ -303,13 +305,23 @@ impl<F: Facts> PassesName<F> {
         self.owner
     }
 
-    /// The body whose entry the call binds.
+    /// The body whose names the call binds: the callee, or an onward call's own body.
     pub fn callee(&self) -> BodyId {
-        self.callee
+        self.target.body()
+    }
+
+    /// The site whose names the call binds.
+    pub fn target(&self) -> Site {
+        self.target
+    }
+
+    /// The statement an onward call binds, or `None` for a call into an entry.
+    pub fn onward(&self) -> Option<Site> {
+        crate::text::onward(self.target)
     }
 
     /// Each mapped callee entry name, with the term over the caller's names it is given.
-    pub fn mapping(&self) -> &[(NameId, F::Term)] {
+    pub fn mapping(&self) -> &[(NameId, K::Term)] {
         &self.mapping
     }
 
@@ -325,12 +337,12 @@ impl<F: Facts> PassesName<F> {
     }
 }
 
-impl<F: Facts> fmt::Debug for PassesName<F> {
+impl<K: Kept> fmt::Debug for PassesName<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PassesName")
             .field("on", &self.on)
             .field("owner", &self.owner)
-            .field("callee", &self.callee)
+            .field("target", &self.target)
             .field("mapping", &self.mapping)
             .field("answers", &self.answers)
             .finish()
@@ -338,22 +350,22 @@ impl<F: Facts> fmt::Debug for PassesName<F> {
 }
 
 /// An edge: an answer gives an answered name its content.
-pub struct AnswersName<F: Facts> {
+pub struct AnswersName<K: Kept> {
     name: NameId,
-    source: Source<F>,
+    source: Source<K>,
     /// For an edge on a site, the names its term mentions, sorted and without repeats: what its
     /// name waits on. Empty otherwise.
     mentions: Vec<NameId>,
 }
 
-impl<F: Facts> AnswersName<F> {
+impl<K: Kept> AnswersName<K> {
     /// The answered name this edge types.
     pub fn name(&self) -> NameId {
         self.name
     }
 
     /// Where the content comes from.
-    pub fn source(&self) -> &Source<F> {
+    pub fn source(&self) -> &Source<K> {
         &self.source
     }
 
@@ -364,7 +376,7 @@ impl<F: Facts> AnswersName<F> {
     }
 }
 
-impl<F: Facts> fmt::Debug for AnswersName<F> {
+impl<K: Kept> fmt::Debug for AnswersName<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnswersName")
             .field("name", &self.name)
@@ -374,23 +386,23 @@ impl<F: Facts> fmt::Debug for AnswersName<F> {
 }
 
 /// Where an `AnswersName` edge takes its content from.
-pub enum Source<F: Facts> {
+pub enum Source<K: Kept> {
     /// Where `question`'s answer takes `arm`, the name gets `content`, a term over the question's
     /// reads applied to the binding.
     Arm {
         question: QuestionId,
         arm: u32,
-        content: F::Term,
+        content: K::Term,
     },
     /// Where the call `edge` is followed, the name gets the content the callee's evaluation gives
     /// `takes`.
     Call { edge: EdgeId, takes: NameId },
     /// The name gets `content`, a term over names visible at `site` applied to the binding. No
     /// question decides it.
-    Site { site: Site, content: F::Term },
+    Site { site: Site, content: K::Term },
 }
 
-impl<F: Facts> fmt::Debug for Source<F> {
+impl<K: Kept> fmt::Debug for Source<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Source::Arm {
@@ -519,7 +531,7 @@ struct Answered {
 }
 
 /// The binding graph: a function of the text alone.
-pub struct Graph<F: Facts> {
+pub struct Graph<K: Kept> {
     chains: Chains,
     /// Each name's site: a site name's own, an answered name's `BindingNode`'s.
     names: Vec<Site>,
@@ -527,9 +539,9 @@ pub struct Graph<F: Facts> {
     answered: Vec<Option<Answered>>,
     nodes: Vec<BindingNode>,
     node_at: HashMap<Site, NodeId>,
-    questions: Vec<SiteQuestion<F>>,
-    edges: Vec<PassesName<F>>,
-    answers: Vec<AnswersName<F>>,
+    questions: Vec<SiteQuestion<K>>,
+    edges: Vec<PassesName<K>>,
+    answers: Vec<AnswersName<K>>,
     /// Per node, the names its evaluation can read, sorted.
     relevant: Vec<Vec<NameId>>,
     /// Per node, the questions an earlier node owns that its evaluation answers itself, sorted.
@@ -539,9 +551,12 @@ pub struct Graph<F: Facts> {
     name_components: Vec<Option<ComponentId>>,
     /// Per question, the text component it lies in.
     question_components: Vec<Option<ComponentId>>,
+    /// Per node, the onward calls that reach it from its body's entry or from before
+    /// it, the first first: `None` for an entry, and for a statement no such chain reaches.
+    pub(crate) reached: Vec<Option<Vec<EdgeId>>>,
 }
 
-impl<F: Facts> Graph<F> {
+impl<K: Kept> Graph<K> {
     /// The root body's entry. It binds no site name, owns the calls with no input and the
     /// questions that need only what those calls return.
     pub fn root(&self) -> NodeId {
@@ -578,32 +593,32 @@ impl<F: Facts> Graph<F> {
     }
 
     /// Every question, in `QuestionId` order.
-    pub fn questions(&self) -> &[SiteQuestion<F>] {
+    pub fn questions(&self) -> &[SiteQuestion<K>] {
         &self.questions
     }
 
     /// The question `question`.
-    pub fn question(&self, question: QuestionId) -> &SiteQuestion<F> {
+    pub fn question(&self, question: QuestionId) -> &SiteQuestion<K> {
         &self.questions[question.index()]
     }
 
     /// Every call, in `EdgeId` order.
-    pub fn edges(&self) -> &[PassesName<F>] {
+    pub fn edges(&self) -> &[PassesName<K>] {
         &self.edges
     }
 
     /// The call `edge`.
-    pub fn edge(&self, edge: EdgeId) -> &PassesName<F> {
+    pub fn edge(&self, edge: EdgeId) -> &PassesName<K> {
         &self.edges[edge.index()]
     }
 
     /// Every `AnswersName` edge, in `AnswersId` order.
-    pub fn answers_edges(&self) -> &[AnswersName<F>] {
+    pub fn answers_edges(&self) -> &[AnswersName<K>] {
         &self.answers
     }
 
     /// The `AnswersName` edge `edge`.
-    pub fn answers_edge(&self, edge: AnswersId) -> &AnswersName<F> {
+    pub fn answers_edge(&self, edge: AnswersId) -> &AnswersName<K> {
         &self.answers[edge.index()]
     }
 
@@ -646,7 +661,11 @@ impl<F: Facts> Graph<F> {
     }
 
     /// What `node` sees of `binding`: the names bound at or before its site.
-    pub fn bound_at<D: Domain<Facts = F>>(&self, node: NodeId, binding: &Binding<D>) -> Binding<D> {
+    pub fn bound_at<D: Domain<Facts: Facts<Kept = K>>>(
+        &self,
+        node: NodeId,
+        binding: &Binding<D>,
+    ) -> Binding<D> {
         let site = self.node(node).site;
         binding.filtered(|name| self.site_le(self.name_site(name), site))
     }
@@ -654,14 +673,14 @@ impl<F: Facts> Graph<F> {
     /// The binding `edge` passes its callee from a caller bound by `binding`: the names bound
     /// before the callee's entry, plus each mapped name given its applied content, or left open
     /// where the domain cannot compute it. The caller's own locals do not pass.
-    pub fn passed<D: Domain<Facts = F>>(
+    pub fn passed<D: Domain<Facts: Facts<Kept = K>>>(
         &self,
         domain: &D,
         edge: EdgeId,
         binding: &Binding<D>,
     ) -> Binding<D> {
         let edge = self.edge(edge);
-        let entry = Site::Entry(edge.callee);
+        let entry = edge.target;
         let mut passed = binding.filtered(|name| self.site_lt(self.name_site(name), entry));
         for &(name, mapping) in &edge.mapping {
             if let Some(content) = domain.apply(mapping, binding) {
@@ -673,13 +692,13 @@ impl<F: Facts> Graph<F> {
 
     /// The oracle: `node`'s questions answered from scratch under `binding`, which holds every
     /// name they read, answered names included. Lays nothing.
-    pub fn afresh<D: Domain<Facts = F>>(
+    pub fn afresh<D: Domain<Facts: Facts<Kept = K>>>(
         &self,
         domain: &D,
         node: NodeId,
         binding: &Binding<D>,
-        answers: &mut impl Answers<F>,
-    ) -> Vec<F::SiteAnswer> {
+        answers: &mut impl Answers<D::Facts>,
+    ) -> Vec<K::SiteAnswer> {
         let owns = self.node(node).owns();
         let mut answered = Vec::with_capacity(owns.len());
         for &question in owns {
@@ -689,14 +708,20 @@ impl<F: Facts> Graph<F> {
                 let contents: Vec<_> = ask.names.iter().map(|&name| binding.get(name)).collect();
                 domain.ask(ask.question, &contents)
             };
-            let mut doors = Doors::new(question, &text.reads, &text.asks, &mut serve);
+            let mut doors = Doors::new(
+                question,
+                &text.reads,
+                &text.asks,
+                &mut serve,
+                Default::default(),
+            );
             answered.push(answers.answer(question, &mut doors));
         }
         answered
     }
 
     /// The names `node`'s evaluation can read, sorted: a view keeps only these.
-    pub(crate) fn relevant(&self, node: NodeId) -> &[NameId] {
+    pub fn relevant(&self, node: NodeId) -> &[NameId] {
         &self.relevant[node.index()]
     }
 
@@ -709,6 +734,23 @@ impl<F: Facts> Graph<F> {
     /// Whether `name` is bound in `body` or a body inside it.
     pub(crate) fn inside(&self, body: BodyId, name: NameId) -> bool {
         self.chains.within(body, self.name_site(name).body())
+    }
+
+    /// The onward calls that reach the statement node answered `takes` is bound at,
+    /// where that node lies in `callee`'s own body.
+    pub(crate) fn reach(&self, callee: BodyId, takes: NameId) -> Option<(NodeId, &[EdgeId])> {
+        let node = self.answered_at(takes)?;
+        let site = self.node(node).site;
+        if site.body() != callee || matches!(site, Site::Entry(_)) {
+            return None;
+        }
+        Some((node, self.reached[node.index()].as_deref()?))
+    }
+
+    /// Whether onward call `edge`'s owner lies in the body of its target.
+    pub(crate) fn owned_inside(&self, edge: EdgeId) -> bool {
+        let edge = self.edge(edge);
+        self.node(edge.owner).site.body() == edge.callee()
     }
 
     /// The node an answered name is bound at, or `None` for a site name.

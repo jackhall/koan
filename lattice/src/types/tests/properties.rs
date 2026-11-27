@@ -40,7 +40,7 @@ use crate::types::shape::{DispatchTokenElement, Specificity, shape_slots};
 use crate::types::tiers::{Agent, BumpHalf, Habitat};
 use crate::types::typed::{
     fits, fits_application, instance_under, instantiate_quantified, is_subtype_of, join, meet,
-    satisfied_by,
+    satisfied_by, scheme_bound_above,
 };
 use crate::types::unify::{Collector, Interval, SolveRecord, UnifyFailure};
 use crate::types::walk::Variance;
@@ -536,7 +536,8 @@ proptest! {
 
     /// The probe flags interning stores beside a node answer what a walk over the type would: a free
     /// quantifier reachable without crossing a shape's binder, any rigid variable reachable at all,
-    /// anything parametric, an opaque carrier, the two porosity answers, and an opaque carrier
+    /// anything parametric, a variable no scheme binds, an opaque carrier, the two porosity
+    /// answers, and an opaque carrier
     /// reachable inside a signature too, each its definition.
     #[test]
     fn the_probe_flags_are_their_walks(declared in one()) {
@@ -569,6 +570,15 @@ proptest! {
             | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
+        // A variable no scheme binds, a scheme's body read too.
+        let outside = visit(&types, scratch, a, &mut |_, node, _| match node {
+            TypeNode::Lexical { .. }
+            | TypeNode::Path { .. }
+            | TypeNode::Derived { .. }
+            | TypeNode::Parameter { .. }
+            | TypeNode::Projection { .. } => Visit::Stop,
+            _ => Visit::Descend,
+        });
         // An opaque carrier is concrete, and no variable.
         let carrier = visit(&types, scratch, a, &mut |_, node, _| match node {
             TypeNode::Carrier { .. } => Visit::Stop,
@@ -578,6 +588,7 @@ proptest! {
         prop_assert_eq!(types.contains_rigid(a), rigid);
         prop_assert_eq!(types.is_concrete(a), !parametric);
         prop_assert_eq!(types.contains_carrier(a), carrier);
+        prop_assert_eq!(types.enter(a).contains_outside(), outside);
         let deep_carrier =
             deep_walk(&types, scratch, a, &|node| matches!(node, TypeNode::Carrier { .. }));
         prop_assert_eq!(types.enter(a).contains_deep_carrier(), deep_carrier);
@@ -958,7 +969,8 @@ proptest! {
     /// A pin over a call's own variable solves it at the one point the carried module fixes: its
     /// own pin where it applies the signature pinning the parameter, else what its fit to the
     /// signature solves the parameter to, which it then fits at. A fit whose solution names one of
-    /// the module's own unpinned parameters fixes nothing, and no fit admits nothing.
+    /// the module's own unpinned parameters, or a rigid variable it holds only inside its
+    /// signature, fixes nothing, and no fit admits nothing.
     #[test]
     fn a_pin_over_a_variable_solves_it_at_the_fit(
         (signature, name, offered) in arb_pinnable(world()),
@@ -991,10 +1003,22 @@ proptest! {
             }
             None => match fits_application(&types, scratch, offered, signature, &[]) {
                 // A stand-in for one of the module's own parameters is a lexical variable at a
-                // level far past every one the world draws.
+                // level far past every one the world draws. A rigid variable the module holds only
+                // inside its signature is one no binding reaches there.
                 Ok(solution) => member(solution, name).map(|solved| solved.raw()).filter(|solved| {
-                    !visit(&types, scratch, *solved, &mut |_, node, _| match *node {
+                    let rigid = |node: &TypeNode<'_, _>| {
+                        matches!(node, TypeNode::Lexical { .. } | TypeNode::Path { .. } | TypeNode::Derived { .. })
+                    };
+                    let mut reached = Vec::new();
+                    visit(&types, scratch, offered.raw(), &mut |at, node, _| {
+                        if rigid(node) {
+                            reached.push(at);
+                        }
+                        Visit::Descend
+                    });
+                    !visit(&types, scratch, *solved, &mut |at, node, _| match *node {
                         TypeNode::Lexical { level, .. } if level >= STAND_IN_LEVEL / 2 => Visit::Stop,
+                        _ if rigid(node) && !reached.contains(&at) => Visit::Stop,
                         _ => Visit::Descend,
                     })
                 }),
@@ -2606,14 +2630,22 @@ proptest! {
         }
     }
 
-    /// `concrete_declared` is `concrete` lifted over a declared type: a scheme as it is.
+    /// `concrete_declared` is `concrete` lifted over a declared type: a scheme where no variable
+    /// but its own group's is reachable from it, so that reading it from above leaves it as it is,
+    /// and every scheme so read.
     #[test]
     fn concrete_declared_lifts_concrete(kt in one()) {
         let world = world();
+        let bump = Bump::new();
         let lifted = world.types.concrete_declared(kt);
         match kt {
             DeclaredType::Scheme(scheme) => {
-                prop_assert_eq!(lifted, Some(DeclaredType::Scheme(scheme)));
+                let above = scheme_bound_above(&world.types, &bump, scheme);
+                prop_assert_eq!(lifted, (above == scheme).then_some(DeclaredType::Scheme(scheme)));
+                prop_assert_eq!(
+                    world.types.concrete_declared(DeclaredType::Scheme(above)),
+                    Some(DeclaredType::Scheme(above))
+                );
             }
             DeclaredType::Type(kt) => {
                 prop_assert_eq!(lifted, world.types.concrete(kt).map(DeclaredType::Type));

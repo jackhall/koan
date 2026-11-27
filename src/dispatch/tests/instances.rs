@@ -16,14 +16,31 @@ fn module(rest: &str) -> String {
 }
 
 const UNFIXED: &str = "nothing fixes `Elt` here: a quantified function is read only at the head of \
-                       a call, as the binding of a `MODULE` member, or where the type it is wanted \
-                       at solves its group";
+                       a call, held by a `LET` whose value its body does not return, or where the \
+                       type it is wanted at solves its group";
 
+/// A plain `LET` holds a quantified value in any body, and each call of it solves; one whose
+/// value its body returns is wanted at what the body is wanted at.
 #[test]
-fn a_quantified_binding_outside_a_module_is_refused_whether_or_not_read() {
+fn a_quantified_binding_outside_a_module_is_held_and_each_call_solves() {
+    let pick = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
+    assert_eq!(run(pick), "");
     assert_eq!(
-        run("LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))"),
-        format!("load: <test>:1:1: {UNFIXED}")
+        run(&format!(
+            "{pick}\nPRINT (pick {{x = 1}})\nPRINT (pick {{x = \"s\"}})"
+        )),
+        "1\ns"
+    );
+    assert_eq!(
+        run(&format!(
+            "EXPR #(USE z :Number) -> Any = #(\n  {pick}\n  LET kept = pick\n  \
+             PRINT (kept {{x = \"s\"}})\n  kept {{x = z}}\n)\nPRINT (USE 5)"
+        )),
+        "s\n5"
+    );
+    assert_eq!(
+        run(&format!("EXPR #(USE z :Number) -> Any = #({pick})")),
+        "load: <test>:1:33: Any does not fix `Elt`"
     );
     assert_eq!(run(&module("(PRINT \"loaded\")")), "loaded");
 }
@@ -738,4 +755,100 @@ fn a_later_earlier_class_checks_what_an_earlier_one_solved() {
         "(PRINT (g {y = (FN :{x :(Number | Str)} -> Null = #(null))})))",
     );
     assert_eq!(run(source), "1");
+}
+
+/// `APPLY`, quantified, beside `lib`, whose `WRAP` passes `pick` and its own `a` declared at
+/// `wrapped` to `APPLY`. `ranked` ranks `APPLY`'s `y` before `f`.
+fn applied_through(ranked: bool, wrapped: &str) -> String {
+    let ranking = match ranked {
+        true => "EXPR #(APPLY 2 TO 1)\n",
+        false => "",
+    };
+    format!(
+        r#"{ranking}EXPR FOR ALL #[Elt] #(APPLY f :(FN :{{x :Elt}} -> Elt) TO y :Elt) -> Elt = #(
+  f {{x = y}}
+)
+MODULE lib = (
+  LET pick = (FN FOR ALL #[Elt] :{{x :Elt}} -> Elt = #(x))
+  EXPR {wrapped} -> Any = #(
+    APPLY pick TO a
+  )
+  PRINT (WRAP 1)
+)
+"#
+    )
+}
+
+/// An argument at most `Any` among those that solve an instance site's variables leaves the site
+/// to the run, so the load refuses it; declared at a `FOR ALL` name, the same site loads. `APPLY`
+/// ranks `y` first, so `y` solves `Elt` before `f` is made.
+#[test]
+fn an_argument_at_most_any_beside_an_instance_site_is_refused() {
+    let refused = run(&applied_through(true, "#(WRAP a :Any)"));
+    assert!(
+        refused.starts_with("load: ") && refused.ends_with(UNFIXED),
+        "{refused}"
+    );
+    let loaded = run(&applied_through(true, "FOR ALL #[Tee] #(WRAP a :Tee)"));
+    assert_eq!(loaded, "1");
+}
+
+/// An argument that is never one type, at a slot ranked after the instance site's, fixes nothing:
+/// at most `Any`, the load refuses the site. `APPLY` ranks `f` first, as written, so `y` admits but
+/// does not solve.
+#[test]
+fn an_inexact_later_argument_beside_an_instance_site_is_refused() {
+    let refused = run(&applied_through(false, "#(WRAP a :Any)"));
+    assert!(
+        refused.starts_with("load: ") && refused.ends_with(UNFIXED),
+        "{refused}"
+    );
+}
+
+/// An argument a binding may make one type, at a slot ranked after the instance site's, fixes the
+/// site where it is: the load keeps the candidate, and the binding of `Tee`, the type `a`'s value
+/// carries, makes `a` and `[a, 1]` one type.
+#[test]
+fn a_later_argument_a_binding_makes_one_type_fixes_the_instance_site() {
+    assert_eq!(
+        run(&applied_through(false, "FOR ALL #[Tee] #(WRAP a :Tee)")),
+        "1"
+    );
+    let listed = r#"EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :(LIST OF Elt)) -> Elt = #(
+  f {x = 1}
+)
+MODULE lib = (
+  LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+  EXPR FOR ALL #[Tee] #(WRAP a :Tee) -> Any = #(
+    APPLY pick TO [a, 1]
+  )
+  PRINT (WRAP 1)
+  PRINT (WRAP "s")
+)
+"#;
+    assert_eq!(run(listed), "1\n1");
+}
+
+/// Declared `Any` is a spelling: an instance site whose solve reads a parameter declared `Any`,
+/// alone or inside a list, is fixed or refused as it is where the parameter is plain `Any`, no
+/// name (`unnamed_any`).
+#[test]
+fn an_instance_site_over_a_parameter_declared_any_solves_as_over_plain_any() {
+    for (wanted, argument) in [(":(LIST OF Tee)", "[x, 1]"), (":Tee", "x")] {
+        let source = format!(
+            "EXPR #(SUBJECT x :Any) -> Any = #(\n  \
+             EXPR FOR ALL #[Tee] #(TAKEA f :(FN :{{x :Tee}} -> Tee) TO y {wanted}) -> Any = #(y)\n  \
+             TAKEA (FN FOR ALL #[Pick] :{{x :Pick}} -> Pick = #(x)) TO {argument}\n\
+             )\n\
+             PRINT (SUBJECT \"s\")"
+        );
+        let plain = crate::dispatch::walk::unnamed_any(|| run(&source));
+        assert_eq!(run(&source), plain, "{argument}");
+        // Neither fixes `Tee` at one type: `[x, 1]` lies between two lists, `x` is at most `Any`.
+        assert_eq!(
+            plain,
+            format!("load: <test>:3:9: {}", UNFIXED.replace("`Elt`", "`Tee`")),
+            "{argument}"
+        );
+    }
 }

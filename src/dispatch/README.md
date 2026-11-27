@@ -426,8 +426,12 @@ fixed:
   `(FIELD f OF Elt)`, and exact under a binding whose retype makes the piece
   exact. The rule asks no judgement over the variable, so where the bound rules
   out a module member and a variant, the read's unit names `Elt` and a binding
-  reads it with the binding written in. Any other variable's field is read
-  through its declared bound.
+  reads it with the binding written in. A read through a callable's `FOR ALL`
+  name whose bound declares no such field or member is refused at load: a
+  body reads a field only some bindings have through a `MATCH … WITH` guard
+  naming the record type
+  ([what a body may ask of a `FOR ALL` name](../../design/quantified-types.md#what-a-body-may-ask-of-a-for-all-name)).
+  Any other variable's field is read through its declared bound.
   A field's value keeps its own variant of a union, so an `ATTR` over an exact
   record value is exact only where its field's type is. A lower end lacking the
   field makes the candidate *never*, since every record type the run can carry
@@ -602,7 +606,7 @@ at run time. Each refusal
 names the group's variables in group order:
 
 ```text
-nothing fixes `Elt` here: a quantified function is read only at the head of a call, as the binding of a `MODULE` member, or where the type it is wanted at solves its group
+nothing fixes `Elt` here: a quantified function is read only at the head of a call, held by a `LET` whose value its body does not return, or where the type it is wanted at solves its group
 :(FN :{x :Number} -> Number) does not fix `Elt`
 :(FN FOR ALL #[Elt] :{x :Elt} -> Elt) has no instance under :(FN :{x :Number} -> Str)
 ```
@@ -634,15 +638,20 @@ naming a lexical variable as above, and so does one under
 `#{Outer: :(LIST OF Number)}` with `xs :Outer` and `y :(LIST OF Elt)`, at
 `Elt = (ELEMENT OF Outer)`, the projection a run binding `Outer` reduces to
 that binding's element. Where a run does not, the solve is stored whole at the
-bind site that owns it, and `Elt` is a
+bind site that owns it — a stored solve names each slot and pinned variable
+by a bit, so a quantified type holds at most 63 of each
+([`TooWide`](../elaborate/README.md#refusals)) — and `Elt` is a
 [derived name](../build/README.md#derived-names) whose term is that solve
 ([where a solve is decided](../../design/binding-graph.md#where-a-solve-is-decided)):
 under `#{Outer: :(FN :{x :Number} -> Number)}` with `g :Outer` and
 `y :(FN :{x :Number} -> Elt)`, `APPLY pick TO g` instantiates `pick` at the
-return type each binding of `Outer` has. A solving argument there whose static
-type is at most `Any` contributes the type its value carries, so the call
-solves its class and makes the instance itself. One that is itself an instance
-site fixes nothing.
+return type each binding of `Outer` has. An argument at most `Any` among
+those that solve the slot's variables refuses the site: the text names no
+type for it there, and names one with a `FOR ALL`
+([what a bind site binds](../../design/binding-graph.md#what-a-bind-site-binds)).
+So does an argument the slot's solve reads at its static type, from a later
+priority class, where that type is not one type: it fixes no point at any
+binding. A solving argument that is itself an instance site fixes nothing.
 Any other variable the slot shares with the other arguments must come out one
 point — a closed one, one written over a lexical variable, or a derived name —
 and
@@ -801,6 +810,11 @@ own words (`ShapeError::NoField`):
 :{a :Number} has no field b
 ```
 
+A field or member read through a run-bound name, `x.size` over `x :Elt`, is
+licensed by `Elt`'s bound: it loads where the bound guarantees the field or,
+for a signature bound, declares the member, and is refused at load otherwise,
+`NoField` worded over the bound as written (`its bound Ord declares none`).
+
 A use left with no *maybe* candidate, holding one candidate or only closed
 ones, is ranked as a call ranks. A lone survivor, or a builtin among several, is
 selected; several survivors with no builtin among them refuse the load
@@ -946,7 +960,7 @@ typed. A callable body nested in a member is typed after the component and
 reads the fellow's own type. So in `LET a = {next = b, v = x}` and
 `LET b = {next = a, v = 1}`, `b` is typed over `a`'s seed alone.
 
-**Frontiers and resumption.** The walk's rules reach every load-time fact
+**Frontiers and stored questions.** The walk's rules reach every load-time fact
 through its façade ([`reads`](walk/reads.rs)), which gathers what each unit
 reads ([the store](../build/README.md#the-store)): a lexical variable's home,
 a type binder the type half left unknown, and a module binder whose content
@@ -957,10 +971,10 @@ read, cut to its chain. Every rule that reads a variable through its ends — a 
 types compared, a retype of the bare name — reads it through one of the
 walk's judgement doors, which marks the unknowns of what it judged open,
 beside the judgement's kind, the slot and the judged type, unless its answer
-holds at every binding within their ends — or, in a walk that witnesses a
-binding, notes the binding's answer where it is discrete
-([resumption](../build/README.md#resumption)); the elaborator marks through its
-type context. [`tests::boundary`](tests/boundary.rs) holds the walk and the
+holds at every binding within their ends, and lays the rule whole as a stored
+site question beside its rigid answer
+([stored questions](../build/README.md#stored-questions)); the elaborator
+marks through its type context. [`tests::boundary`](tests/boundary.rs) holds the walk and the
 elaborator to reaching no lattice judgement but through a door
 ([`judge`](../elaborate/judge.rs)). A unit record, a closing record and a
 seed note **named** each variable the types they fix hold. A callable's entry
@@ -971,20 +985,10 @@ seed is the [derived name](../build/README.md#derived-names) decided on the
 kind its binding has, a type value of that kind, so it is one type at load and
 under every binding and marks nothing; a module binder's seed is the binder
 itself, every read of which is a read of its content. A name a
-`USING … SCOPE` surfaces waits on what its module's static type waits on. A
-resumption runs the same rules under a binding: a bound type name seeds as a
-closed type binder does, a bound `FOR ALL` name closes the body's type, and a
-bound module binder is exactly the type it carries, its tree the bound one.
-A unit its binding does not wake, open over none of its names, is absorbed as
-its base holds it, what its facts gave the body's class included, its unit
-record read closed where it names a bound name, and every other re-runs once,
-refusing where a load with the binding declared would. The walk closes what
-it absorbs by substitution and lays each type it closed whole in its layer's
-closed types at its end.
-A body standing around a rooted walk's root is neither: the façade reads each
-of its facts off the unit record holding it, which it tags at its first read
-([resumption](../build/README.md#resumption)). A
-rule holds no writer and never asks which store it runs over:
+`USING … SCOPE` surfaces waits on what its module's static type waits on. The
+walk runs once, at the load: what a binding decides is an instance of the
+[binding graph](../build/README.md#the-binding-graphs-text) answering the
+stored questions, never a walk under the binding. A rule holds no writer and never asks which store it runs over:
 [`tests::boundary`](tests/boundary.rs) holds every file of the walk but the
 façade to reaching no store door.
 
@@ -1008,8 +1012,12 @@ A **path** reads a type member through a module-valued expression —
 half types each path a shape spells as a
 [path variable](../elaborate/README.md#the-type-channel-at-load), and the walk
 resolves each one ([`paths`](walk/paths.rs)) in the first step of the unit
-spelling it, before its declarations, off the **content tree** of the module
-its root names, walked through its member chain:
+spelling it, before its declarations, a root written in place after the paths
+its own types spell. A reader that still meets a path the walk has not
+resolved returns a request (`scope::Unresolved`); the walk's `typing` loop
+resolves it (`resolve_asked`), refusing one met while it is itself being
+resolved, and types the fact again. Each path resolves off the **content
+tree** of the module its root names, walked through its member chain:
 
 - **closed**, where the load knows that module's signature exactly — the
   root's exact static type, or a closed opaque view's — and reads the path off
@@ -1027,7 +1035,9 @@ its root names, walked through its member chain:
   [`same_as`](../scope/README.md#load-time-types) its own. A class's variable
   is a lattice variable of its own kind, named by a digest of that content, so
   every walk names a class alike whatever it resolved before; a path whose tree
-  holds a leaf no binder names is alone in its class. Paths of one class are
+  holds a leaf no binder names is read through its root binder, in the class
+  of the path through that binder, as a parameter's path is, and written in
+  place it is alone in its class. Paths of one class are
   one type, so a call solving one variable from two of them is *always*; paths
   of two classes are *maybe*; carriers over two different closed trees are
   *never*.
@@ -1036,8 +1046,7 @@ A path entry is named along its chain by its spelling or its content: a path
 a type spells by the level the shape numbers it at, and one the walk mints —
 to pin a module's type, or to root a class's variable — by a digest of its
 root, member chain, label and application. So a chain's path table opens
-empty, and a rooted walk reads a path of a standing body off the unit record
-holding it.
+empty.
 
 Every fact the type half fixes reads a path through its resolution, a type
 binder over a path among them: closed where the resolution is closed. A path in
@@ -1084,16 +1093,13 @@ underlying, which `LoadFacts::view_tree` reads back; a view of a view the
 load sees whose source it shows a part of is refused at load.
 
 **Where the run reads a path.** No value carries a path variable, and the run
-resolves none: every path a frame reads is decided closed in some layer of its
-facts — the load, a settlement or the frame's
-[activation](../build/README.md#activations) — once its root's binding is
-known, through the same `elaborate::path_binding` the load reads, and the run
-reads the closed type off the unit record, as it reads every type a type
-expression denotes. A law holds the run's read door never to yield a rigid
-fact: every fact a frame reads is closed in a layer the cell reads, decided
-there by its walk or, for a rigid unit record the layer absorbs, read through
-the layer's closed types ([resumption](../build/README.md#resumption)). The walk
-adds no capture for a path. A class is **reachable** from a shape by its
+resolves none: a path a frame reads is decided closed at the load, or is a
+class whose variable the frame's binding closes, by
+[module substitution](graph/README.md#the-domain) over the class's recipe,
+once its root's binding is known. A law holds the run's read door never to
+yield a rigid fact: every fact a frame reads is closed at the load or under
+the frame's binding ([instances at run](../build/README.md#instances-at-run)).
+The walk adds no capture for a path. A class is **reachable** from a shape by its
 content alone, whatever order the walk resolved its paths in: where a binder
 the shape reaches through its blocks and builder captures holds a module of
 the class's tree — the leaf binder the tree reads through, a module binder
@@ -1103,10 +1109,8 @@ binders read are the shape's own text's, out to the first callable or module
 around it, then what that one captures, so what a callable reaches is fixed by
 its text. Each is found by the class's identity, never by a scan of a body's
 slots: a module binder's unit record lists the identity of each module it
-holds, its own and its members', and a running level's binders are indexed by them
-in the walk, a standing level's in the layers (`Held::Holder`), read at or
-before the unit birthing the next level, and the search stops at the first
-holder that witnesses the class. The walk keeps each shape's answer for a
+holds, its own and its members', and a level's binders are indexed by them in
+the walk, and the search stops at the first holder that witnesses the class. The walk keeps each shape's answer for a
 class until it fixes another module binder's content tree, even one that holds
 no module.
 A use records a path variable at a path through such a binder, minted where
@@ -1180,34 +1184,12 @@ A `:|` over a closed content tree mints nothing at run, since the load laid its
 types in the root.
 
 Each body gets a caching record, which [the folds](../build/README.md#the-folds)
-lay over the walk's unit and closing records once it ends. It classes every
-minting site **closed**, **invariant** or **varying** by the leaves of its
-content tree — a nominal declared per call by the type binders its declaration
-reads — and the sites whose fact closes under the frame's binding are settled
-by its settlement's walk, which rests their types in the agent tier. A caching
-frame body's own caching record also lists the parameters its invariant sites
-read, its blocks' and module bodies' included, which key its
-[settlement](../build/README.md#keys-which-bindings-make-a-settlement)
-beside the names the units beneath it seamed at an entry wait on, a
-parameter's own type aside:
-none where they read captures alone, and no list at all where it has no
-invariant site, since such a frame reads no warm tier. Whether a body escapes
-is a text fact of its shape, read off the shape table. A leaf is
-invariant where it is a capture, or a parameter every tail edge into its body
-passes on bare from an invariant parameter of the caller, and every edge from
-the body into itself passes on as itself: a greatest fixpoint
-over the tail edges of every callable's and quote's code's last statement,
-a text fact of the [shape](../scope/shapes/tails.rs), a call by name's
-arguments paired with the callee's parameters by field and a keyworded use's
-with the registration's written slot names. A callable whose
-name is read as a value, or which is born in a `MODULE` or `GROUP` body or
-written in place, **escapes**: it may be called from anywhere, so its
-parameters are varying, and a hop of it into itself seeks its settlement
-rather than borrowing its predecessor's.
-A parameter keys where it is a type binder, or declared closed under `Module`
-or as a type value, whose every argument digests at a constant cost, which the
-walk records in the callable's birth record. A parameter leaf holds its site
-invariant only where it keys; a site reading any other parameter is varying.
+lay over the walk's closing records once it ends: whether its frame caches,
+as its closing class says. Whether a body escapes is a text fact of its shape,
+read off the shape table ([`tails`](../scope/shapes/tails.rs)): a callable
+whose name is read as a value, or which is born in a `MODULE` or `GROUP` body
+or written in place, **escapes**, since a frame of it may be born from
+anywhere.
 
 **Digest memos.** The shape places the memos a content digest is kept in
 ([`memos`](../scope/shapes/memos.rs)), off the text. At a `:|` over a module
@@ -1268,8 +1250,7 @@ record's entry, [`Arms`](../scope/typed.rs), is keyed by the `MATCH`'s site.
 **A `MATCH`'s static type** spans its kept arms': the chosen arm's where the
 load chose one, and otherwise the plain union of their upper ends over the
 lattice meet of their lower ends where every one is closed, `Never` below
-otherwise. A settlement re-walks the body with its `FOR ALL` names bound, so
-there every end is closed and the type exact. A `MATCH` declares no result; a
+otherwise. A `MATCH` declares no result; a
 reader who wants one checked ascribes it, `(MATCH …) :! Str`.
 
 **At the run** ([`matched`](evaluate.rs)) the scrutinee is evaluated and
@@ -1309,8 +1290,7 @@ The load records each
 callable's tail call's **route**: per candidate, whether it keeps the frame's
 contract, where the frame's return and the candidate are closed, and whether
 the call hops into the frame's own body, a self tail edge of a body whose name
-does not escape, which then runs under the frame's own settlement with no
-lookup. The run reads the route, and decides at the call only what the load
+does not escape. The run reads the route, and decides at the call only what the load
 left open: a builtin, a surfaced or retyped head, a spread or a rigid
 candidate.
 
@@ -1368,7 +1348,7 @@ raises these:
 | a missing union member | `:(Some \| None) has no member Many` |
 | an incomparable `==` | `<T> and <U> cannot be compared` |
 | `ATTR` over a module lacking the member | `SIG (pi: Number) has no member tau` |
-| a quantified member read with no instance | `member pick is quantified, and no type was known to instantiate it at` |
+| a quantified member read with no instance, at a read no selection owns | `member pick is quantified, and no type was known to instantiate it at` |
 | a quantified member behind a barrier read off a call's head | `member pick is quantified behind its view's barrier, and is read only at a call's head` |
 | `:!` over a value that misses its type | `:(LIST OF :(Number \| Str)) does not satisfy its ascription :(LIST OF Number)` |
 | a module that does not fit its signature | `SIG (other: Number) does not satisfy its ascription SIG (label: Str)` |
@@ -1515,8 +1495,8 @@ below, as a read's `Result` is built.
 A user overload may not take operands a builtin overload at its key already
 takes, since the builtin would win every such call and the overload would be
 dead there. [`check::overlap`](check.rs) runs where a registration is typed:
-in the load's walk, as a fact of the unit binding the registration — re-run
-under a binding that closes a rigid one — over every body short of a quote's
+in the load's walk, as a fact of the unit binding the registration — a
+stored question each instance answers where the shape is rigid — over every body short of a quote's
 code, and over a quote's code once its units close, recorded for the `EVAL`
 that runs it to report; composed code's is its composition's, and one a `$`
 name's binding closes is checked in the `EVAL` frame's activation. It reads each
@@ -1526,7 +1506,7 @@ closed, unquantified one at a key with builtin overloads — whatever declared
 types its signature names, so an alias of `Number` is checked as `Number` is —
 overlaps a builtin overload whose operands are not all `Any` when every slot pair
 meets above `Never`, which refuses the shape (`ShapeError::Overlaps`). A
-registration whose shape is rigid or unknown is never checked, nor is a
+registration whose shape is quantified or unknown is never checked, nor is a
 `USING … SCOPE` block's surfaced head, which births no callable: the definition
 answering it is the module's own, checked where the module is built. A
 registration a builtin beats at some operand type is simply never selected there — nothing reports it, since
@@ -1708,47 +1688,56 @@ the parameter, and a callable born in a `USING` block waiting on the name it
 surfaces; and where each unit seams — at its body's entry for its own
 `FOR ALL` name, at the unit binding an unknown type binder or a local module,
 an inner body's where its last member binds, a quote's hole and `\` mark at
-its code's entry; [keys](tests/keys.rs) — the names a callable keys on through
-its units' frontiers, a unit mixing an entry seam with a later one keying
-nothing, a name read only at its callable's entry keying nothing, and what
-the keys cost and share at run;
+its code's entry;
 [repeats](tests/repeats.rs) — the load reading each candidate of a keyworded
 use once, its registered shape and its solving slots alike, and peeking each
 member read's operand of a chain once;
-[resumption](tests/resumption.rs) — a load resumed under a binding through
-the test door ([stores](../program/tests/stores.rs)): an
-overload selected at a bound `FOR ALL` name, a module parameter's paths closed
-at its pin, a module binder bound beside a name keeping its paths, a name a
-type binder or a meet reads before a path, an inner callable settled under its
-outer name's binding, a type binder declared closed, a refusal the binding
-reaches, a binding no fact reads re-running only its own unit, a settled check
-a `Never` binding drops, a check one half of a binding refuses that the whole
-binding starves, re-running every unit agreeing with skipping, a resumption
-extending the one before it, a binding that closes a registration checking its
-overlap, a binding that closes a cycle unfolding neither call, a view over a
-bound module settled, a surfaced head waiting on its ascription, and a field
-read through a bound guaranteeing the field naming its variable and exact
-under a binding that makes it so; and the
-laws, over the [generated](tests/generate.rs) programs — quotes with holes,
-marks and `$` names, `USING`-surfaced names and heads, meets, nested
-callables, type binders over paths, views over bound modules, unfolding calls,
-local registrations, calls by name, `MODULE` bodies, components and rigid
-instances — and a binding of any closed types and modules: a resumption is the
-restart with the binding declared, resumptions are confluent, quiescence is
-exact, a resumption is monotone and re-runs only the units it wakes, the rigid
-rule commutes with binding, over a body and over an encloser and a cell under
-it, a body sealed at the load is sealed in every restart, the three stores
-give equal facts, and no unit record changes a level
-the shape numbers. A fact typed `Never` never arrives, so the monotone and
-confluence laws read it as the bottom: it lies within every fact, a use or
-settled check in a statement typed `Never` is vacuous, and a refusal on the
-way to a binding agrees with the binding where it types `Never` the statement
-holding the refused site;
-[program size](tests/program_size.rs) — a miss and an activation rooted at
-one body over programs of size n and 4n, grown by plain binders, callables,
-type paths and an enclosing callable's paths before or after the callee,
-and a block at the top level reading a class through a view beside type paths
-before or after it, reading as many standing unit records;
+[under](tests/under.rs) — the test door ([`Door`](tests/under.rs))
+a frame's facts are read through under a binding, the load's records answered
+by the instances its bind sites make, beside a registration whose bound misses
+the builtins asking nothing, views over two parameters refusing nothing at the
+load, a scheme over two layers' names reaching the run closed, and the law
+that a callable bounded over an encloser's name prints as a fresh load with
+that name declared;
+[bound types](tests/bound_types.rs) and [bound modules](tests/bound_modules.rs)
+— a frame's facts under a binding of its type names, and of a module binder or
+a name its paths, views, content trees and headers are written over, each set
+beside what a fresh load with the binding declared reads;
+[stored](tests/stored.rs) — the stored-question laws, over the
+[generated](tests/generate.rs) programs and bindings: a stored question
+decides as the walk did at the load, as a fresh load with its binding declared
+does under it, and its asks only narrow as more of the binding is written in,
+save that a verdict on an ask reading a name bound to a type no value
+carries may go from *always* to *never*, since no call over such a value ever
+runs;
+[made](tests/made.rs) — each instance the load makes, from the root and
+through every call and onward call it follows, answering as the stored
+question decides; [framed](tests/framed.rs) — each instance a frame makes
+answering alike, each instance a run of `SUBJECT` called with values makes
+answering as the stored question under the type names its frame bound, a
+name bound to a signature type among them; a `FOR ALL` name bound to a
+signature reading as a fresh load with it declared does; and
+the instances made along a widening chain of bindings, in any order, reading
+at every step as a fresh store's;
+[owners](tests/owners.rs) — each question owned at the latest bind site its
+reads depend on, and inside a quote's code no earlier than the code's entry;
+[graphs](tests/graphs.rs) — the bind sites `REPORT` lays and what each owns,
+`KEEP`'s instance made at the load, the recursions refused for growing a name
+over itself and those that build, two modules of one carried type sharing a
+handle and a second evaluating no question, a holder the text types answered
+at the load and one the run types shared, a functor's member selected by a
+`FOR ALL` name answered at the load, through a chain of calls and around a
+recursion, a refusal raised at each bind site, a loop alternating its module
+binder holding one instance per carrier, a loop through a new type each hop
+making no instance once its answers repeat, and the load typing each unit
+once, the load's count of the units each walk types unchanged across a run
+whose compositions' loads are counted, and a recursion over a union declared
+over itself holding one instance at every depth;
+[held](tests/held.rs) — a part held in place answering as its `LET`
+spelling does, by a law over drawn pairs; [licensed](tests/licensed.rs) — a
+spelling over a run-bound name licensed by its bound at load;
+[perf](tests/perf.rs), under the `perf` feature — the `NameQuestion`s and stored
+questions each tutorial snippet's instances asked and evaluated;
 [surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
 through a newtype or a family seeing only what the carried type names, one node
 seen at two types, every container filling its record values at each position,
@@ -1804,39 +1793,24 @@ at run no more than its first view does; and the load reading each of a chain
 of open views once, and fitting a `:|` over a closed tree once;
 [classes](tests/classes.rs) — each body's class, a value holding nothing minted
 — received, a record literal written in place, a module built over received or
-literal content — passed on or returned as no exit, and each site's caching
-class over parameters, captures, locals, views of views, nominals and
-composites, a keyworded tail loop pairing its
-arguments by slot, and the tutorial's classes (an ignored measurement);
+literal content — passed on or returned as no exit, which bodies cache, a
+closed view minting nothing at run, the run finding each minting site the
+load recorded, a keyworded tail loop passing its module on caching, and the
+tutorial's classes (an ignored measurement);
 [caching](tests/caching.rs) — caching bodies at run: `Str`- and
 `Number`-returning, helper and mixed loops holding their tiers flat across hops, warm verdicts,
-a parking loop's scratch bytes flat, the scratch reset after a delivery
-while the agent tier keeps each loop's binding, the parameters each frame keys on and each shape's segment,
-a loop seeking its settlement once and a second caller finding it warm, a
-callable born in a frame or its block keying beneath the frame's
-settlement and a callee's under its own chain, an evicted
-settlement rebuilt with the same answer, the allocations a birth keyed on
-a list costs, a table of what a loop hop's adoptions cost, counter by counter,
+a parking loop's scratch bytes flat, the scratch reset after a delivery,
+each shape's segment, a table of what a loop hop's adoptions cost, counter by counter,
 over the suite's programs, every count held flat across three evenly spaced
 depths, and each exit — a retyped value, a closure, a quote, a knot
 member, a held frame's tail call, a received list passed on without being
 entered, a loop passing on a member of a received chain adopting a hop at a
 time, a member of a received value reached through a call's result not entered
 whatever its length, and a loop handing a callee a module built over its link
-each hop, caching and flat, a `Number`-returning callee viewing it at an invariant site
+each hop, caching and flat, a `Number`-returning callee viewing it
 included, and a `Fresh` loop and a `Shares` loop each catching a fault over new content each hop,
-the region flat, and what each tutorial program's call sites seek and binding
-events decide beside the layers the load laid;
-[laid](tests/laid.rs) — the load's layers: a keyworded call fixing a `FOR ALL`
-name, a functor over a written module, a view, a retype, a call by name and an
-open callee each finding the layer the load laid, and a callee born beneath a
-load layer finding the one laid beneath it; a call at a traced site reading
-its request and computing no key, beside an untraced site, a callee that is a
-call's result and run content at a traced slot computing from the values; a
-miss laying its own layer and a child at its first call; an evicted parent's
-replay seeking with its handed-back request; a load layer outliving every
-eviction, a replay of a chain on one starting there, and a traced layer's
-refusal refusing the load, naming the first call in text order;
+the region flat, and what the instances over the example programs ask (an
+ignored measurement);
 [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md), a tail call reading its route, and
@@ -1845,14 +1819,11 @@ arm owing its frame's contract whether or not it tails, a tail arm's call
 reading its route, and an arm under a barrier running as a child;
 [matching](tests/matching.rs) — an arm's `it` and a `MATCH` typed at load, the
 arms the load keeps and chooses, its refusals, a union clause checked where it
-closes — the load, or a settlement over a `FOR ALL` name — and the arm a run
+closes and the arm a run
 takes, a value guard and a rigid guard among them, and arms past a table's
 bound ranked at load and at run;
-[kept](tests/kept.rs) — a frame handing back its parameter, a field of it and a
-binder bound bare to it unchanged, and a record value a call returns built once
-in its caller's home; [loops](tests/loops.rs) — a tail loop's memory at 16, 64
-and 256 hops, each loop hopping under its frame's settlement and seeking one
-each hop: a chain walk and a record value rebuilt whole each hop holding every
+[loops](tests/loops.rs) — a tail loop's memory at 16, 64
+and 256 hops: a chain walk and a record value rebuilt whole each hop holding every
 region flat, a walk copying no part of its chain, a hop handing on its
 received arguments uncopied, no hop pledged, a cons loop copying a constant
 per hop, amortized, holding a constant times what it threads and delivering
@@ -1864,30 +1835,20 @@ loops through `MATCH` arms — a walk and a cons loop, a walk down a union, tuto
 06's `DOUBLE` holding what the same loop holds without a `MATCH`, a helper
 handing back its arm's `it` where it rests, and a `MATCH` over a scrutinee its
 frame builds threading it;
-[door](tests/door.rs) — facts over no layers answering as the load does;
-[activation](tests/activation.rs) — a frame bound to run content deciding its
-dependent units in its activation, at its entry, a statement seam, a block's
-entry and an `EVAL`'s captures, a callable reading its encloser's decisions,
-the agent tier growing by nothing for run content, a loop calling a keyed
-callee on load content holding one settlement, and no type expression
-elaborated at the run; [memo](tests/memo.rs) — a decision memo hit by a fresh
-loop, an alternating statement, mutual tail and nested recursion, another
-settlement and captures, a block and a callee under a deepening encloser
-deciding once per answer, a seam binding a module, keys whose hashes collide,
-the heap flat, and the law that a memoized activation equals one decided from
-scratch over an encloser whose binding deepens;
+[door](tests/door.rs) — facts over no instances answering as the load does;
+[activation](tests/activation.rs) — a frame bound to run content: what its
+instances answer at its entry, at each bind site a fact waits on, a block's
+entry and an `EVAL`'s captures, read through the outputs and faults a run
+gives, a callable reading its encloser's handles, and no type expression
+elaborated at the run;
 [compositions](tests/compositions.rs) — an `EVAL` of composed code running as
 its written quote does, a second hitting
 its composition, a loop composing code each hop holding O(1) compositions, an
 evicted composition rebuilt with its functions' identity kept, and by a
 `BUILD`, a derived type
 minted once per binding event and no term probed unread, a refusal worded as
-the load words it, nothing rested in the agent tier, settlements under a
-composition and the pins they take; [replay](tests/replay.rs) — a call
-through a stale handle rebuilding its chain, borrowing every level it reaches
-and the composition its chain pins, born warm, a non-keying callable borrowing
-the settlement its handle names, and the stamp no part of a closure's content,
-one of them on the [Miri slate](../../observe/miri_slate.md);
+the load words it, nothing rested in the agent tier, a composition's own
+binding graph, and a recursion through its own callable building;
 [bounds](tests/bounds.rs) — build memory no frame holds within the budget, and
 what frames hold linear in distinct depot slots, not nesting depth; and
 [faults](tests/faults.rs) — a value of `Error` raising nothing, a part or a
@@ -1911,19 +1872,20 @@ tutorial snippet is checked against its shown output by
 
 ## Open work
 
-- [Invariance around a tail cycle](../../roadmap/one-build/cycle-invariance.md)
-  — an argument built over invariant leaves classed invariant.
 - [A head reading its parameters' types](../../roadmap/types/head-parameter-reads.md)
   — a slot's or a return's type reading a type member of its head's own
   parameters, and `TYPE OF`.
 - [The features project's unplanned work](../../roadmap/features/README.md#unplanned-work) — a
   warning for an overload never selected.
-- [A value retyped in place, pinned at its paths](../../roadmap/types/pinned-in-place.md)
-  — a value retyped in place, a field read and a retyped binder's member,
-  each solving a pin over a callable's own variable at load.
+- [A module pinned at its paths however it is held](../../roadmap/types/module-binder-by-hold.md)
+  — a hold over a parameter declared `:Any`, a field read and a retyped
+  binder's member, each solving a pin over a callable's own variable as its
+  `LET` spelling does.
 - [The overlap check over a parametric registration](../../roadmap/types/parametric-overlap.md)
-  — a quantified or rigid registration checked at load.
+  — a quantified registration checked at load.
 - [A surfaced head reads only the parameters its shape names](../../roadmap/types/surfaced-head-parameters.md)
   — a head over an unpinned parameter it never names, exact at load.
-- [An instance made by the call](../../roadmap/types/instance-made-by-the-call.md)
-  — an instance argument beside a solving argument the load knows nothing of.
+- [A check over a `FOR ALL` name holds at every binding](../../roadmap/types/checks-at-every-binding.md)
+  — a check a binding decides, refused at load.
+- [The types project's unplanned work](../../roadmap/types/README.md#unplanned-work)
+  — a use's candidates checked for coverage at load.

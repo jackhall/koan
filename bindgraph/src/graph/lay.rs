@@ -2,7 +2,8 @@
 //!
 //! 1. A site name at the root's entry, and (2) a question that reads nothing, are malformed, as
 //!    is a declared ask over no name or over a name its question does not read.
-//! 3. Each call is checked alone: its arm, its mapped names, and on an arm its mentions.
+//! 3. Each call is checked alone: its arm, its mapped names (bound at its target: the callee's
+//!    entry, or an onward call's statement), and on an arm its mentions.
 //! 4. Each `AnswersName` edge is checked alone: what it types, its arm and mentions, that the
 //!    edges typing one name hang on different arms of one question, and the name it takes.
 //! 5. An answered name whose deciding question, call mapping or term on a site reads the name
@@ -21,10 +22,16 @@
 //!    a site among the readers.
 //! 10. A question's owner, a call's owner and an answered name's node are each the latest site
 //!     in the relevant base, or the root's entry where it is empty.
-//! 11. Each body's inherited names, each node's relevant names and borrowed questions.
+//! 11. Each body's inherited names, each node's relevant names and borrowed questions. Then each
+//!     **onward call**, the latest target first: it passes its mentions and each name its target
+//!     reads that is bound before the target, and is owned at the latest of those, strictly
+//!     before its target. One whose target is no node is dropped; one owned at its own target, or
+//!     binding a statement another binds, is malformed.
 //! 12. Each edge is filed on its arm, its call or its node. Each node's handle takes one field
 //!     per distinct ask its owned questions declare, in `QuestionId` then declaration order.
-//! 13. [`grows`] refuses a closed walk that builds a name over itself.
+//! 13. [`grows`] refuses a closed walk that builds a name over itself; an onward call's mapping
+//!     draws arcs into the names it maps, as a term on a site does. Each statement node's chain
+//!     of onward calls from its body's entry, or from before it, is recorded for taking.
 //! 14. The text components ([`needs`](super::needs)): where a knot can form, the strongly
 //!     connected components of the arcs of need that hold a cycle.
 //!
@@ -37,7 +44,7 @@ use super::{
     AnswerBranch, Answered, AnswersName, Ask, BindingNode, BindsAfter, Chains, Edge, Field, Graph,
     LayError, On, OpenCaller, PassesName, SiteQuestion, Source,
 };
-use crate::domain::{Facts, Nesting};
+use crate::domain::{Facts, Kept, Nesting};
 use crate::id::{AnswersId, BodyId, EdgeId, NameId, NodeId, QuestionId, Site};
 use crate::text::{AnswersText, EdgeText, Malformed, NameText, OnText, SourceText, Text};
 
@@ -85,12 +92,12 @@ fn mark_outside(
     changed
 }
 
-impl<F: Facts> Text<F> {
+impl<K: Kept> Text<K> {
     /// Lays the graph: checks the description, computes each name's base, orders the sites,
     /// picks each question's and call's owner, binds each answered name, files the edges, fixes
     /// each node's handle fields, refuses a recursion that grows, and finds where a knot can form.
     /// Reads no binding.
-    pub fn lay(self, facts: &F) -> Result<Graph<F>, LayError> {
+    pub fn lay<F: Facts<Kept = K>>(self, facts: &F) -> Result<Graph<K>, LayError> {
         let Text {
             bodies,
             names: name_texts,
@@ -160,8 +167,9 @@ impl<F: Facts> Text<F> {
             let mut per_pair = Vec::with_capacity(edge_text.mapping.len());
             for (at, (name, term)) in edge_text.mapping.iter().enumerate() {
                 let name = *name;
-                if site_name(name) != Some(Site::Entry(edge_text.callee)) {
-                    return Err(Malformed::MapsNonEntryName { edge, name }.into());
+                let target = edge_text.target;
+                if site_name(name) != Some(target) {
+                    return Err(Malformed::MapsUnboundName { edge, name }.into());
                 }
                 if edge_text.mapping[..at]
                     .iter()
@@ -206,7 +214,7 @@ impl<F: Facts> Text<F> {
                 names
             })
             .collect();
-        let hang = |answer: &AnswersText<F>| match answer.source {
+        let hang = |answer: &AnswersText<K>| match answer.source {
             SourceText::Arm { question, arm, .. } => Some((question, arm)),
             SourceText::Call { edge, .. } => match edges[edge.index()].on {
                 OnText::Arm { question, arm } => Some((question, arm)),
@@ -274,7 +282,7 @@ impl<F: Facts> Text<F> {
             if let SourceText::Call { edge, takes } = answer.source
                 && let Some(site) = site_name(takes)
             {
-                let callee = edges[edge.index()].callee;
+                let callee = edges[edge.index()].callee();
                 if site.body() != callee && !chains.visible(site, Site::Entry(callee)) {
                     let edge = AnswersId::new(index);
                     return Err(Malformed::TakesOffCallee { edge, name: takes }.into());
@@ -321,7 +329,7 @@ impl<F: Facts> Text<F> {
 
         // 6. Bases, the calls' inputs and the bodies' captures, together to a fixpoint.
         let site_of = |name: NameId| site_name(name).expect("a base holds only site names");
-        let call_site = |edge: &EdgeText<F>| match edge.on {
+        let call_site = |edge: &EdgeText<K>| match edge.on {
             OnText::Arm { question, .. } => questions[question.index()].site,
             OnText::Site(site) => site,
         };
@@ -352,9 +360,11 @@ impl<F: Facts> Text<F> {
                     );
                 }
                 let at = call_site(edge);
-                for &name in &captured[edge.callee.index()] {
-                    if chains.visible(site_of(name), at) {
-                        insert(&mut set, name);
+                if edge.onward().is_none() {
+                    for &name in &captured[edge.callee().index()] {
+                        if chains.visible(site_of(name), at) {
+                            insert(&mut set, name);
+                        }
                     }
                 }
                 changed |= union_into(&mut inputs[index], &set);
@@ -386,7 +396,7 @@ impl<F: Facts> Text<F> {
             }
             for answer in &answers {
                 if let SourceText::Call { edge, takes } = answer.source {
-                    let callee = edges[edge.index()].callee;
+                    let callee = edges[edge.index()].callee();
                     let set = &base[takes.index()];
                     changed |= mark_outside(&chains, &mut captured, site_of, callee, set);
                 }
@@ -527,9 +537,16 @@ impl<F: Facts> Text<F> {
             }
         }
 
-        // 10. Owners and placement: the latest site in a base, or the root's entry.
-        let owner_of = |set: &Names| {
-            let site = chains.latest(set.iter().map(|&name| site_of(name)));
+        // 10. Owners and placement: the latest site in a base, or the root's entry; for what is
+        // asked or called at `at` inside a staged body, no earlier than that body's entry.
+        let staged_entry = |at: Site| {
+            std::iter::successors(Some(at.body()), |body| chains.encloser[body.index()])
+                .find(|body| bodies[body.index()].staged)
+                .map(Site::Entry)
+        };
+        let owner_of = |set: &Names, at: Option<Site>| {
+            let sites = set.iter().map(|&name| site_of(name));
+            let site = chains.latest(sites.chain(at.and_then(staged_entry)));
             let site = site.unwrap_or(Site::Entry(root));
             debug_assert!(
                 set.iter()
@@ -537,8 +554,12 @@ impl<F: Facts> Text<F> {
             );
             node_at[&site]
         };
-        let question_owners: Vec<NodeId> = question_bases.iter().map(owner_of).collect();
-        let call_owners: Vec<NodeId> = inputs.iter().map(owner_of).collect();
+        let question_owners: Vec<NodeId> = (question_bases.iter().zip(&questions))
+            .map(|(set, question)| owner_of(set, Some(question.site)))
+            .collect();
+        let call_owners: Vec<NodeId> = (inputs.iter().zip(&edges))
+            .map(|(set, edge)| owner_of(set, Some(call_site(edge))))
+            .collect();
         let mut names = Vec::with_capacity(name_texts.len());
         let mut answered = Vec::with_capacity(name_texts.len());
         for (index, name) in name_texts.iter().enumerate() {
@@ -548,7 +569,7 @@ impl<F: Facts> Text<F> {
                     answered.push(None);
                 }
                 NameText::Answered => {
-                    let node = owner_of(&base[index]);
+                    let node = owner_of(&base[index], None);
                     nodes[node.index()].answered.push(NameId::new(index));
                     names.push(sites[node.index()]);
                     answered.push(Some(Answered {
@@ -563,7 +584,7 @@ impl<F: Facts> Text<F> {
             if let SourceText::Call { edge, takes } = answer.source
                 && site_name(takes).is_none()
             {
-                let callee = edges[edge.index()].callee;
+                let callee = edges[edge.index()].callee();
                 let site = names[takes.index()];
                 if site.body() != callee && !chains.visible(site, Site::Entry(callee)) {
                     let edge = AnswersId::new(index);
@@ -588,7 +609,7 @@ impl<F: Facts> Text<F> {
                 for &(name, _) in mentions[index].iter().flatten() {
                     insert(&mut read, name);
                 }
-                for &name in &inherits[edge.callee.index()] {
+                for &name in &inherits[edge.callee().index()] {
                     if chains.visible(named(name), at) {
                         insert(&mut read, name);
                     }
@@ -597,7 +618,7 @@ impl<F: Facts> Text<F> {
             }
             for answer in &answers {
                 if let SourceText::Call { edge, takes } = answer.source {
-                    let callee = edges[edge.index()].callee;
+                    let callee = edges[edge.index()].callee();
                     changed |= mark_outside(&chains, &mut inherits, named, callee, &[takes]);
                 }
             }
@@ -614,7 +635,7 @@ impl<F: Facts> Text<F> {
         }
 
         // 12. Filing: questions with their branches, then calls and `AnswersName` edges.
-        let mut sited: Vec<SiteQuestion<F>> = questions
+        let mut sited: Vec<SiteQuestion<K>> = questions
             .into_iter()
             .zip(&question_owners)
             .enumerate()
@@ -636,7 +657,7 @@ impl<F: Facts> Text<F> {
             .collect();
         // Each node's handle: a field per distinct ask its owned questions declare.
         for node in &mut nodes {
-            let mut distinct: Vec<&Ask<F>> = Vec::new();
+            let mut distinct: Vec<&Ask<K>> = Vec::new();
             let mut per_question = Vec::with_capacity(node.owns.len());
             for &question in &node.owns {
                 let mut fields = Vec::new();
@@ -658,7 +679,7 @@ impl<F: Facts> Text<F> {
                 sited[question.index()].fields = fields;
             }
         }
-        let mut laid: Vec<PassesName<F>> = Vec::with_capacity(edges.len());
+        let mut laid: Vec<PassesName<K>> = Vec::with_capacity(edges.len());
         for (index, (edge_text, &owner)) in edges.into_iter().zip(&call_owners).enumerate() {
             let edge = EdgeId::new(index);
             let on = match edge_text.on {
@@ -670,17 +691,19 @@ impl<F: Facts> Text<F> {
                 }
                 OnText::Site(site) => On::Site(site),
             };
-            nodes[owner.index()].follows.push(edge);
+            if edge_text.onward().is_none() {
+                nodes[owner.index()].follows.push(edge);
+            }
             laid.push(PassesName {
                 on,
                 owner,
-                callee: edge_text.callee,
+                target: edge_text.target,
                 mapping: edge_text.mapping,
                 answers: Vec::new(),
                 passes: Vec::new(),
             });
         }
-        let mut typing: Vec<AnswersName<F>> = Vec::with_capacity(answers.len());
+        let mut typing: Vec<AnswersName<K>> = Vec::with_capacity(answers.len());
         for (index, answer) in answers.into_iter().enumerate() {
             let edge = AnswersId::new(index);
             let source = match answer.source {
@@ -713,11 +736,16 @@ impl<F: Facts> Text<F> {
 
         // Each node's relevant names and borrowed questions, now that calls have owners.
         let call_inherits = |edge: EdgeId| -> Vec<NameId> {
+            if laid[edge.index()].onward().is_some() {
+                return Vec::new();
+            }
             let at = match laid[edge.index()].on {
                 On::Arm { question, .. } => sited[question.index()].site,
                 On::Site(site) => site,
             };
-            let inherited = inherits[laid[edge.index()].callee.index()].iter().copied();
+            let inherited = inherits[laid[edge.index()].callee().index()]
+                .iter()
+                .copied();
             inherited
                 .filter(|&name| chains.visible(named(name), at))
                 .collect()
@@ -779,6 +807,50 @@ impl<F: Facts> Text<F> {
             }
             borrows[index].sort_unstable();
         }
+        let mut passes = passes;
+        let mut onward_into: Vec<Option<EdgeId>> = vec![None; nodes.len()];
+        // Onward calls, the latest target first: each passes what its mapping mentions
+        // and what its target's evaluation reads from before it, and is owned where the last of
+        // those is bound. One whose target is no node is dropped.
+        let mut onward: Vec<(usize, Site, NodeId)> = (laid.iter().enumerate())
+            .filter_map(|(index, edge)| {
+                let target = edge.onward()?;
+                Some((index, target, *node_at.get(&target)?))
+            })
+            .collect();
+        onward.sort_by_key(|&(_, site, _)| {
+            std::cmp::Reverse((chains.depth[site.body().index()], site.rank()))
+        });
+        for (index, target, node) in onward {
+            let mut passed = passes[index].clone();
+            for &name in &relevant[node.index()] {
+                if named(name) != target {
+                    insert(&mut passed, name);
+                }
+            }
+            let sites = passed.iter().map(|&name| named(name));
+            let owner_site = chains.latest(sites).unwrap_or(Site::Entry(root));
+            let owner = node_at[&owner_site];
+            if owner == node {
+                return Err(Malformed::ArrivesThroughItself {
+                    edge: EdgeId::new(index),
+                }
+                .into());
+            }
+            if onward_into[node.index()].is_some() {
+                return Err(Malformed::ArrivesTwice {
+                    edge: EdgeId::new(index),
+                }
+                .into());
+            }
+            onward_into[node.index()] = Some(EdgeId::new(index));
+            laid[index].owner = owner;
+            let follows = &mut nodes[owner.index()].follows;
+            let at = follows.partition_point(|held| held.index() < index);
+            follows.insert(at, EdgeId::new(index));
+            union_into(&mut relevant[owner.index()], &passed);
+            passes[index] = passed;
+        }
         for (edge, passed) in laid.iter_mut().zip(passes) {
             edge.passes = passed;
         }
@@ -824,13 +896,29 @@ impl<F: Facts> Text<F> {
                         edge,
                         name: answer.name,
                         takes: *takes,
-                        callee: laid[call.index()].callee,
+                        callee: laid[call.index()].callee(),
                         mapped: mapped.collect(),
                     });
                 }
             }
         }
-        let flat: Vec<Arc> = content_arcs.iter().flatten().copied().collect();
+        let mut flat: Vec<Arc> = content_arcs.iter().flatten().copied().collect();
+        // An onward call's mapping types a name of its own body, as a term on a site does.
+        for (index, edge) in laid.iter().enumerate() {
+            if edge.onward().is_none() {
+                continue;
+            }
+            for ((to, _), mentioned) in edge.mapping.iter().zip(&mentions[index]) {
+                for &(from, nesting) in mentioned {
+                    flat.push(Arc {
+                        from,
+                        to: *to,
+                        nesting,
+                        edge: Edge::Passes(EdgeId::new(index)),
+                    });
+                }
+            }
+        }
         let outside =
             |through: &Through, name: NameId| !chains.within(through.callee, named(name).body());
         let mut summaries = grows::summaries(names.len(), &flat, &throughs, outside).into_iter();
@@ -848,7 +936,29 @@ impl<F: Facts> Text<F> {
             });
         }
 
+        // Each statement node's chain of onward calls, from its body's entry or from before it.
+        let reached: Vec<Option<Vec<EdgeId>>> = (0..nodes.len())
+            .map(|index| {
+                let body = nodes[index].site.body();
+                let mut chain = Vec::new();
+                let mut at = index;
+                loop {
+                    let edge = onward_into[at]?;
+                    chain.push(edge);
+                    let owner = laid[edge.index()].owner;
+                    let site = nodes[owner.index()].site;
+                    if site.body() != body || matches!(site, Site::Entry(_)) {
+                        break;
+                    }
+                    at = owner.index();
+                }
+                chain.reverse();
+                Some(chain)
+            })
+            .collect();
+
         let mut graph = Graph {
+            reached,
             chains,
             names,
             answered,

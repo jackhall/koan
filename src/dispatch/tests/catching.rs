@@ -11,8 +11,10 @@ use super::tail::peak_of;
 use super::{Koan, output, run};
 
 /// `BOOM`, which reads a field off whatever it is handed: `NoField` at run for a record without
-/// it, and for anything else.
-const BOOM: &str = "EXPR #(BOOM p :Any) -> Any = #(p.field)
+/// it, and for anything else. It reads through a field typed `Any`, which no binding closes: `p`
+/// itself is the name of the type its value carries, which the frame's binding would refuse.
+const BOOM: &str =
+    "EXPR #(BOOM p :Any) -> Any = #((LET box = ({v = p} :! :{v :Any})) (box.v.field))
 ";
 
 /// A value of declared type `Any` that holds the string `"s"`, so the load refuses nothing a run

@@ -402,7 +402,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             {
                 return match names.get(index).0.checked_sub(1) {
                     Some(statement) => {
-                        let statement = &draft.nodes[statement as usize];
+                        let statement = draft.nodes[statement as usize].statement_spine();
                         match statement.cache().builtin_shape().map(|shape| shape.id) {
                             Some(BuiltinShapeId::CombinedQuantifiedExpression) => {
                                 Quantified::CallOnly
@@ -459,7 +459,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             {
                 let declared = names.get(index);
                 let statement = declared.0.checked_sub(1)? as usize;
-                return Some((level, declared, Slot(index as u32), &draft.nodes[statement]));
+                let statement = draft.nodes[statement].statement_spine();
+                return Some((level, declared, Slot(index as u32), statement));
             }
             if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
                 return None;

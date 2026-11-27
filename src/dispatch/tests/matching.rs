@@ -26,8 +26,9 @@ fn arms_of(source: &str, name: &str, check: impl FnOnce(Arms<'_>)) {
         let Some(crate::parse::ExpressionPart::Expression(node)) = shape.rhs(slot) else {
             panic!("`{name}` is bound to a node");
         };
+        let scratch = crate::memory::Bump::new();
         let arms = (program.facts())
-            .arms(shape, shape.site_of_node(node))
+            .arms(&scratch, shape, shape.site_of_node(node))
             .expect("the load recorded the arms");
         check(arms);
     });
@@ -35,8 +36,11 @@ fn arms_of(source: &str, name: &str, check: impl FnOnce(Arms<'_>)) {
 
 #[test]
 fn an_arms_it_is_retyped_to_its_guard() {
+    // A field typed `Any` is no name a binding closes: the arms' union is the load's alone.
     let f = |guards: &str| {
-        format!("LET f = (FN :{{x :Any}} -> Any = #((LET m = (MATCH x WITH #{{{guards}}})) (m)))")
+        format!(
+            "LET f = (FN :{{b :{{x :Any}}}} -> Any = #((LET m = (MATCH b.x WITH #{{{guards}}})) (m)))"
+        )
     };
     assert_eq!(
         in_f(&f("Number: (it), _: (null)"), "m"),
@@ -231,16 +235,25 @@ fn a_match_runs_the_most_specific_admitting_arm() {
 
 #[test]
 fn a_match_no_arm_of_which_admits_at_run_faults() {
+    // A field typed `Any` is no name a binding closes: the run finds no arm.
     assert_eq!(
-        run("LET f = (FN :{x :Any} -> Any = #(MATCH x WITH #{Str: (1)}))\nPRINT (f {x = 1})"),
-        "error: no arm of `MATCH` admits Number\n  in :(FN :{x :Any} -> Any) (f {x = 1}) at <test>:2:7"
+        run(
+            "LET f = (FN :{b :{x :Any}} -> Any = #(MATCH b.x WITH #{Str: (1)}))\nPRINT (f {b = {x = 1}})"
+        ),
+        "error: no arm of `MATCH` admits Number\n  in :(FN :{b :{x :Any}} -> Any) (f {b = {x = 1}}) at <test>:2:7"
     );
     assert_eq!(
         run(
-            "LET f = (FN :{x :Any} -> Any = #(MATCH x WITH #{:(Number | Str): (1), :(Number | Bool): (2)}))\n\
-             PRINT (f {x = 1})"
+            "LET f = (FN :{b :{x :Any}} -> Any = #(MATCH b.x WITH #{:(Number | Str): (1), :(Number | Bool): (2)}))\n\
+             PRINT (f {b = {x = 1}})"
         ),
-        "error: ambiguous `MATCH`: 2 arms admit Number and none ranks first\n  in :(FN :{x :Any} -> Any) (f {x = 1}) at <test>:2:7"
+        "error: ambiguous `MATCH`: 2 arms admit Number and none ranks first\n  in :(FN :{b :{x :Any}} -> Any) (f {b = {x = 1}}) at <test>:2:7"
+    );
+    // A parameter declared `Any` is the name of the type its value carries, which a call the text
+    // fixes passes it: the load decides the `MATCH` as a fresh load would, and refuses it.
+    assert_eq!(
+        run("LET f = (FN :{x :Any} -> Any = #(MATCH x WITH #{Str: (1)}))\nPRINT (f {x = 1})"),
+        "load: <test>:1:33: no arm of `MATCH` admits Number\n  in (f {x = 1}) at <test>:2:7"
     );
 }
 
@@ -287,38 +300,6 @@ fn a_rigid_guard_ranks_at_run() {
 }
 
 #[test]
-fn a_union_clause_over_a_run_bound_name_is_checked_where_it_is_bound() {
-    let f =
-        "EXPR FOR ALL #[Un] #(PICK x :Un) -> Any = #(MATCH x UNDER Un WITH #{Some: (it), _: (0)})";
-    assert_eq!(
-        run(&format!(
-            "{MAYBE}\n{f}\nLET m :Maybe = (Maybe.Some 3)\nPRINT (PICK m)"
-        )),
-        "3"
-    );
-    let other = "UNION Other = #{Left: Number, Right: Null}";
-    let picked = run(&format!(
-        "{other}\n{f}\nLET o :Other = (Other.Left 3)\nPRINT (PICK o)"
-    ));
-    assert!(
-        picked.contains("Some names no variant of"),
-        "a binding making a label miss refuses: {picked}"
-    );
-    assert_eq!(
-        run(&format!("{MAYBE}\n{f}\nPRINT (PICK (Maybe.Some 3))")),
-        "3",
-        "a construction through `Maybe` binds `Un` to the union"
-    );
-    let aliased = run(&format!(
-        "{MAYBE}\n{f}\nLET Sm = Maybe.Some\nPRINT (PICK (Sm 3))"
-    ));
-    assert!(
-        aliased.contains("and Some is not one; a lone variant is not its union"),
-        "a construction through a variant alias binds `Un` to the variant, no union: {aliased}"
-    );
-}
-
-#[test]
 fn an_arm_the_scrutinee_s_lower_end_lies_outside_is_dropped() {
     assert_eq!(
         top(
@@ -332,15 +313,15 @@ fn an_arm_the_scrutinee_s_lower_end_lies_outside_is_dropped() {
 }
 
 #[test]
-fn a_settlement_types_a_match_over_a_for_all_name_exactly() {
-    // At the load `Elt` is rigid, so the ascription may hold; the settlement at `Elt := Number`
-    // types the `MATCH` exactly `Number`, which never satisfies `Str`.
+fn a_binding_types_a_match_over_a_for_all_name_exactly() {
+    // At the load `Elt` is rigid, so the ascription may hold; the call at `Elt := Number` types the
+    // `MATCH` exactly `Number`, which never satisfies `Str`.
     let f = "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Any = #((MATCH x WITH #{Elt: (it)}) :! Str)";
     assert_eq!(run(&format!("{f}\nPRINT (ONLY \"s\")")), "s");
     let refused = run(&format!("{f}\nPRINT (ONLY 1)"));
     assert!(
         refused.contains("can never satisfy its ascription Str"),
-        "the settlement refuses: {refused}"
+        "the call refuses: {refused}"
     );
 }
 

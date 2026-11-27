@@ -6,16 +6,20 @@
 //! reader, [`Reader`], and hands it back; every unknown it read is left in the context's
 //! gathering ([`TypeContext::note`]). The elaborator's doors do the typing: nothing here mints a
 //! level or a path. A run-bound name's level is the shape's ([`Shapes::level`]), and a path is read
-//! through the resolution the walk fixed before the unit's declarations
-//! ([`TypeContext::resolution`]).
+//! through the resolution the walk fixed ([`TypeContext::resolution`]); one it has not fixed yet
+//! stops the entry point with a request ([`Stop::Unresolved`]), which the walk resolves before
+//! typing again.
 //!
 //! The reader answers a coordinate with a builtin's value; else with the closed type the binding
 //! gives it; else, for a type binder, with its declaration: closed or rigid as it is, each variable
 //! a rigid declaration reads read again where the binder is, and otherwise the binder is an unknown
-//! read as a lexical variable; else, for any other run-bound type name, with its lexical variable
-//! at its shape level. A path reads its resolution: closed as it is, and a class as its class's
+//! read as a lexical variable; else, for a type name a `USING … SCOPE` surfaces, with the type its
+//! module's static signature declares it at exactly ([`TypeContext::surfaced`]); else, for any
+//! other run-bound type name, with its lexical variable at its shape level. A path reads its resolution: closed as it is, and a class as its class's
 //! path variable. A type binder reads alike, so it is closed or rigid wherever it reads a name a
-//! run binds; a spelling no lattice node or derived name spells over that name leaves it unknown.
+//! run binds. The walk's namer is total, so it leaves a type unknown only past its chain, where no
+//! binding is written in ([`Unwalked`](crate::scope::Unwalked)), or at a `FOR ALL` bound over a
+//! run-bound name; both hold.
 //!
 //! A fact's values are laid through the walk's `lay`, at the records' lifetime; every other value
 //! rests in the scratch the rules are handed.
@@ -26,11 +30,11 @@ use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
 use crate::parse::quoted_body;
 use crate::parse::{KExpression, Role};
 use crate::scope::{
-    Address, Binder, BodyShape, Bound, Builtins, Callable, CaptureSlot, CaptureSource, Component,
-    Coordinate, Elaboration, FunctionGroupMap, OpenKind, OpenMark, ParameterBinding, PathName,
-    Registered, Registration, Repeated, Resolved, Segment, ShapeError, ShapeGroupMap, ShapeKind,
-    Shapes, Site, Slot, Static, StaticCallable, StaticRegistered, StaticType, SurfacedHead, Target,
-    TypeExpression, Unknown, Variable, source_of,
+    Address, AsWritten, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Component,
+    Coordinate, Elaboration, FunctionGroupMap, ParameterBinding, PathName, Question, Registered,
+    Registration, Repeated, Resolved, Segment, ShapeError, ShapeGroupMap, ShapeKind, Shapes, Site,
+    Slot, Static, StaticCallable, StaticRegistered, StaticType, SurfacedHead, Target,
+    TypeExpression, Unknown, Unresolved, Variable, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -41,35 +45,38 @@ use crate::values::{Chain, Knotted, Value};
 
 use super::declaration::{HeadShape, signature_heads, type_declarations};
 use super::expression::{Elaborator, Fellows, Groups, type_expression};
-use super::judge::Marks;
+use super::judge::{Derives, Marks};
 use super::reads::{Reads, TypeAt};
 use super::signature::callable_type;
+use std::convert::Infallible;
 
 /// What the type half reads of the walk: the shape table, the binding, and every fact the walk has
 /// fixed so far. Each read of a fact gathers what the fact waits on.
 pub trait TypeContext<'graph, 'o> {
     fn shapes(&self) -> &'graph Shapes<'graph>;
-    /// What the binding gives `unknown`, where it binds it.
-    fn binding(&self, unknown: Unknown) -> Option<Bound<'o>>;
-    /// A type binder's declaration as far as the walk has it.
-    fn declared(&self, binder: Binder) -> StaticType<'o>;
-    /// A registration's entry as far as the walk has it.
-    fn registered(&self, binder: Binder) -> StaticRegistered<'o>;
+    /// The declaration of the type binder at `slot` of `body` as far as the walk has it.
+    fn declared(&self, body: Segment, slot: Slot) -> StaticType<'o>;
+    /// The entry of the registration at `slot` of `body` as far as the walk has it.
+    fn registered(&self, body: Segment, slot: Slot) -> StaticRegistered<'o>;
     /// A callable body's type as far as the walk has it.
     fn callable(&self, body: Segment) -> StaticCallable<'o>;
+    /// The type a `USING … SCOPE` body `body`'s surfaced type name at `slot` is, where its module's
+    /// static type declares the member exactly: a manifest member, or a head parameter it pins,
+    /// closed.
+    fn surfaced(&self, body: Segment, slot: Slot) -> Option<KType>;
     /// A callable body's own `FOR ALL` group as its body reads it, by group order: empty where the
     /// walk has not typed it.
     fn group_levels(&self, body: Segment) -> &'o [Parametric];
     /// A recorded type expression's type, for a surfaced head reading its ascription.
     fn expression(&self, segment: Segment, site: Site) -> StaticType<'o>;
-    /// What the path at `level` of the chain `root` roots resolves to, where the walk resolved it.
+    /// What the path at `level` of the chain `root` roots resolves to, where the walk resolved it:
+    /// `None` where it has not yet, which the reader asks it to.
     fn resolution(&self, root: Segment, level: usize) -> Option<Resolved>;
     /// Gather `unknowns`: each the binding leaves unbound, of a shape on the reader's chain.
     fn note(&self, unknowns: &[Unknown]);
-    /// Gather `unknown` open by `mark`, as [`note`](Self::note) gathers it named.
-    fn note_open(&self, unknown: Unknown, mark: OpenMark<'static>);
-    /// Where a judgement door marks.
-    fn marks(&self) -> &dyn Marks;
+    /// Where a judgement door marks, and what names its derived names: a walk, which names every
+    /// term.
+    fn marks(&self) -> &dyn Derives<Unwalked = Infallible>;
 }
 
 /// What every rule of the type half is handed beside its context: the builtin table, the chain it
@@ -149,17 +156,6 @@ where
         self.context.shapes()
     }
 
-    /// The closed type the binding gives the type name at `address` of `segment`.
-    fn bound(&self, segment: Segment, address: Address) -> Option<KType> {
-        match self.context.binding(Unknown {
-            segment,
-            at: address,
-        })? {
-            Bound::Type(bound) => Some(bound),
-            Bound::Module { .. } => None,
-        }
-    }
-
     /// What `at`, read in `segment`, holds, each unknown the read reaches gathered.
     fn classify(&self, segment: Segment, at: Coordinate) -> Class<'o> {
         let (hops, target) = match at {
@@ -183,21 +179,15 @@ where
     fn slot_at(&self, segment: Segment, slot: Slot) -> Class<'o> {
         let shape = self.shapes().shape_at(segment);
         let address = Address::Slot(slot);
-        if let Some(bound) = self.bound(segment, address) {
-            return Class::Type(bound);
-        }
         let unknown = Unknown {
             segment,
             at: address,
         };
         if shape.declarations(slot).is_some() {
-            return match self.context.declared(Binder {
-                body: segment,
-                slot,
-            }) {
+            return match self.context.declared(segment, slot) {
                 Static::Closed(handle) => Class::Type(handle),
-                // A rigid binder is the names its declaration reads, so a binding of one wakes its
-                // reader, and nothing binds the binder itself.
+                // A rigid binder is the names its declaration reads, so its reader waits on each,
+                // and nothing binds the binder itself.
                 Static::Rigid { value, variables } => {
                     for variable in variables {
                         if let Variable::Type { level, .. } = variable
@@ -225,6 +215,10 @@ where
         let BinderSymbol::Type(name) = shape.slot_name(slot) else {
             return Class::NotAType;
         };
+        // A surfaced name its module's signature declares exactly is that type at every binding.
+        if let Some(exactly) = self.context.surfaced(segment, slot) {
+            return Class::Type(exactly);
+        }
         self.note(unknown);
         if let Some(variable) = self.own(shape, name) {
             return Class::Variable(variable);
@@ -267,9 +261,6 @@ where
         let root = shape.kind() == ShapeKind::Code
             && (!typed || self.shapes().level(segment, address).is_some());
         if root {
-            if let Some(bound) = self.bound(segment, address) {
-                return Class::Type(bound);
-            }
             // A name the code binds itself is one of the code's own.
             self.note(Unknown {
                 segment,
@@ -329,6 +320,7 @@ where
         let name = match address {
             Address::Slot(slot) => shape.slot_name(slot),
             Address::Capture(capture) => shape.captures()[capture.index()].name,
+            Address::Held(_) => unreachable!("a run-bound type name has a binder"),
         };
         let BinderSymbol::Type(name) = name else {
             unreachable!("a run-bound name is a type name");
@@ -357,34 +349,6 @@ where
         self.noted.set(noted);
     }
 
-    /// [`left_unknown`](Self::left_unknown) for a type binder or a type expression: every rule over
-    /// a run-bound name there states its question, so the reader leaves it unknown over no name
-    /// (debug builds check it). One it does leave so holds, marked as a `FOR ALL` bound is.
-    fn left_unknown_unbounded(&self) {
-        let noted = self.noted.replace(BumpVec::new_in(self.tools.scratch));
-        debug_assert!(
-            noted.is_empty(),
-            "a type binder or a type expression is left unknown over a run-bound name"
-        );
-        self.noted.set(noted);
-        self.left_unknown();
-    }
-
-    /// Mark open every unknown this reader gathered: what it typed is left unknown over them, and
-    /// a binding of one may close it ([`ForAllBound`](crate::scope::OpenKind::ForAllBound)).
-    fn left_unknown(&self) {
-        let noted = self.noted.replace(BumpVec::new_in(self.tools.scratch));
-        let mark = OpenMark::undecided(
-            OpenKind::ForAllBound,
-            None,
-            DeclaredType::Type(KType::ANY.into()),
-        );
-        noted
-            .iter()
-            .for_each(|unknown| self.context.note_open(*unknown, mark));
-        self.noted.set(noted);
-    }
-
     /// Record a rigid read of `variable`, once per variable.
     fn read(&self, variable: Variable) {
         self.rigid.set(self.rigid.get() + 1);
@@ -396,34 +360,46 @@ where
     }
 
     /// The path `self.shape` spells at `site`, read through its resolution: `root` is where the
-    /// shape reads its root, `None` for one written in place.
-    fn path(&self, site: Site, at: Option<Coordinate>, label: TypeSymbol) -> TypeAt {
+    /// shape reads its root, `None` for one written in place. Unknown past the chain; a request
+    /// where the walk has not resolved it yet.
+    fn path(
+        &self,
+        site: Site,
+        at: Option<Coordinate>,
+        label: TypeSymbol,
+    ) -> Result<TypeAt, Unresolved> {
         let shapes = self.shapes();
         let segment = self.shape.segment();
         let index =
             (self.shape.spelled_at(site)).expect("the builder records every path a type spells");
-        let Some(level) = shapes.path_level(segment, index) else {
-            return TypeAt::Unknown;
+        let level = match shapes.path_level(segment, index) {
+            Ok(level) => level,
+            Err(unwalked) => return Ok(TypeAt::Unknown(unwalked)),
         };
         let root = shapes.chain_root(segment);
-        match self.context.resolution(root, level) {
-            Some(Resolved::Closed(closed)) => TypeAt::Type(closed),
-            // A pin over run-bound names: rigid over them, which a binding closes by level.
-            Some(Resolved::Over(over)) => {
-                self.rigid.set(self.rigid.get() + 1);
-                TypeAt::Rigid(over)
-            }
-            Some(Resolved::Class(class)) => {
-                self.read(Variable::Path {
-                    class,
-                    at,
-                    root,
-                    entry: PathName::Spelled(level),
-                });
-                TypeAt::Rigid(self.tools.types.path_variable(class, label, KType::ANY))
-            }
-            _ => TypeAt::Unknown,
-        }
+        let unresolved = Unresolved {
+            segment,
+            index: index as u32,
+        };
+        Ok(
+            match self.context.resolution(root, level).ok_or(unresolved)? {
+                Resolved::Closed(closed) => TypeAt::Type(closed),
+                // A pin over run-bound names: rigid over them, which a binding closes by level.
+                Resolved::Over(over) => {
+                    self.rigid.set(self.rigid.get() + 1);
+                    TypeAt::Rigid(over)
+                }
+                Resolved::Class(class) => {
+                    self.read(Variable::Path {
+                        class,
+                        at,
+                        root,
+                        entry: PathName::Spelled(level),
+                    });
+                    TypeAt::Rigid(self.tools.types.path_variable(class, label, KType::ANY))
+                }
+            },
+        )
     }
 
     /// `value`, typed through this reader: closed when it read no lexical variable — then concrete,
@@ -452,8 +428,19 @@ where
     C: TypeContext<'graph, 'o> + ?Sized,
     X: Knotted,
 {
+    type Unwalked = Infallible;
+
     fn shape(&self) -> &'graph BodyShape<'graph> {
         self.shape
+    }
+
+    fn written_bound(
+        &self,
+        variable: Parametric,
+        types: &Chain<'_, '_, '_, '_>,
+    ) -> Option<AsWritten> {
+        let level = super::judge::lexical_level(types, variable)?;
+        self.shapes().written_bound(self.shape.segment(), level)
     }
 
     fn type_at(&self, at: Coordinate) -> TypeAt {
@@ -497,7 +484,7 @@ where
         self.rigid.get()
     }
 
-    fn marks(&self) -> &dyn Marks {
+    fn marks(&self) -> &dyn Derives<Unwalked = Infallible> {
         self.context.marks()
     }
 
@@ -509,8 +496,11 @@ where
         _chain: &[ValueSymbol],
         label: TypeSymbol,
         _types: &Chain<'_, '_, '_, '_>,
-    ) -> Option<(TypeAt, KType)> {
-        Some((self.path(site, Some(at), label), KType::EMPTY_SIGNATURE))
+    ) -> Result<Option<(TypeAt, KType)>, Unresolved> {
+        Ok(Some((
+            self.path(site, Some(at), label)?,
+            KType::EMPTY_SIGNATURE,
+        )))
     }
 
     /// A path through the expression at `root`, written in place, read through its resolution.
@@ -520,7 +510,7 @@ where
         _root: Site,
         _chain: &[ValueSymbol],
         label: TypeSymbol,
-    ) -> TypeAt {
+    ) -> Result<TypeAt, Unresolved> {
         self.path(site, None, label)
     }
 }
@@ -530,9 +520,24 @@ where
 /// own group's variables, so none escapes free.
 const FREE: &str = "a load-time type that read no lexical variable holds no variable";
 
+/// Where typing one of a unit's types stops short: a refusal, or a path the walk had not resolved
+/// when a reader met it, which the walk resolves before typing again.
+pub enum Stop<'o> {
+    Refused(ShapeError<'o>),
+    Unresolved(Unresolved),
+}
+
+/// `error`, a refusal located at `at`, or the path it asks the walk to resolve.
+fn refused<'o>(error: Elaboration, at: SourceRef) -> Stop<'o> {
+    match error {
+        Elaboration::Unresolved { path, .. } => Stop::Unresolved(path),
+        error => Stop::Refused(ShapeError::Type { error, at }),
+    }
+}
+
 /// Type the component `component` of type binders of `shape`: each member's declaration, closed,
-/// rigid over the run-bound names it reads, laid through `lay`, or unknown. A member the binding
-/// binds is closed at its binding. A refused declaration refuses where it is written.
+/// rigid over the run-bound names it reads, laid through `lay`, or unknown. A refused declaration
+/// refuses where it is written.
 pub fn declarations<'graph, 'o, C, X>(
     context: &C,
     tools: Tools<'_, '_, '_, '_, '_, '_, '_, X>,
@@ -540,33 +545,30 @@ pub fn declarations<'graph, 'o, C, X>(
     shape: &'graph BodyShape<'graph>,
     component: &Component<'graph>,
     each: &mut dyn FnMut(Slot, StaticType<'o>),
-) -> Result<(), ShapeError<'o>>
+) -> Result<(), Stop<'o>>
 where
     C: TypeContext<'graph, 'o> + ?Sized,
     X: Knotted,
 {
     let reader = Reader::new(context, tools, shape);
     let typed = type_declarations(component, &reader, tools.types, tools.scratch);
-    let bound = |slot: Slot| reader.bound(shape.segment(), Address::Slot(slot));
     match typed {
         Ok(handles) => {
             let types = tools.types;
             for (slot, handle) in component.members.iter().zip(handles) {
                 each(
                     *slot,
-                    match bound(*slot) {
-                        Some(bound) => Static::Closed(bound),
-                        None => reader.fixed(lay, *handle, |handle| {
-                            super::judge::static_of(types, handle).expect(FREE)
-                        }),
-                    },
+                    reader.fixed(lay, *handle, |handle| {
+                        super::judge::static_of(types, handle).expect(FREE)
+                    }),
                 );
             }
         }
+        // A `FOR ALL` bound inside a type over a run-bound name is refused below: each binding
+        // would make the type a different one, and no type written over names holds such a scheme.
         Err(Elaboration::Unknown { .. }) => {
-            reader.left_unknown_unbounded();
             for slot in component.members {
-                each(*slot, bound(*slot).map_or(Static::Unknown, Static::Closed));
+                each(*slot, Static::Unknown);
             }
         }
         Err(error) => {
@@ -575,7 +577,7 @@ where
             let at = nodes
                 .find_map(|node| source_of(shape, node, error.site()))
                 .unwrap_or(first.source);
-            return Err(ShapeError::Type { error, at });
+            return Err(refused(error, at));
         }
     }
     Ok(())
@@ -589,7 +591,7 @@ pub fn expression<'graph, 'o, C, X>(
     lay: impl Lays<'o>,
     shape: &'graph BodyShape<'graph>,
     expression: &TypeExpression<'graph>,
-) -> Result<StaticType<'o>, ShapeError<'o>>
+) -> Result<StaticType<'o>, Stop<'o>>
 where
     C: TypeContext<'graph, 'o> + ?Sized,
     X: Knotted,
@@ -620,30 +622,29 @@ where
         Ok(handle) => Ok(reader.fixed(lay, handle, |handle| {
             super::judge::static_of(types, handle).expect(FREE)
         })),
-        Err(Elaboration::Unknown { .. }) => {
-            reader.left_unknown_unbounded();
-            Ok(Static::Unknown)
-        }
+        Err(Elaboration::Unknown { .. }) => Ok(Static::Unknown),
         Err(error) => {
             let statement = &shape.body()[expression.statement as usize];
-            Err(ShapeError::Type {
+            Err(refused(
                 error,
-                at: located(shape, statement, error, expression.site),
-            })
+                located(shape, statement, error, expression.site),
+            ))
         }
     }
 }
 
 /// Refuse the first `MATCH … WITH` guard among `shape`'s `expressions`, in program order, that
-/// `typed` gives the handle an earlier guard of its arm set has: each guard typed once.
-pub fn guards<'graph, 'o>(
+/// `typed` gives the handle an earlier guard of its arm set has: each guard typed once. Else each
+/// pair a binding may make alike, in the order that refusal reads them: whether the two are one
+/// type, beside the refusal naming the later.
+pub fn guards<'graph, 'o, 'x>(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     shape: &'graph BodyShape<'graph>,
     expressions: &[&TypeExpression<'graph>],
-    scratch: BumpAllocator<'_>,
+    scratch: BumpAllocator<'x>,
     typed: impl Fn(&TypeExpression<'graph>) -> StaticType<'o>,
-) -> Result<(), ShapeError<'o>> {
+) -> Result<Repeats<'x, 'o>, ShapeError<'o>> {
     let handle = |typed: StaticType<'_>| match typed {
         Static::Closed(handle) => Some(Parametric::from(handle)),
         Static::Rigid { value: handle, .. } => Some(handle),
@@ -660,44 +661,63 @@ pub fn guards<'graph, 'o>(
         }
     }
     known.sort_unstable_by_key(|(arms, guard, written, _)| (*arms, *guard, *written));
-    // A binding may make two guards of one arm set alike, or tell two apart: each pair is one
-    // where `same` says so, and the guard written later repeats the one written first.
-    let mut repeats = BumpVec::new_in(scratch);
-    for set in known.chunk_by(|(held, ..), (arms, ..)| held == arms) {
-        for (at, (_, one, written, expression)) in set.iter().enumerate() {
-            for (_, other, again, repeated) in set[at + 1..].iter() {
-                if !super::judge::same(marks, types, *one, *other) {
-                    continue;
-                }
-                repeats.push(match written <= again {
-                    true => (*repeated, *expression, *other, *written),
-                    false => (*expression, *repeated, *one, *again),
-                });
-            }
-        }
-    }
-    // The repeat written first, beside the first guard it repeats.
-    let repeat = (repeats.iter())
-        .min_by_key(|(expression, _, _, first)| (expression.site, *first))
-        .map(|(expression, first, guard, _)| (*expression, *first, *guard));
-    let Some((expression, first, guard)) = repeat else {
-        return Ok(());
-    };
     let body = shape.body();
     let source = |expression: &TypeExpression<'_>| {
         let statement = &body[expression.statement as usize];
         source_of(shape, statement, expression.site).unwrap_or(statement.source)
     };
-    Err(ShapeError::RepeatedGuard {
-        guard: Repeated::Type(guard),
-        first: source(first),
-        at: source(expression),
-    })
+    // A binding may make two guards of one arm set alike, or tell two apart: each pair is one
+    // where `same` says so, and the guard written later repeats the one written first. The
+    // repeat written first refuses, beside the first guard it repeats.
+    let mut repeats = BumpVec::new_in(scratch);
+    for set in known.chunk_by(|(held, ..), (arms, ..)| held == arms) {
+        for (at, (_, one, written, expression)) in set.iter().enumerate() {
+            for (_, other, again, repeated) in set[at + 1..].iter() {
+                let same = super::judge::same_decided(marks, types, scratch, *one, *other);
+                if same == Some(false) {
+                    continue;
+                }
+                let (expression, first, guard, first_written) = match written <= again {
+                    true => (*repeated, *expression, *other, *written),
+                    false => (*expression, *repeated, *one, *again),
+                };
+                let refusal = ShapeError::RepeatedGuard {
+                    guard: Repeated::Type(guard),
+                    first: source(first),
+                    at: source(expression),
+                };
+                let asked = Question::Same {
+                    a: (*one).into(),
+                    b: (*other).into(),
+                };
+                let key = (expression.site, first_written);
+                repeats.push((same == Some(true), key, (asked, refusal)));
+            }
+        }
+    }
+    repeats.sort_unstable_by_key(|(_, key, _)| *key);
+    if let Some((_, _, (_, refusal))) = repeats.iter().find(|(same, ..)| *same) {
+        return Err(*refusal);
+    }
+    let mut asked = BumpVec::with_capacity_in(repeats.len(), scratch);
+    asked.extend(repeats.iter().map(|(_, _, asked)| *asked));
+    Ok(asked)
 }
+
+/// What a binding may refuse among a unit's `MATCH … WITH` guards ([`guards`]): each pair's
+/// question whether the two are one type, beside the refusal naming the later, first refusing
+/// first.
+pub type Repeats<'x, 'o> = BumpVec<'x, (Question<'x>, ShapeError<'o>)>;
 
 /// Each `SIG` a block's surfaced heads name, by its declaring segment and slot, beside its handle
 /// and its heads' shapes — `None` where it does not type — so a unit elaborates each once.
-pub type Signatures<'p> = BumpVec<'p, ((Segment, Slot), Option<(KType, BumpVec<'p, HeadShape>)>)>;
+pub type Signatures<'p> = BumpVec<
+    'p,
+    (
+        (Segment, Slot),
+        Option<(Parametric, BumpVec<'p, HeadShape>)>,
+    ),
+>;
 
 /// The bucket entry of `registration`, one of `shape`'s: a definition's from its callable's type,
 /// a surfaced head's from its signature or its module body. `Unknown` where the load cannot know
@@ -709,7 +729,7 @@ pub fn registration<'graph, 'o, 'p, C, X>(
     shape: &'graph BodyShape<'graph>,
     registration: &Registration<'graph>,
     signatures: &mut Signatures<'p>,
-) -> Result<StaticRegistered<'o>, ShapeError<'o>>
+) -> Result<StaticRegistered<'o>, Stop<'o>>
 where
     C: TypeContext<'graph, 'o> + ?Sized,
     X: Knotted,
@@ -718,6 +738,7 @@ where
     if let Some(heads) = registration.surfaced {
         return Ok(
             surfaced(context, tools, lay, shape, registration, heads, signatures)
+                .map_err(Stop::Unresolved)?
                 .unwrap_or(Static::Unknown),
         );
     }
@@ -726,6 +747,7 @@ where
     };
     let reader = Reader::new(context, tools, shape);
     match callable_type(form, &reader, types, tools.scratch, Some(registration)) {
+        // A shape beside bounds over an encloser's names reads them, so it is rigid over them.
         Ok(callable) => {
             let registered = callable
                 .registered
@@ -735,15 +757,11 @@ where
                 close_registered(types, registered)
             }))
         }
-        // Only a `FOR ALL` bound naming a run-bound name reaches here: marked, so the unit holds.
-        Err(Elaboration::Unknown { .. }) => {
-            reader.left_unknown();
-            Ok(Static::Unknown)
-        }
-        Err(error) => Err(ShapeError::Type {
+        Err(Elaboration::Unknown { .. }) => Ok(Static::Unknown),
+        Err(error) => Err(refused(
             error,
-            at: source_of(shape, form, error.site()).unwrap_or(form.source),
-        }),
+            source_of(shape, form, error.site()).unwrap_or(form.source),
+        )),
     }
 }
 
@@ -758,7 +776,7 @@ fn surfaced<'graph, 'o, 'p, C, X>(
     registration: &Registration<'graph>,
     heads: &[SurfacedHead<'graph>],
     signatures: &mut Signatures<'p>,
-) -> Option<StaticRegistered<'o>>
+) -> Result<Option<StaticRegistered<'o>>, Unresolved>
 where
     C: TypeContext<'graph, 'o> + ?Sized,
     X: Knotted,
@@ -787,23 +805,24 @@ where
                 ..
             },
         ] => {
-            let holder = shapes.up(block.segment(), *hops)?;
-            let body = shapes.shape_at(holder).births(*slot)?;
+            let Some(holder) = shapes.up(block.segment(), *hops) else {
+                return Ok(None);
+            };
+            let Some(body) = shapes.shape_at(holder).births(*slot) else {
+                return Ok(None);
+            };
             let mut at_key =
                 (body.registrations().iter()).filter(|held| held.key == registration.key);
             let (Some(held), None) = (at_key.next(), at_key.next()) else {
-                return None;
+                return Ok(None);
             };
             // The definition's entry, closed or written over names, which a binding closes alike.
-            match context.registered(Binder {
-                body: body.segment(),
-                slot: held.slot,
-            }) {
+            Ok(match context.registered(body.segment(), held.slot) {
                 Static::Unknown => None,
                 entry => Some(entry),
-            }
+            })
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -821,23 +840,28 @@ fn signature_head<'graph, 'o, 'p, C, X>(
     registration: &Registration<'graph>,
     (head, (declared_hops, slot), (hops, site)): (&KExpression<'graph>, (u32, Slot), (u32, Site)),
     signatures: &mut Signatures<'p>,
-) -> Option<StaticRegistered<'o>>
+) -> Result<Option<StaticRegistered<'o>>, Unresolved>
 where
     C: TypeContext<'graph, 'o> + ?Sized,
     X: Knotted,
 {
     let (shapes, types, scratch) = (context.shapes(), tools.types, tools.scratch);
-    let ascribing = shapes.up(block.segment(), hops)?;
+    let Some(ascribing) = shapes.up(block.segment(), hops) else {
+        return Ok(None);
+    };
     // An ascription over run-bound names is an application whose pins are over them: the entry
     // is rigid over what the ascription reads, which a binding closes alike.
     let (ascribed, read): (Parametric, &[Variable]) = match context.expression(ascribing, site) {
         Static::Closed(ascribed) => (ascribed.into(), &[]),
         Static::Rigid { value, variables } => (value, variables),
-        Static::Unknown => return None,
+        Static::Unknown => return Ok(None),
     };
     let mut pins = BumpVec::new_in(scratch);
     let signature = match super::judge::node_unless_variable(types, ascribed) {
-        Some(TypeNode::Signature { .. }) => super::judge::static_of(types, ascribed)?,
+        Some(TypeNode::Signature { .. }) => match super::judge::static_of(types, ascribed) {
+            Some(signature) => signature,
+            None => return Ok(None),
+        },
         Some(TypeNode::SignatureApply {
             signature,
             pins: pinned,
@@ -845,28 +869,38 @@ where
             pins.extend(pinned.iter());
             signature
         }
-        _ => return None,
+        _ => return Ok(None),
     };
-    let declaring = (shapes.up(block.segment(), declared_hops)?, slot);
+    let Some(declaring) = shapes.up(block.segment(), declared_hops) else {
+        return Ok(None);
+    };
+    let declaring = (declaring, slot);
     // The `SIG` declaration's heads read what its binder reads.
-    let _ = context.declared(Binder {
-        body: declaring.0,
-        slot,
-    });
+    let _ = context.declared(declaring.0, slot);
     let index = match signatures.iter().position(|(held, _)| *held == declaring) {
         Some(index) => index,
         None => {
             let declarer = shapes.shape_at(declaring.0);
-            let node = declarer.declarations(slot)?;
+            let Some(node) = declarer.declarations(slot) else {
+                return Ok(None);
+            };
             let reader = Reader::new(context, tools, declarer);
-            let heads = signature_heads(node, &reader, types, scratch).ok();
+            // A path the walk has not resolved is asked for, never cached as no heads.
+            let heads = match signature_heads(node, &reader, types, scratch) {
+                Ok(heads) => Some(heads),
+                Err(Elaboration::Unresolved { path, .. }) => return Err(path),
+                Err(_) => None,
+            };
             signatures.push((declaring, heads));
             signatures.len() - 1
         }
     };
-    let (declared, heads) = signatures[index].1.as_ref()?;
+    let Some((declared, heads)) = signatures[index].1.as_ref() else {
+        return Ok(None);
+    };
     debug_assert_eq!(
-        *declared, signature,
+        *declared,
+        Parametric::from(signature),
         "an ascription names the signature its SIG declares"
     );
     // A head's site is its declarer's, where the `SIG` writes it.
@@ -898,7 +932,14 @@ where
             },
         });
     }
-    head_entry(&reader, lay, registration, *shape, &schema, &pins)
+    Ok(head_entry(
+        &reader,
+        lay,
+        registration,
+        *shape,
+        &schema,
+        &pins,
+    ))
 }
 
 /// The bucket entry of `registration`, a surfaced signature head whose `SIG` declares `shape`
@@ -934,7 +975,7 @@ where
                 match reader.type_at(local) {
                     TypeAt::Type(handle) => handle.into(),
                     TypeAt::Rigid(handle) => handle,
-                    TypeAt::NotAType | TypeAt::Unknown => return None,
+                    TypeAt::NotAType | TypeAt::Unknown(_) => return None,
                 }
             }
         };
@@ -945,6 +986,7 @@ where
         shape: ranked(types, scratch, read, registration.classes),
         quantifier_map: ShapeGroupMap::default(),
         parameters: ParameterBinding::Named(&[]),
+        rebounds: crate::scope::Rebounds::NONE,
     };
     Some(reader.fixed(lay, registered, |registered| {
         close_registered(types, registered)
@@ -984,7 +1026,8 @@ pub fn callable<'graph, 'o, C, X>(
     lay: impl Lays<'o>,
     encloser: &'graph BodyShape<'graph>,
     body: &'graph BodyShape<'graph>,
-) -> Result<StaticCallable<'o>, ShapeError<'o>>
+    registration: Option<&Registration<'graph>>,
+) -> Result<StaticCallable<'o>, Stop<'o>>
 where
     C: TypeContext<'graph, 'o> + ?Sized,
     X: Knotted,
@@ -992,27 +1035,31 @@ where
     let types = tools.types;
     let form = body.form().expect("a callable body sits in its form");
     let reader = Reader::new(context, tools, encloser);
-    match callable_type(form, &reader, types, tools.scratch, None) {
+    match callable_type(form, &reader, types, tools.scratch, registration) {
+        // Its registration's entry is the registration's own fact. A scheme beside bounds over an
+        // encloser's names reads them, so it is rigid over them.
         Ok(callable) => {
-            let callable = laid_callable(lay, callable);
+            let callable = laid_callable(
+                lay,
+                Callable {
+                    registered: None,
+                    ..callable
+                },
+            );
             Ok(reader.fixed(lay, callable, |callable| close_callable(types, callable)))
         }
-        // Only a `FOR ALL` bound naming a run-bound name reaches here: marked, so the unit holds.
-        Err(Elaboration::Unknown { .. }) => {
-            reader.left_unknown();
-            Ok(Static::Unknown)
-        }
-        Err(error) => Err(ShapeError::Type {
+        Err(Elaboration::Unknown { .. }) => Ok(Static::Unknown),
+        Err(error) => Err(refused(
             error,
-            at: source_of(encloser, form, error.site()).unwrap_or(form.source),
-        }),
+            source_of(encloser, form, error.site()).unwrap_or(form.source),
+        )),
     }
 }
 
 /// The callable `body`'s own group as its body reads it, read off its type `typed`, by group
 /// order: the group's variable `i` is the lexical variable of the name it is, at that name's
-/// shape level — or, where the binding binds it, the type it binds. Empty where the callable
-/// writes no `FOR ALL` group or the load did not type it.
+/// shape level; each bound over an encloser's names at its upper end. Empty where the callable writes no `FOR ALL` group or the load did not
+/// type it.
 pub fn own_levels<'graph, 'o, C, X>(
     context: &C,
     tools: Tools<'_, '_, '_, '_, '_, '_, '_, X>,
@@ -1054,18 +1101,9 @@ where
             .slot(BinderSymbol::Type(name))
             .expect("a `FOR ALL` name has its slot");
         let address = Address::Slot(slot);
-        let unknown = Unknown {
-            segment: body.segment(),
-            at: address,
-        };
-        match context.binding(unknown) {
-            Some(Bound::Type(closed)) => closed.into(),
-            _ => {
-                let level = (context.shapes().level(body.segment(), address))
-                    .expect("a `FOR ALL` name has its level");
-                types.lexical(level, name, *bound)
-            }
-        }
+        let level = (context.shapes().level(body.segment(), address))
+            .expect("a `FOR ALL` name has its level");
+        types.lexical(level, name, *bound)
     }));
     collect(lay, levels.iter().copied())
 }
@@ -1076,6 +1114,7 @@ fn laid_callable<'o, T: Copy>(lay: impl Lays<'o>, callable: Callable<'_, T>) -> 
         ktype: callable.ktype,
         quantifier_map: FunctionGroupMap(collect(lay, callable.quantifier_map.iter())),
         registered: (callable.registered).map(|registered| laid_registered(lay, registered)),
+        rebounds: callable.rebounds.laid(lay),
     }
 }
 
@@ -1093,6 +1132,7 @@ fn laid_registered<'o, T: Copy>(
             }
             ParameterBinding::Operands => ParameterBinding::Operands,
         },
+        rebounds: registered.rebounds.laid(lay),
     }
 }
 
@@ -1108,6 +1148,7 @@ fn close_callable<'o>(
         registered: callable
             .registered
             .map(|registered| close_registered(types, registered)),
+        rebounds: crate::scope::Rebounds::NONE,
     }
 }
 
@@ -1121,6 +1162,7 @@ fn close_registered<'o>(
         shape: super::judge::static_declared(types, registered.shape).expect(FREE),
         quantifier_map: registered.quantifier_map,
         parameters: registered.parameters,
+        rebounds: crate::scope::Rebounds::NONE,
     }
 }
 

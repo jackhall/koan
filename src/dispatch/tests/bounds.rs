@@ -58,7 +58,7 @@ fn ran(source: &str, budget: BuildBudget) -> (String, Tiers, usize) {
 
 /// A loop down `h` that calls `KEEP` on each hop's module — a fresh load-content binding wherever
 /// the module differs — and, where `composes`, composes and runs the hop's quote, so the depot holds
-/// settlements and compositions both.
+/// compositions.
 fn looping(composes: bool) -> String {
     let compose = match composes {
         true => "(LET qs = [(ATTR h q)]) (EVAL #($..qs) -> Any) ",
@@ -80,17 +80,16 @@ proptest! {
         count in 1usize..6,
         depth in 1usize..24,
         seed in any::<u64>(),
-        settlements in 1usize..4,
+        compositions in 1usize..4,
         composes in any::<bool>(),
     ) {
-        // One settlement's weight sizes the budget, so a loop over more bindings must evict. The
-        // module is read off the hop at `Any`, as the loop reads it, so the call settles at run.
+        // One composition's weight sizes the budget, so a loop composing more quotes must evict.
         let (_, _, one) = ran(
-            &program(1, 1, |_| 0, "LET x = (KEEP (ATTR h m))\n"),
+            &program(1, 1, |_| 0, "LET qs = [(ATTR h q)]\nEVAL #($..qs) -> Any\n"),
             BuildBudget::default(),
         );
         let budget = BuildBudget {
-            bytes: NonZeroUsize::new(settlements * one).expect("a settlement weighs"),
+            bytes: NonZeroUsize::new(compositions * one).expect("a composition weighs"),
         };
         let pick = |at: usize| (seed.rotate_left(at as u32) as usize).wrapping_add(at);
         let (printed, tiers, _) = ran(&program(count, depth, pick, &looping(composes)), budget);
@@ -110,18 +109,15 @@ const DOWN: &str = "EXPR #(DOWN m :Holder h :Hop) -> Number = \
 
 #[test]
 fn what_frames_hold_is_linear_in_distinct_depot_slots_not_nesting_depth() {
-    // Every frame of a recursion under one binding runs under its one settlement, and two bindings
-    // alternating hold two, however deep.
-    for (count, live) in [(1, 1), (2, 2)] {
-        let held = [4, 32].map(|depth| {
-            let (printed, tiers, _) = ran(
+    // A recursion under one binding, and under two alternating, runs to its bottom however deep.
+    for count in [1, 2] {
+        for depth in [4, 32] {
+            let (printed, _, _) = ran(
                 &program(count, depth, |at| at, DOWN),
                 BuildBudget::default(),
             );
-            assert_eq!(printed, "7");
-            tiers.live
-        });
-        assert_eq!(held, [live, live], "{count} bindings");
+            assert_eq!(printed, "7", "{count} bindings at {depth}");
+        }
     }
 }
 

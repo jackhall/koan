@@ -6,7 +6,8 @@
 //! oracle that composes terms by brute force. [`harness`] reads a `Bound` as a load would.
 //! [`cases`] pins the design's examples and each refusal, [`edges`] the calls on sites, the
 //! `AnswersName` edges on arms, through calls and on sites, their knots, the demands each puts on
-//! Tarjan's stack and the evaluations kept, and [`rebuilt`] handles, budgets, view tables and
+//! Tarjan's stack and the evaluations kept, [`onward`] the onward calls into a statement's node,
+//! and [`rebuilt`] handles, budgets, view tables and
 //! replays. [`reference`] evaluates from scratch, sharing no code with
 //! the crate's evaluation, and [`laws`] states each law of [the crate](../README.md#laws) as a
 //! property over generated texts and bindings, with the same graph answered from scratch under
@@ -16,6 +17,7 @@ mod cases;
 mod edges;
 mod harness;
 mod laws;
+mod onward;
 #[cfg(feature = "perf")]
 mod perf;
 mod rebuilt;

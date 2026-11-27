@@ -56,10 +56,10 @@ silence the stale-anchor check; delete a redundant test instead.
   resident and cell runs, each module's member run and each barrier's resident are written into
   the same region, over the finished copies of the values the knot holds. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `thin_run`, `fill` and reattach seam.
-- `src/scheduler/depot.rs` — the build depot's settlements and compositions are `self_cell`s
-  whose dependents read their parents' and pinned compositions' bumps through the `Rc`s their
-  owners hold. No `unsafe` of its own; the backing `unsafe` is `self_cell`'s, and these tests pin
-  the release orders the depot's eviction makes.
+- `src/scheduler/depot.rs` — the build depot's compositions are `self_cell`s whose dependents
+  read their owners' bumps, held by the depot's `Rc` alone and dropped at eviction. No `unsafe` of
+  its own; the backing `unsafe` is `self_cell`'s, and the composed-syntax tests pin the drop an
+  eviction makes before a call rebuilds the composition.
 - `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
   successor, wakes its state out of its predecessor, and only then releases that predecessor, whose
   region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
@@ -82,8 +82,7 @@ silence the stale-anchor check; delete a redundant test instead.
   seam.
 - `src/scope/header.rs` — a habitat half's region header is laid once, through its header door
   or the door `values` holds projected to its branch slot, and holds `Cell`s written after it is
-  laid: the branch, and the decision memo of the cells whose results are built in the half,
-  replaced as a cell lays a new one. No `unsafe` of its own; the backing `unsafe` is
+  laid: the branch, and the outermost link of a kept cell's fault. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s header reattach and its projected door.
 - `src/knot/code.rs` — a code value's composed syntax is laid in a region through the syntax
   copier's `Writer` and read, after its composition is evicted, by values born of it or copied by
@@ -300,6 +299,11 @@ shorter brand than the one it was bound at.
   a frame evaluates its last statement in its own step through a view of its own activation and
   tails into the next frame, born beside it under its caller, so the crossing pins the frame's
   region before the frame is released — three hops under Miri, against two.
+- `a_part_held_in_place_is_read_from_its_slot_wherever_its_frame_hands_it`
+  a call or `EVAL` written in place, evaluated before its unit into a held slot at the tail of its
+  activation's slots and read back from there: among a tie's eager parts at the top level, in an
+  arm across tail hops, in a frame's tail statement whose value crosses the frame, and through a
+  lambda's capture of a binder over one.
 
 **Dispatch** ([src/dispatch/evaluate.rs](../src/dispatch/evaluate.rs)) — the evaluator selecting a
 registration's function under a frame's contract and hopping to its frame, its argument record built
@@ -315,8 +319,8 @@ in the frame's own step and crossed into the callee's birth.
   `Payload` segment below the frame's kept carrier through the arm's carrier chain; the arm's call
   hops to the next frame — through a nested `MATCH` too — three hops under Miri, against two.
 - `every_loop_runs_one_cell_per_hop_beside_each_frame_it_spawns`
-  two loops a few hops past warm — a hop under its settlement through a helper frame, and one
-  seeking it that threads a list into the loop cell through `MATCH` arms: every node, block and
+  two loops a few hops past warm — a hop through a helper frame, and one that threads a list
+  into the loop cell through `MATCH` arms: every node, block and
   supply of a hop rests in its frame's scratch as a pending entry across the frame's parks, read
   back at each wake, and no cell is born but a frame.
 - `an_instance_made_in_a_frame_is_called_where_it_lands`
@@ -355,29 +359,15 @@ in the frame's own step and crossed into the callee's birth.
 [src/values/habitat.rs](../src/values/habitat.rs)) — a half's header, laid by the first door that
 interns into it, its branch written through `Cell`s and read by a later chain over the same half.
 
-- `a_keyed_call_runs_beside_a_scratch_laid_before_it`
-  a scratch branch laid by an unkeyed call's caching chain, then read at the same park by a keyed
-  loop's caching chain of its own.
-
-**Build depot** ([src/scheduler/depot.rs](../src/scheduler/depot.rs)) — each settlement's facts
-are `self_cell`'s dependent, laid in its owner's bump and reading its parent's facts and the
-compositions it rests on or pins through the `Rc`s that owner holds, so a settlement, a
-composition and their pinners may be released in any order the depot's policy allows.
-
-- `a_child_settlement_keeps_its_parent_and_releases_it_last`
-  the depot's handle on a parent dropped first, the child's facts read through to the parent's
-  after, and the parent released last, by the child's own `Rc`.
-- `a_replay_borrows_every_level_it_reaches_until_the_frame_is_born`
-  a chain of three settlements, each over its parent's facts, evicted leaf first under a small
-  budget and settled again by a replay.
-- `a_pinned_composition_outlives_its_last_pinner`
-  a settlement whose facts read a wording out of a composition it pins, the depot's handle on the
-  composition dropped first, and the composition released last, by the pinner's own `Rc`.
+- `a_region_header_is_laid_on_the_first_intern_and_holds_the_branch`
+  a half's header and branch laid together by its first intern, through the header door, then read
+  back through the header in a later step of the same cell before the cell is released.
 
 **Composed syntax** ([src/knot/code.rs](../src/knot/code.rs),
-[src/scope/records.rs](../src/scope/records.rs)) — code composed at run time holds its syntax in the
-region its code value lives in, and every value born of it points into that root or, once copied,
-holds its own copy laid by the crossing.
+[src/scope/records.rs](../src/scope/records.rs), [src/scheduler/depot.rs](../src/scheduler/depot.rs))
+— code composed at run time holds its syntax in the region its code value lives in, and every value
+born of it points into that root or, once copied, holds its own copy laid by the crossing; its
+composition's facts, a `self_cell` the depot alone holds, are dropped whole at its eviction.
 
 - `a_quote_born_of_composed_code_runs_under_its_composition`
   a quote born inside composed code, its syntax inside the root's region-laid syntax, handed back
@@ -392,9 +382,9 @@ holds its own copy laid by the crossing.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-11-26: 2146s — 52 tests, 0 leaks, 0 UB
 - 2026-11-20: 2102s — 54 tests, 0 leaks, 0 UB
 - 2026-11-07: 1847s — 54 tests, 0 leaks, 0 UB
 - 2026-11-03: 2114s — 54 tests, 0 leaks, 0 UB
 - 2026-11-01: 1453s — 53 tests, 0 leaks, 0 UB
-- 2026-11-01: 4181s — 53 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

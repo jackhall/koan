@@ -1,13 +1,19 @@
 //! The import boundary, the storage discipline and the step's public surface, as tests over this
 //! module's own source.
 //!
-//! `scheduler` may name `knot`, `memory`, `scope`, `type_lattice` and `values` and nothing else in
-//! the crate — no `parse`, no `elaborate`; outside its tests it holds no owning heap type
+//! `scheduler` may name `knot`, `memory`, `scope`, `type_lattice` and `values`, and of `build` the
+//! binding graph a composition's depot slot owns, the cell it lays it in, the agent's instances,
+//! and the door to either base's instances a step's door lends, and nothing else in the crate — no `parse`, no
+//! `elaborate`; outside its tests it holds no owning heap type
 //! but its own runtime state, which is never a value in a region. A step names no handle and no
 //! carrier door.
 
 /// The path prefixes `scheduler` may name.
 const PREFIXES: &[&str] = &[
+    "crate::build::lay::BaseInstances",
+    "crate::build::lay::BindingGraph",
+    "crate::build::lay::GraphCell",
+    "crate::build::lay::Instances",
     "crate::knot",
     "crate::memory",
     "crate::scheduler",
@@ -22,13 +28,10 @@ const PREFIXES: &[&str] = &[
 ];
 
 /// The owning types outside the tests: the buffer a step pushes its requests into, the drain's
-/// ready stack, the build depot's slots and free list, and the shared hold each settlement's facts
-/// keep on their parent's and on the compositions they rest on or pin, and the depot keeps on a
-/// composition's; the levels of a replay a frame's first step hands the drain; and the request a
-/// frame's asker hands the drain, which it keeps in the frame's continuation until the
-/// frame's first step takes it. Each is the scheduler's runtime state, held beside the graph or in
-/// a cell's continuation slot and never written into a region, so a value's no-drop-glue discipline
-/// does not reach them. Beside them, the hop samples a test build's drain keeps in a thread-local.
+/// ready stack, the build depot's slots, its free list and the shared hold it keeps on a
+/// composition's facts. Each is the scheduler's runtime state, held beside the graph and never
+/// written into a region, so a value's no-drop-glue discipline does not reach them. Beside them,
+/// the hop samples a test build's drain keeps in a thread-local.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "requests: Vec<Asked<'graph, B>>"),
     ("src/scheduler/action.rs", "Vec::new()"),
@@ -36,24 +39,10 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/drain.rs", "Vec::new()"),
     ("src/scheduler/depot.rs", "slots: Vec<Slot<'graph>>"),
     ("src/scheduler/depot.rs", "use std::rc::Rc;"),
-    ("src/scheduler/depot.rs", "Rc<Settled<'graph>>"),
     ("src/scheduler/depot.rs", "Rc<Composed<'graph>>"),
     ("src/scheduler/depot.rs", "Rc::new(facts)"),
-    ("src/scheduler/depot.rs", "Rc::clone(facts)"),
     ("src/scheduler/depot.rs", "free: Vec<u32>"),
-    ("src/scheduler/seek.rs", "Replay(Vec<Replayed<'graph>>)"),
-    ("src/scheduler/drain.rs", "levels: Vec<Replayed<'graph>>"),
     ("src/scheduler/depot.rs", "Vec::new()"),
-    (
-        "src/scheduler/continuation.rs",
-        "Option<Box<Requested<'graph>>>",
-    ),
-    ("src/scheduler/action.rs", "Option<Box<Requested<'graph>>>"),
-    ("src/scheduler/drain.rs", "Option<Box<Requested<'graph>>>"),
-    (
-        "src/scheduler/drain.rs",
-        "Box::new(Requested { sought, image })",
-    ),
     ("src/scheduler/drain.rs", "RefCell<Vec<HopSample>>"),
 ];
 
@@ -114,7 +103,7 @@ fn only_the_scheduler_and_values_open_a_depot_ref() {
     );
 }
 
-/// The drain keeps settlements as books beside the cell graph, so between steps it reaches no cell
+/// The drain keeps compositions as books beside the cell graph, so between steps it reaches no cell
 /// but through a birth or a release: every `Fresh` cell borrows its parent's scratch and every
 /// `Shares` one is its host's tenant. The one door that reads a cell between steps is the graph's
 /// own read of a kept cell, `Graph::read_kept`, which the graph's owner calls between drains; a step

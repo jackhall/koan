@@ -23,9 +23,9 @@ A scope is built in three tiers, each at the moment its contents become known.
   [roles](../parse/builtin_shapes/role.rs) that node's `BUILTIN_SHAPES` entry
   gives them. Each shape a load builds carries its **segment**, an index the
   one shape builder assigns in the order it seals shapes: distinct per shape,
-  the same in every load of one text, and what a
-  [settlement's key](../build/README.md#keys-which-bindings-make-a-settlement)
-  names the body by, beside its base's digest. Every shape of a load reaches the one table the builder
+  the same in every load of one text, and what the
+  [binding graph](../build/README.md#the-binding-graphs-text) names the body
+  by within its base. Every shape of a load reaches the one table the builder
   fills once the root seals, so any shape finds any other by its segment
   (`BodyShape::shape_at`).
 
@@ -43,12 +43,12 @@ A scope is built in three tiers, each at the moment its contents become known.
   is born in, never as a copied value. A callable's birth reads every capture into
   scratch first and lays the run down only once every read is finished, so a
   closure binding is never a placeholder. Beside the run the bindings carry
-  the depot slot the callable was born under, an
-  [`DepotRef`](../build/README.md#references-between-frames-and-the-depot) a
-  call seeks its settlement beneath, the [stamp](stamp.rs) a call replays
-  where that depot slot is gone, and the layers its encloser's activation
-  decided before its birth ([`closure`](closure.rs)); none is content, so the
-  closure's digest and equality read the run alone.
+  the depot slot the callable was born under, a
+  [`DepotRef`](../scheduler/README.md#the-build-depot) a call's frame runs
+  under, and the handle words of each frame around it as they stood at its
+  birth, through which a call answers a question an encloser's bind site owns
+  ([`closure`](closure.rs)); neither is content, so the closure's digest and
+  equality read the run alone.
 - **Per-call bindings** — one activation per call, laid down in the call's
   frame region, and the top level's in the region of the program's
   [root](../program/README.md#the-top-level): a pointer to the callable's
@@ -166,7 +166,7 @@ refused where the walk types it, by handle
 ([guards](../elaborate/README.md#the-type-channel-at-load)). A tail arm's last
 statement is one of its owner's tail statements (`Shapes::tail_owner`, through
 every tail arm out to the callable or code body the `MATCH` ends): its calls
-are tail edges of that owner, and pair the owner's parameters it passes bare.
+are tail calls of that owner.
 
 ## Resolution
 
@@ -662,12 +662,12 @@ body:
   level, beside where the birth reads it in the activation around it, held in
   the closure past its builder's captures (`layout`, `coordinate_of`);
 - the tail-call facts ([`tails`](shapes/tails.rs)): which callables
-  **escape**, the parameters a body's own tail rebinds, and the parameters
-  every tail edge into a body passes on bare, a greatest fixpoint; beside
-  them each callable's **call sites**, every keyworded use listing it, every
+  **escape**, and each body's tail statements; beside them each callable's
+  **call sites**, every keyworded use listing it, every
   head mention of its binder and every offer of it to code an `EVAL` runs,
-  and which bodies lie in a quote's code,
-  which [the trace](../build/README.md#the-trace) reads;
+  and which bodies lie in a quote's code, which
+  [the binding graph's fold](../build/README.md#the-binding-graphs-text)
+  reads;
 - the **digest memos** ([`memos`](shapes/memos.rs)): the slots that keep one,
   each `:|` over a module binder read bare that reads them (`view_slots`), and
   which digested slot each call passes bare (`handoffs`).
@@ -677,13 +677,8 @@ body:
 unit typed — the unit's own body and each inline body it ran — what it births,
 the path entries it resolved first on its chain, and what the folds read; one
 closing record per owning body, a `Closing`; and, once the walk ends, the
-`Folds` per body, among them the
-[trace](../build/README.md#the-trace) at each call site of a keyed body in
-it and, on the body owning them, the **slot map** of each call site outside a
-quote's code whose trace covers every key of its callee: where the
-call is written and what it passes at each key, from which a layer of the body
-lays the site's request. A `Typed` holds, each
-table sorted by its key:
+`Folds` per body ([the folds](../build/README.md#the-folds)). A `Typed`
+holds, each table sorted by its key:
 
 - the type channel's facts: each type binder's declaration and each
   registration's expression shape, by slot, and each recorded **type
@@ -722,7 +717,8 @@ table sorted by its key:
   ascription at a closed signature builds, by its site, beside the overloads
   each keyworded member's covering picks where the module's content is closed,
   and each module binder's content tree, by slot; each **traced call**, a
-  call the load resolves to one callable body — a keyworded use with one
+  call the load resolves to one callable body, which the binding graph's
+  fold maps — a keyworded use with one
   candidate selected, by its node's site, or a call by name whose head is a
   knot member, by its head's site: the callee's segment, whether the call is
   by name, where the call is written, and, per slot, what the site passes
@@ -745,18 +741,12 @@ and the declared application it is read through, if any — beside its
 `Resolution`: the path's content tree and what
 [dispatch](../dispatch/README.md#paths) resolved it to, closed at a type or
 its class (`PathClass`), a digest of the class's label, application and tree
-identity. A layer indexes each unit record's paths by chain root and name, and
-the first unit resolving a path to each class by chain root and class
-(`Held::Path`, `Held::Class`), which is where a rooted walk reads a standing
-body's path, and what a class reads where the walk resolved none of its paths.
-A body's typed facts list, for each module binder, the identity of each module
-it holds: its own, and every one a member of a module body it holds holds in
-turn (`Typed.holding`), and a layer indexes each binder by the body and each of
-those identities (`Held::Holder`): where a rooted walk finds a standing body's
-binders a class is read through. A closing holds an owning body's class, exits,
+identity. A layer indexes each unit record's paths by chain root and name
+(`Held::Path`), which is where a reader finds a path's entry and resolution.
+A closing holds an owning body's class, exits,
 summary and recursion flag, each parameter's and the return's restamp — how
 its retype re-stamps, beside the declared type a binding's table closes —
-and for a quote's code the type a traced `EVAL` runs it at, the code's typing
+and for a quote's code the type an `EVAL` runs it at, the code's typing
 refusal and its overlap, which an `EVAL` reports beside the builder's own
 (`BodyShape::refusal`).
 
@@ -779,50 +769,38 @@ birth and the suites — reads facts through one set of readers
 (`typed_expression`, `value_type`, `use_statics`, `settled`, `instance_at`,
 `named_contributions`, `view_tree`, `route`, `arms`, `retype`, `class`, `caching` and
 the rest), so no reader names where a fact is kept. `LoadFacts` reads one
-load's unit and closing records; `Facts`, what a step's door hands it, reads a
-chain of one laid layer type, `BuildLayer` — its activation's decided layers,
-the settlements it runs under, and the base layer of the
-[composition](composition.rs) or load they rest on — innermost first
-([one laid layer](../build/README.md#the-store)). Each layer binds its own
-names alone, and a chain's binding is the union, read down its parents. A
-depot layer of a written body also carries, by shape and site, the
-**request** of each call site of the body that passes a slot of it on, and
-the load's base layer that of every site passing load content alone: the key
-and the ask of the binding the site passes. `request` reads the depot layer
-a cell runs under, then the base, so a call there seeks its layer by name. A step
-holds a `Facts` at its own borrow alone, so what it parks names a segment, a
-site or a digest. Every reader whose fact names a type takes the reading
-frame's chain before the shape and hands the fact back with each rigid type it
-names closed by a probe of the closed types the chain's layers hold
-([resumption](../build/README.md#resumption)), then each type resolving there.
-A probe reads a type's digest alone, so a closed type is minted as any other
-is, and a reader whose fact holds a slice of types takes the caller's scratch,
-which a slice is copied into only where a type in it closes. Over a
-composition, a type the chain lacks is minted from its
-term, found by digest in the composition's table and then each settlement's.
+load's unit and closing records; `Facts`, what a step's door hands it, reads
+the base layer of the [composition](composition.rs) or load it rests on
+([one laid layer](../build/README.md#the-store)), answered by the instances
+its frame holds: `Facts::answering` reads a stored question's answer through
+the frame's handles, `rebinding` closes a type under the frame's binding, and
+`framed` hands the readers the frame's slab and its enclosers' handle words
+([instances at run](../build/README.md#instances-at-run)). A step holds a
+`Facts` at its own borrow alone, so what it parks names a segment, a site or a
+digest. Every reader whose fact names a type takes the reading frame's chain
+before the shape and hands the fact back with each rigid type it names closed
+under the frame's binding, then each type resolving there. A reader whose fact
+holds a slice of types takes the caller's scratch, which a slice is copied
+into only where a type in it closes. Over a composition, a type the chain
+lacks is minted from its term, found by digest in the composition's table.
 The mint is private to the readers, so no run-side read can skip it; over the
-load and the settlements under the root it returns at once, since every type
-their facts name lies in the root or the agent tier. A walk that rests a layer
-on a step's facts takes their raw layers through `Facts::whole`, which first
-mints every term they hold into the walk's chain; only `LoadFacts`, whose types
-all lie in those two tiers, is itself a raw source of unit and closing records.
+load it returns at once, since every type its facts name lies in the root or
+the agent tier.
 A reader whose fact names no type (`route`, `picks`, `view_slots`, `handoffs`,
 `caching`) takes no chain.
 `at_run` reads a fact where the cell runs — closed, refused at every run, or
 left open to the run's own door — and never yields a rigid one, since every
-variable the load left open is bound in a layer the cell reads, which decides the fact closed or
-holds its closed type ([resumption](../build/README.md#resumption)). A slot's, a statement's or a birth's fact
+variable the load left open is bound in the frame's binding, which closes it.
+A slot's, a statement's or a birth's fact
 lies in the unit record of the unit the shape table names for it, so it reads
 that unit record directly; it indexes only each site, through and path fact,
 whose unit the shape cannot name, to the unit record holding it, and forwards
 the text facts to the shape table. A path's entry and its resolution read in
-one lookup (`path`). A `LoadFacts` may sit over a base: every read tries its
-own unit and closing records, then its base's, and a unit it re-ran replaces
-the base's unit record of it whole.
+one lookup (`path`).
 The load's is laid in program storage before the program is, and indexes every
 closed content tree its units computed by its **identity**, the digest the run
-computes for that content (`tree_of`), as a settlement's and a composition's
-facts index theirs. A body the walk has not typed — a quote's
+computes for that content (`tree_of`), as a composition's facts index
+theirs. A body the walk has not typed — a quote's
 code it refused — has no static types, every candidate of every use in it is
 *maybe*, and no ascription in it is settled.
 
@@ -837,8 +815,8 @@ compared only by identity; a `UnitId`, a body's segment and a unit's index in
 it; a `Bound`, what a binding gives an unknown — a type, or a module's closed
 content tree beside the exact type it carries; a `Binding`, unknowns sorted
 beside their bounds; and the `Store` trait the walk runs over.
-[`writes`](writes.rs) is the table a store keeps its writes in, one per unit,
-before it lays them as a layer.
+[`writes`](writes.rs) is the table the load's store keeps its writes in, one
+per unit, before it lays them as its base layer.
 
 **Content trees.** The value channel's trees are [`tree`](tree.rs)'s
 vocabulary: what the load knows of a module-valued expression's content
@@ -1638,14 +1616,12 @@ across shapes.
 
 What a koan graph keeps per habitat half is `scope`'s
 [region header](header.rs) (`RegionHeader`, laid as a `HalfHeader`):
-the half's type branch, the [decision memo](memo.rs) of the cells whose
-results are built in the half beside how many entries it has laid, and, in a
-kept cell's region, the outermost [link](#faults) of the fault it ended with.
-`values` reads the branch alone, through the projection `RegionHeader`
-defines, and the header is laid by the first door that interns into the half
-or lays a memo, so a half that needs neither stays untouched. What a step
-reads of shapes and facts it reads through its door, never through a header
-([the build module](../build/README.md#references-between-frames-and-the-depot)).
+the half's type branch and, in a kept cell's region, the outermost
+[link](#faults) of the fault it ended with. `values` reads the branch alone,
+through the projection `RegionHeader` defines, and the header is laid by the
+first door that interns into the half, so a half that never interns stays
+untouched. What a step reads of shapes and facts it reads through its door,
+never through a header ([the scheduler](../scheduler/README.md#what-a-step-may-name)).
 
 ## The import rule
 

@@ -28,10 +28,10 @@
 use std::cell::Cell;
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
-use crate::scope::{AtRun, BuildLayer, Elaboration, StaticInstance};
+use crate::scope::{AtRun, Elaboration, Encloser, StaticInstance};
 use crate::scope::{
     BodyAt, BodyRef, BodyShape, Candidate, ClosureBindings, ComposedRoot, Offer, Position,
-    Registration, ShapeKind, Site, Slot, Stamp, Written,
+    Registration, ShapeKind, Site, Slot, Written,
 };
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -312,6 +312,7 @@ impl<'cell> Typing<'cell> {
                     }
                     ParameterBinding::Operands => ParameterBinding::Operands,
                 },
+                rebounds: crate::scope::Rebounds::NONE,
             });
             resident(
                 writer,
@@ -390,8 +391,6 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     /// retypes it: `ktype` is then the annotation's retype.
     pub declared: Option<DeclaredType<KType>>,
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
-    /// What the activation the function is born in had decided, which its closure keeps.
-    pub decided: Option<&'cell BuildLayer<'cell>>,
     /// An untraced body's code, beside its body part's site in the shape it is born in and the
     /// parameters its composition binds.
     pub untraced: Option<(Knotted<'graph, 'cell>, Site, &'x [BinderSymbol])>,
@@ -414,7 +413,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     pub(super) fn laid_down(
         &self,
         writer: Writer<'cell, '_>,
-        born: (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
+        born: DepotRef,
         activation: &KReading<'_, 'graph, 'cell>,
         types: &Chain<'_, 'cell, '_, '_>,
     ) -> (
@@ -426,9 +425,11 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             BodyAt::Written(_) => None,
             BodyAt::Composed(body) => Some(body),
         };
+        // The frame's handle slab as it stands at the birth.
+        let encloser = Encloser::of_reading(writer, activation);
         let (closure, composing) = match self.untraced {
             None => (
-                ClosureBindings::of(writer, &self.captures, born, self.decided),
+                ClosureBindings::of(writer, &self.captures, born, encloser),
                 None,
             ),
             Some((code, site, parameters)) => {
@@ -452,7 +453,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
                     parameters,
                 };
                 (
-                    ClosureBindings::of(writer, &links, born, self.decided),
+                    ClosureBindings::of(writer, &links, born, encloser),
                     Some(composing),
                 )
             }
@@ -545,7 +546,6 @@ where
         instance,
         declared: None,
         captures,
-        decided: activation.view().decided(),
         untraced,
     })
 }
@@ -615,6 +615,7 @@ fn loaded<'x>(
                     }
                     ParameterBinding::Operands => ParameterBinding::Operands,
                 },
+                rebounds: crate::scope::Rebounds::NONE,
             })
         }
         None => None,
@@ -623,6 +624,7 @@ fn loaded<'x>(
         ktype: callable.ktype,
         quantifier_map: FunctionGroupMap(scratch.alloc_slice_copy(callable.quantifier_map.0)),
         registered,
+        rebounds: crate::scope::Rebounds::NONE,
     })
 }
 
@@ -683,7 +685,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     written: Written<'graph, 'cell, '_>,
     site: Site,
     code: Option<KValue<'graph, 'cell>>,
-    born: (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
+    born: DepotRef,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>>
@@ -809,11 +811,8 @@ pub fn instance<'graph, 'cell>(
     let closure = ClosureBindings::of(
         writer,
         &links,
-        (
-            function.closure().build(),
-            function.closure().stamp().copied(),
-        ),
-        function.closure().decided(),
+        function.closure().build(),
+        function.closure().encloser(),
     );
     let map = function.quantifier_map();
     let typing = Typing::laid_down(

@@ -20,16 +20,16 @@
 //! and leaves its view at rest as it always does. [`StepError::Refused`] is left for invariant
 //! breaks alone.
 //!
-//! **A cell decides in its activation.** Where its depot slot's facts and its enclosers' decisions
-//! leave a name unbound that a unit of its body waits on — content the run produced — a frame, a
-//! block or an inline module body binds it to what its slot or capture holds at the binding event,
-//! its entry or the statement binding it, and decides those units in its own activation
-//! ([`activation_store`](super::activation_store)), whose records every reading of its view
-//! layers innermost, over its enclosers'. An `EVAL` frame then reports the first registration of
-//! its code overlapping a builtin, as the load or its entry typed it. Each event first reads the
-//! [decision memo](crate::scope::DecisionMemo) resting in its frame's home, the region the frame's
-//! result is built in: a cell that ran the same body over the same bindings before, anywhere in
-//! the frame's tail chain or among the frames it was called from, decided what this one would.
+//! **A bind site makes its instance.** At its entry and at each statement seam that is a bind site
+//! of its base's [binding graph](../../design/binding-graph.md) — the program's, or the
+//! composition it runs under — a frame makes the instance of the site's node under what its slots
+//! and captures bind, through the instances of that graph its step lends, and keeps the handle in
+//! its frame's slab, which its blocks and module bodies share ([`instanced`]). A part a unit holds
+//! in place is evaluated before the unit, bound in its held slot and its bind site visited, as a
+//! `LET` holding it would be at a statement of its own ([`held_part`]). A base record's
+//! types close under what the frame's slots, held slots and captures bind at its last bind site
+//! or seam ([`frame_binding`]). An `EVAL` frame reports the first registration of its code overlapping a
+//! builtin, as the load typed it.
 //!
 //! **An untraced body runs as code.** A call of a function whose body is untraced code runs under
 //! that code's composition, binding its parameters, as an `EVAL` of the code runs under its own:
@@ -61,56 +61,48 @@
 //! caching bit, read from the folds at the frame's first step and carried on its `Within` to its
 //! blocks and the nodes on its stack. A caching body keeps its blocks' and its last statement's
 //! values rather than forwarding them, so a value leaves it only through an [`Exit`]: the frame's
-//! end, or a call out of it. An invariant site's
-//! types rest in the agent tier already, rested by the settlement the frame runs under: a step lays
-//! nothing there.
+//! end, or a call out of it.
 
 use std::cell::Cell;
-
-use smallvec::SmallVec;
 
 use crate::knot::body_activation;
 use crate::knot::module::coerce;
 use crate::knot::module::layout;
 use crate::knot::module::surface::surface;
+use crate::knot::module::view;
 use crate::knot::{
     KActivation, KActivationView, KFault, KInner, KReading, KValue, Knotted, Supplied, Tied, built,
     tie, using,
 };
-use crate::memory::{Bump, BumpVec, Writer, resident};
+use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, resident};
 use crate::parse::{ExpressionPart, Scope, SourceRef};
 use crate::scheduler::{
-    Action, Held, MemoHome, Placement, Received, Replayed, Request, Requested, Seek, Slot as Asked,
-    Step, StepError, Taken, Use,
+    Action, Held, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Address, AtRun, Bound, Tree, Unknown};
-use crate::scope::{Admission, Binding, Keeping, Levels};
+use crate::scope::Encloser;
+use crate::scope::{Address, AtRun, Bare, Bound, Lands, Sealing, Tree, UnitIndex, Unknown};
+use crate::scope::{Binding, CodeRefused};
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
-use crate::scope::{
-    BuildLayer, CodeRefused, Decided, Decision, Entry, EventSite, MemoKey, extended,
-};
 use crate::scope::{CaptureSource, ClosureBindings, Code, CodeSyntax, ComposedRoot, Facts};
 use crate::scope::{CoercionRefused, Fault, Inner, Line, Trace, Untieable};
-use crate::scope::{ComposedSyntax, Stamp};
 use crate::scope::{Coordinate, ParameterBinding, Retypes, Static, Target};
-use crate::scope::{IMPLICIT, ShapeError};
+use crate::scope::{IMPLICIT, Payload, ShapeError, relaid_error};
 use crate::symbols::{BinderSymbol, KeySymbol, Symbol, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
     Variance, admits_with, substitute_quantified,
 };
 use crate::values::{
-    BindingImage, CALL_ONLY, Chain, ContentDigest, DepotRef, Link, List, Record, TypeValue, Value,
+    CALL_ONLY, Chain, ContentDigest, DepotRef, Link, List, Record, Retype, TypeValue, Value,
     binding_at,
 };
 
-use super::activation_store::{Activating, bound_of};
 use super::bundle::{
     Entered, FrameKept, Handed, KBirth, KBundle, KScratch, KState, Keeps, Passing, Within,
 };
+use super::compose::{born_under, called_function};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Ending, Evaluated, Owed, Program, rendered};
-use super::settle::called_function;
 use super::stack::BlockEntry;
 
 /// The body runner's state between units: which body it is performing, how far it got, and where
@@ -132,37 +124,11 @@ pub struct Runner<'graph, 'cell> {
     /// The outermost barrier a frame was called through, which its value crosses outwards.
     barrier: Option<Barrier<'graph, 'cell>>,
     stage: Stage,
-    /// How many of its units' statement seams the runner has decided in its activation.
+    /// How many of its units' bind sites and statement seams the runner has bound.
     seen: u32,
     /// What the body runs within: what it hands each evaluation and block it asks for
     /// ([`KBirth::Evaluate`]), and the depot slot a callable born in it is born under.
     within: Within<'graph, 'cell>,
-    /// Where its binding events read and extend the decision memo.
-    memo: Memo<'cell>,
-}
-
-/// Where a runner's binding events read the decision memo: the home it rests in, `None` where the
-/// runner decides without one, and the home that seeds it where it holds none; then, once the
-/// first event has looked, the key it looked under and the entry that key found, and the
-/// last decision of that entry the events since have walked down to.
-#[derive(Clone, Copy)]
-struct Memo<'cell> {
-    home: Option<MemoHome>,
-    inherit: Option<MemoHome>,
-    read: Option<(MemoKey, Option<&'cell Entry<'cell>>)>,
-    at: Option<&'cell Decision<'cell>>,
-}
-
-impl Memo<'_> {
-    /// The memo of a runner whose frame's memo rests in `home`, seeded from `inherit`.
-    fn at(home: Option<MemoHome>, inherit: Option<MemoHome>) -> Self {
-        Memo {
-            home,
-            inherit,
-            read: None,
-            at: None,
-        }
-    }
 }
 
 /// Whether the runner performs the top level, a frame — a called body or the code an `EVAL` runs
@@ -183,6 +149,8 @@ enum Stage {
     Evaluation,
     /// One evaluation per eager part a refused tie named; the sites are in scratch.
     Supplying,
+    /// One evaluation asked for the part at the site the unit holds in place, ahead of the unit.
+    Holding(Site),
 }
 
 /// An enclosing body's place, kept while a module body it binds runs inline: written once when the
@@ -239,6 +207,9 @@ thread_local! {
     /// How many times a runner has tied again with the parts a tie named supplied: what a test
     /// reads to see one retry however many parts.
     pub(super) static SUPPLIED_TIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times a call by name's record was admitted against its callee's parameters: what
+    /// a test reads to see a quantified callee's group solved once per call, in its frame.
+    pub(crate) static ADMITTED_BY_NAME: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A step that took both its states.
@@ -257,25 +228,6 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     if let KState::Born(KBirth::Evaluate { .. }) | KState::Evaluating = state {
         return super::stack::evaluating(step, state, scratch);
     }
-    // A call whose settlement binds a module of composed code whose composition the miss found
-    // gone rebuilds it from the module's root and seeks again.
-    if let Some(wanted) = step.wanting()
-        && let KState::Born(birth) = &state
-        && let Some(root) = wanted_root(birth, wanted, &step.types())
-    {
-        let KState::Born(mut birth) = state else {
-            unreachable!("matched above")
-        };
-        let types = step.types();
-        let keys = super::settle::callee_keys(&birth);
-        // Composed code carries no request.
-        let seek = super::settle::seek(&mut birth, keys, None, &types, &types);
-        let work = crate::scheduler::Work {
-            step: run,
-            state: birth,
-        };
-        return step.rebuild(work, seek, root);
-    }
     // A frame of composed code born under the root — its composition was not live — bounces with
     // its syntax, which the drain builds the composition over.
     if let KState::Born(birth) = &state
@@ -290,61 +242,6 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
             state: birth,
         };
         return step.bounce(work, root);
-    }
-    // A call whose callee's depot slot is gone replays the chain of settlements its stamp
-    // records, so its frame is born warm where it would have been.
-    if let KState::Born(KBirth::Call {
-        program, callee, ..
-    }) = &state
-        && !step.replayed()
-        && let Some(function) = called_function(*callee)
-        && let Some(stamp) = function.closure().stamp()
-        && !step.depot_live(function.closure().build())
-    {
-        let types = step.types();
-        let tiers = program.tiers();
-        let base = stamp.base();
-        let levels: SmallVec<[Replayed<'graph>; 4]> = (stamp.levels().iter())
-            .map(|level| Replayed {
-                seek: Seek {
-                    parent: base,
-                    settlement: Some({
-                        let sought = level.sought();
-                        let image = BindingImage::of(sought.keyed.clone(), tiers, &types);
-                        (image, sought)
-                    }),
-                    hands_back: false,
-                },
-                pins: (level.modules.iter())
-                    .filter_map(|module| module.knot_member()?.module()?.body()?.root)
-                    .map(ComposedSyntax::of)
-                    .collect(),
-            })
-            .collect();
-        let KState::Born(mut birth) = state else {
-            unreachable!("matched above")
-        };
-        // A cold birth's request was handed back, so the frame's own seek computes no key.
-        let own = match step.sought() {
-            Some(requested) => Seek {
-                parent: DepotRef::ROOT,
-                hands_back: super::settle::handed_back(&birth),
-                settlement: Some((requested.image, requested.sought)),
-            },
-            None => {
-                let keys = super::settle::callee_keys(&birth);
-                super::settle::seek(&mut birth, keys, None, &types, &types)
-            }
-        };
-        let own = Replayed {
-            seek: own,
-            pins: SmallVec::new(),
-        };
-        let work = crate::scheduler::Work {
-            step: run,
-            state: birth,
-        };
-        return step.replay(work, levels.into_iter().chain([own]));
     }
     let (code, facts) = step.door();
     // A frame reads its body's caching bit at its first step; its runner carries it after.
@@ -397,66 +294,6 @@ fn composed_root<'here>(birth: &KBirth<'_, 'here>) -> Option<ComposedRoot<'here>
     }
 }
 
-/// The root of the composed code a module the call `birth` binds at a keyed name was born of,
-/// where its syntax digest is `wanted`.
-fn wanted_root<'here>(
-    birth: &KBirth<'_, 'here>,
-    wanted: ContentDigest,
-    types: &Chain<'_, '_, '_, '_>,
-) -> Option<ComposedRoot<'here>> {
-    let KBirth::Call {
-        callee, arguments, ..
-    } = birth
-    else {
-        return None;
-    };
-    let scratch = Bump::new();
-    let keys = called_function(*callee)?.body().keys?;
-    keys.iter().find_map(|(_, name)| {
-        let argument = arguments.field(name.symbol(), types, &scratch)?.value();
-        let root = argument.knot_member()?.module()?.body()?.root?;
-        (root.digest == wanted).then_some(root)
-    })
-}
-
-/// The stamp of the chain of settlements the frame of the call `birth` runs under, which a
-/// callable born in it records. Where the frame runs under the settlement it sought, that is the
-/// settlement's level over the callee's own stamp: the level the birth holds, kept by a hop, or
-/// else one laid here, in the frame's region, from `sought`, the request the drain handed the
-/// frame's first step back, its binding's types relayed into that region first. A frame under its
-/// own settlement whose body births no callable has neither, and no stamp. Where the frame runs
-/// under the depot slot its callee was born under, it is the callee's own stamp.
-fn stamped<'graph, 'here>(
-    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    birth: &KBirth<'graph, 'here>,
-    sought: Option<&Requested<'graph>>,
-) -> Option<Stamp<'here, Knotted<'graph, 'here>>> {
-    let KBirth::Call { callee, level, .. } = *birth else {
-        unreachable!("a stamp is a call's");
-    };
-    let function = called_function(callee);
-    let below = function.and_then(|function| function.closure().stamp());
-    let under_own = step.under_settlement() && step.depot_ref(DepotRef::ROOT) != born_under(callee);
-    // A layer the load laid is never evicted, so a frame under one lays no level.
-    if !under_own || step.under_load_layer() {
-        return below.copied();
-    }
-    // The chain rests on what the outermost level's parent rests on: the root or a load layer.
-    let base = below.map_or_else(|| born_under(callee).chain_base(), |below| below.base());
-    let level = level.or_else(|| {
-        sought.map(|requested| {
-            let region = step.types();
-            requested.image.relay(&region);
-            super::settle::level(step.writer(), birth, &requested.sought, &region, base)
-        })
-    });
-    debug_assert!(
-        level.is_some() || !function.is_some_and(|function| function.body().births),
-        "a frame under its own settlement whose body can birth a callable holds its level"
-    );
-    level.map(|level| Stamp { level, below })
-}
-
 /// Whether a frame of `callee` binds each parameter to its argument's own field, retyped: no
 /// barrier stands before the function, and it shows the type its body was checked against.
 fn bare(callee: KValue<'_, '_>) -> bool {
@@ -505,12 +342,6 @@ fn frame_kept<'graph, 'here>(
     )
 }
 
-/// The depot slot `callee`'s function was born under, behind every barrier: where a frame of it
-/// runs that the drain found no settlement of its own for.
-fn born_under(callee: KValue<'_, '_>) -> DepotRef {
-    called_function(callee).map_or(DepotRef::ROOT, |function| function.closure().build())
-}
-
 /// [`run`] on the chain `types` it picked; `routes` and `caches` are a call's or an `EVAL`'s, read
 /// at its frame's first step.
 fn ran<'graph, 'here, 'scratch>(
@@ -526,56 +357,44 @@ fn ran<'graph, 'here, 'scratch>(
     let runner = match state {
         KState::Born(KBirth::Program { program }) => {
             let writer = step.writer();
-            let activation = resident(
-                writer,
-                KActivation::of_program(writer, code.shapes().root(), &facts, program.builtins()),
-            );
-            let home = Some(step.memo_home());
-            Runner {
-                within: Within {
-                    memo: home,
-                    ..Within::TOP
-                },
-                memo: Memo::at(home, None),
-                ..Runner::at(program, activation, Level::Top, None)
-            }
+            let root = code.shapes().root();
+            let activation = KActivation::of_program(writer, root, &facts, program.builtins());
+            let activation = resident(writer, activation.with_handles(slab(&step, root.segment())));
+            let activation = match at_entry(&step, types, activation) {
+                Ok(activation) => activation,
+                Err(error) => {
+                    let inner = laid_refusal(&step, error);
+                    return faulted(step, types, None, inner);
+                }
+            };
+            Runner::at(program, activation, Level::Top, None)
         }
-        // A frame under a settlement whose walk refused raises the refusal as its fault, worded as
-        // the load would word it with the binding declared.
+        // A frame under a composition whose code was refused raises the refusal as its fault.
         KState::Born(KBirth::Call {
             callee, call, owed, ..
         }) if let Some(error) = refused => {
             let inner = laid(&step, Fault::Refused { error });
             return faulted(step, types, Some(born_line(callee, call, owed)), inner);
         }
-        KState::Born(
-            birth @ KBirth::Call {
-                program,
-                callee,
-                arguments,
-                kind,
-                contributed,
-                handed,
-                call,
-                owed,
-                inherit,
-                kept: keeps,
-                ..
-            },
-        ) => {
-            let sought = step.sought();
-            let home = Some(step.memo_home());
-            let mut memo = Memo::at(home, inherit);
+        KState::Born(KBirth::Call {
+            program,
+            callee,
+            arguments,
+            kind,
+            contributed,
+            handed,
+            call,
+            owed,
+            kept: keeps,
+            ..
+        }) => {
             // An untraced body runs under its composition, as an `EVAL` of its code does: what it
-            // births is born there, and it runs under no settlement of its own.
+            // births is born there.
             let untraced =
                 called_function(callee).is_some_and(|function| function.composing().is_some());
-            let (build, stamp) = match untraced {
-                true => (step.depot_ref(DepotRef::ROOT), None),
-                false => (
-                    step.depot_ref(born_under(callee)),
-                    stamped(&step, &birth, sought.as_deref()),
-                ),
+            let build = match untraced {
+                true => step.depot_ref(DepotRef::ROOT),
+                false => step.depot_ref(born_under(callee)),
             };
             match frame(
                 &step,
@@ -589,9 +408,9 @@ fn ran<'graph, 'here, 'scratch>(
                 owed.map(|owed| owed.contract),
             )
             .and_then(|(activation, contract, barrier)| {
-                let decided = decided_at_entry(&mut step, types, program, activation, &mut memo)
-                    .map_err(|error| Fault::Refused { error })?;
-                Ok((decided, contract, barrier))
+                let activation =
+                    at_entry(&step, types, activation).map_err(|error| Fault::Refused { error })?;
+                Ok((activation, contract, barrier))
             }) {
                 Ok((activation, contract, barrier)) => Runner {
                     barrier,
@@ -599,15 +418,11 @@ fn ran<'graph, 'here, 'scratch>(
                         routes,
                         caches,
                         build,
-                        stamp,
-                        memo: home,
-                        inherit,
                         root: called_function(callee).and_then(|function| function.root()),
                         kept: bare(callee)
                             .then(|| frame_kept(&mut step, activation, (callee, arguments), keeps)),
                         arms: None,
                     },
-                    memo,
                     ..Runner::at(
                         program,
                         activation,
@@ -631,7 +446,6 @@ fn ran<'graph, 'here, 'scratch>(
             offered,
             contract,
             call,
-            inherit,
         }) => {
             let owed = Owed {
                 contract,
@@ -664,40 +478,34 @@ fn ran<'graph, 'here, 'scratch>(
             let Some(activation) = code_frame(&step, types, program, code, offered) else {
                 return step.failed(StepError::Refused);
             };
-            // A callable born of composed code is born under its composition; a written quote's
-            // lexical chain of depot slots is not placed, so its callables seek from the root.
-            let build = match facts.composition() {
-                Some(_) => step.depot_ref(DepotRef::ROOT),
-                None => DepotRef::ROOT,
-            };
-            let home = Some(step.memo_home());
-            let mut memo = Memo::at(home, inherit);
-            match decided_at_entry(&mut step, types, program, activation, &mut memo) {
-                Ok(activation) => {
-                    // The first registration overlapping a builtin, as the load or this entry
-                    // typed the code, faults the frame before any statement runs.
-                    let (code, facts) = step.door();
-                    let facts = facts.activated(activation.view().decided());
-                    if let Some(error) = facts.overlap(types, code.shape(activation.segment())) {
-                        let inner = laid(&step, Fault::Refused { error });
-                        return faulted(step, types, line, inner);
-                    }
-                    Runner {
-                        within: Within {
-                            caches,
-                            build,
-                            memo: home,
-                            root,
-                            ..Within::TOP
-                        },
-                        memo,
-                        ..Runner::at(program, activation, Level::Frame, Some(owed))
-                    }
-                }
+            let activation = match at_entry(&step, types, activation) {
+                Ok(activation) => activation,
                 Err(error) => {
                     let inner = laid_refusal(&step, error);
                     return faulted(step, types, line, inner);
                 }
+            };
+            // A callable born of composed code is born under its composition; one born of a written
+            // quote's code under the root.
+            let build = match facts.composition() {
+                Some(_) => step.depot_ref(DepotRef::ROOT),
+                None => DepotRef::ROOT,
+            };
+            // The first registration overlapping a builtin, as the load typed the code, faults
+            // the frame before any statement runs.
+            let (code, facts) = step.door();
+            if let Some(error) = facts.overlap(types, code.shape(activation.segment())) {
+                let inner = laid(&step, Fault::Refused { error });
+                return faulted(step, types, line, inner);
+            }
+            Runner {
+                within: Within {
+                    caches,
+                    build,
+                    root,
+                    ..Within::TOP
+                },
+                ..Runner::at(program, activation, Level::Frame, Some(owed))
             }
         }
         KState::Born(KBirth::Composed { code, source, .. }) => {
@@ -734,7 +542,7 @@ fn ran<'graph, 'here, 'scratch>(
 
 /// A block's runner, entered as `entry` says beside the view it sits in, in the asker's own cell:
 /// a `USING … SCOPE` body on its module, a `MATCH` arm on its `it`, a synthesized block part bound
-/// to nothing. Its activation is laid down and decided at its entry; a refusal the walk reaches is
+/// to nothing. Its activation is laid down and bound at its entry; a refusal its instance answers is
 /// the fault the block stops with.
 pub(super) fn entered_body<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
@@ -779,12 +587,11 @@ pub(super) fn entered_body<'graph, 'here>(
             }
         }
     }
-    let mut memo = Memo::at(within.memo, within.inherit);
-    let activation = decided_at_entry(step, types, program, activation, &mut memo)
+    // The block's parameters bind at its entry, as a callable's do.
+    let activation = at_entry(step, types, activation)
         .map_err(|error| Stopped::Raised(laid_refusal(step, error)))?;
     Ok(Runner {
         within,
-        memo,
         ..Runner::at(program, activation, Level::Block, owed)
     })
 }
@@ -809,7 +616,7 @@ fn laid<'graph, 'here>(
     fault: Fault<'_, KValue<'graph, 'here>>,
 ) -> KInner<'graph, 'here> {
     let writer = step.writer();
-    Inner::Fault(resident(writer, fault.relaid(writer, &Bump::new())))
+    Inner::Fault(resident(writer, fault.relaid(writer)))
 }
 
 /// A refusal a binding event's walk reached, laid in the cell's region already, as its fault.
@@ -834,108 +641,6 @@ fn faulted<'graph, 'here>(
     step.fault(line, inner)
 }
 
-/// A frame's or a block's entry event: each parameter, or a quote's code's capture, a unit beneath
-/// its body waits on with the entry as its seam, which its depot slot's facts and what its
-/// encloser decided leave unbound, bound to what its slot holds and decided in its activation over
-/// what its encloser decided ([`activated`](super::activation_store)). `activation` itself where
-/// it binds none; the refusal the cell faults with where the walk refuses.
-///
-/// A call whose closure holds what its encloser decided, under a settlement of its own, decides
-/// even binding nothing: the settlement was walked without the encloser's names, and the layers
-/// without its keys, so each leaves open what the other binds. The walk wakes every unit whose
-/// record names a bound name, which is every unit one of them leaves open.
-fn decided_at_entry<'graph, 'here>(
-    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'_, 'here, '_, '_>,
-    program: &'graph Program<'graph>,
-    activation: &'here KActivation<'graph, 'here>,
-    memo: &mut Memo<'here>,
-) -> Result<&'here KActivation<'graph, 'here>, &'here ShapeError<'here>> {
-    let (code, facts) = step.door();
-    let below = activation.view().decided();
-    let segment = activation.segment();
-    let shape = code.shape(segment);
-    let facts = match shape.kind() {
-        ShapeKind::Code => facts.undeposited(),
-        _ => facts,
-    };
-    let facts = facts.activated(below);
-    let waits = facts.entry_waits(shape);
-    let rewakes = activation.view().closure().decided().is_some() && facts.top().is_some();
-    // A quote's code binds the type names of the chain around it its content composes, as its
-    // value carries them: its frame reads through no activation around it.
-    let carried = match shape.kind() {
-        ShapeKind::Code => code.shapes().layout(segment),
-        _ => &[],
-    };
-    if waits.is_empty() && carried.is_empty() && !rewakes {
-        return Ok(activation);
-    }
-    let scratch = Bump::new();
-    let mut own = BumpVec::new_in(&scratch);
-    let reading = activation.view().reading(&code, facts);
-    for at in waits.iter().copied() {
-        let unknown = Unknown { segment, at };
-        if facts.binds(unknown) {
-            continue;
-        }
-        // A quote's code's capture holds the value its `EVAL` handed it.
-        let (held, name, memo) = match at {
-            Address::Slot(slot) => (
-                activation.bound(slot),
-                shape.slot_name(slot),
-                reading.digest_memo(local(slot)),
-            ),
-            Address::Capture(capture) => match activation.view().closure().get(capture) {
-                Link::Value(value) => (Some(value), shape.captures()[capture.index()].name, None),
-                Link::Edge(_) => continue,
-            },
-        };
-        // A type name binds a type, and a value name a module: a value name holding a type value
-        // is no unknown.
-        let bound = held.and_then(|value| bound_of(&scratch, value, types, &scratch, memo));
-        own.extend(
-            bound
-                .filter(|bound| match bound {
-                    Bound::Type(_) => matches!(name, BinderSymbol::Type(_)),
-                    Bound::Module { .. } => matches!(name, BinderSymbol::Value(_)),
-                })
-                .map(|bound| (unknown, bound)),
-        );
-    }
-    let contract = facts.contract(shape);
-    let parent = code.shapes().parent(segment).map(|(parent, _)| parent);
-    for (index, (level, _)) in carried.iter().enumerate() {
-        let base = shape.captures().len();
-        let unknown = parent.and_then(|parent| code.shapes().unknown_of_level(parent, *level));
-        // The cell's own layers may bind the name at another binding, the code having been born
-        // in another activation of its encloser: the carried one is read first.
-        let Some(unknown) = unknown.filter(|_| contract[index]) else {
-            continue;
-        };
-        let Link::Value(value) = activation
-            .view()
-            .closure()
-            .get(crate::scope::CaptureSlot((base + index) as u32))
-        else {
-            unreachable!("a type capture is a value")
-        };
-        own.extend(
-            bound_of(&scratch, value, types, &scratch, None)
-                .filter(|bound| matches!(bound, Bound::Type(_)))
-                .map(|bound| (unknown, bound)),
-        );
-    }
-    if own.is_empty() && !rewakes {
-        return Ok(activation);
-    }
-    let site = EventSite::entry(segment);
-    let decided = decide(
-        step, types, program, memo, facts, below, &own, rewakes, site,
-    )?;
-    Ok(resident(step.writer(), activation.deciding(decided)))
-}
-
 /// The coordinate of the running activation's own `slot`.
 fn local(slot: Slot) -> Coordinate {
     Coordinate::Activation {
@@ -944,222 +649,14 @@ fn local(slot: Slot) -> Coordinate {
     }
 }
 
-/// What a test hands each binding event's site to, and whether it walked.
-#[cfg(test)]
-pub(crate) type Deciding = fn(EventSite, bool);
-
-#[cfg(test)]
-thread_local! {
-    /// What each binding event [`decide`] answers is handed to, by its site, while a test sets
-    /// it: `true` where it walked, `false` where the memo's decision answered it.
-    pub(crate) static DECIDING: std::cell::Cell<Option<Deciding>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// What the binding event at `site`, binding `own` over `facts`, which read `below`, decides
-/// ([`activated`](super::activation_store)): the binding layer `memo` holds for it by identity,
-/// laid over `below`; else a walk over a witnessed decision whose questions the binding keeps
-/// every one of, or some where the event has no room for another decision, whose decision it
-/// joins, keeping nothing where it walked nothing; else a walk of its own, which witnesses where
-/// it may, kept as a new decision. A refusal is not kept.
-#[allow(clippy::too_many_arguments)]
-fn decide<'graph, 'here>(
-    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'_, 'here, '_, '_>,
-    program: &'graph Program<'graph>,
-    memo: &mut Memo<'here>,
-    facts: Facts<'_>,
-    below: Option<&'here BuildLayer<'here>>,
-    own: &[(Unknown, Bound<'_>)],
-    rewakes: bool,
-    site: EventSite,
-) -> Result<&'here BuildLayer<'here>, &'here ShapeError<'here>> {
-    let segment = site.segment();
-    let walk = |step: &Taking<'_, 'graph, '_, 'here, '_, '_>, activating: Activating<'here>| {
-        #[cfg(test)]
-        if let Some(deciding) = DECIDING.with(std::cell::Cell::get) {
-            deciding(site, activating.walks());
-        }
-        let activate = program.activate();
-        let writer = step.writer();
-        activate(
-            program,
-            writer,
-            facts,
-            types,
-            below,
-            own,
-            (activating, rewakes),
-            segment,
-        )
-    };
-    let closed = |step: &Taking<'_, 'graph, '_, 'here, '_, '_>| {
-        let activated = walk(step, Activating::Closed)?;
-        Ok(resident(step.writer(), activated.layer))
-    };
-    #[cfg(test)]
-    if super::activation_store::UNMEMOIZED.with(std::cell::Cell::get) {
-        return closed(step);
-    }
-    let Some(home) = memo.home else {
-        return closed(step);
-    };
-    let (key, entry) = match memo.read {
-        Some(read) => read,
-        None => {
-            let key = MemoKey::new(segment, step.depot_ref(DepotRef::ROOT), below);
-            let read = (key, step.memo_entry(home, memo.inherit, key));
-            memo.read = Some(read);
-            read
-        }
-    };
-    if let Some((decision, binding)) =
-        entry.and_then(|entry| entry.decision(memo.at, site, own, below))
-    {
-        memo.at = Some(decision);
-        #[cfg(test)]
-        if let Some(deciding) = DECIDING.with(std::cell::Cell::get) {
-            deciding(site, false);
-        }
-        let writer = step.writer();
-        return Ok(resident(writer, decision.over(writer, binding, below)));
-    }
-    let scratch = Bump::new();
-    let earlier = BuildLayer::witnessed_names(&scratch, below);
-    // An event witnesses its type names and those the witnessed layers beneath it witnessed, its
-    // cell's earlier events' and its enclosers', where its memo has room to keep what it lays:
-    // past the budget its witnessed layer would serve none.
-    let witnesses = !rewakes
-        && super::resume::witnesses()
-        && (!earlier.is_empty() || (own.iter()).any(|(_, bound)| matches!(bound, Bound::Type(_))))
-        && step.memo_room(home);
-    let chosen = match (rewakes, entry) {
-        (false, Some(entry)) => {
-            let candidates = entry.witnessed(memo.at, site, own, &earlier);
-            let spellings = crate::scope::Spellings::new(program.symbols());
-            let chosen = read_over((types, spellings), facts, own, candidates);
-            // Keeping only some questions, a binding witnesses afresh while the event has room
-            // for another decision: a join walks closed and answers nothing, so a later binding
-            // taking its answers would keep all of no layer, nor would a cell beneath it.
-            let partial = |kept: &Keeping| *kept != Keeping::All;
-            match chosen {
-                Some((_, kept)) if partial(&kept) && witnesses && entry.room_under(memo.at) => None,
-                chosen => chosen,
-            }
-        }
-        _ => None,
-    };
-    let activating = match chosen {
-        Some((decision, kept)) => Activating::Over(
-            (decision.witnessed()).expect("a witnessed decision holds its layer"),
-            kept,
-        ),
-        None if witnesses => Activating::Witnessing { site },
-        None => Activating::Closed,
-    };
-    let activated = walk(step, activating)?;
-    let writer = step.writer();
-    let layer = admitting_chain(writer, activated.layer);
-    let decided = resident(writer, layer);
-    // A join that walked nothing keeps nothing: its layer admits by identity of the whole chain,
-    // which a deepening encloser never repeats, and a later binding keeping every question reads
-    // over the decision as cheaply. The cell walks on down from the decision it joined.
-    if let Some((into, Keeping::All)) = chosen
-        && (into
-            .witnessed()
-            .and_then(|witnessed| witnessed.witnessing()))
-        .is_some_and(|witnessing| !witnessing.holds)
-    {
-        memo.at = Some(into);
-        return Ok(decided);
-    }
-    let into = match chosen {
-        Some((into, _)) => Decided::Joins {
-            into,
-            binding: decided,
-        },
-        None => Decided::New {
-            witnessed: activated.witnessed,
-            binding: decided,
-        },
-    };
-    let at = memo.at;
-    let laid = step.memo_lay(home, |writer, half, into_home| {
-        if !half.memo_room() {
-            return None;
-        }
-        let adopt = &mut |kt| into_home.adopt_from(types, kt);
-        let (laid, entry) = extended(writer, half.memo(), key, entry, at, site, into, adopt);
-        half.set_memo(laid, true);
-        Some(entry)
-    });
-    match laid {
-        Some(laid) => {
-            #[cfg(test)]
-            super::activation_store::KEPT.with(|kept| kept.set(kept.get() + 1));
-            memo.read = Some((key, Some(laid)));
-            memo.at = laid.laid();
-        }
-        // A memo that kept nothing holds no decision a later event of this cell could match.
-        None => memo.home = None,
-    }
-    Ok(decided)
-}
-
-/// The witnessed decision among `candidates` an event binding `own` over `facts` reads over,
-/// beside how many of its questions the binding keeps ([`chosen`](super::resume::chosen)): each
-/// question asked closed under the whole chain's binding, through the frame's chain `types`.
-fn read_over<'here>(
-    (types, spellings): (&Chain<'_, '_, '_, '_>, crate::scope::Spellings<'_>),
-    facts: Facts<'_>,
-    own: &[(Unknown, Bound<'_>)],
-    candidates: impl Iterator<Item = &'here Decision<'here>>,
-) -> Option<(&'here Decision<'here>, Keeping)> {
-    let mut candidates = candidates.peekable();
-    candidates.peek()?;
-    let scratch = Bump::new();
-    let mut staged = BumpVec::new_in(&scratch);
-    facts.each_bound(&mut |unknown, bound| staged.push((unknown, bound)));
-    staged.extend(own.iter().copied());
-    let binding = Binding::laid(&scratch, &mut staged);
-    let mut mine = BumpVec::new_in(&scratch);
-    mine.extend(own.iter().copied());
-    let own = Binding::laid(&scratch, &mut mine);
-    let levels = Levels::of(&scratch, facts.shapes(), binding);
-    let keeps = super::resume::kept_by((types, &scratch, spellings), facts, &levels);
-    let candidates = candidates.filter_map(|decision| Some((decision, decision.witnessed()?)));
-    super::resume::chosen(candidates, &keeps, own)
-}
-
-/// `layer`, the binding layer of an event, admitting by identity of every name its chain binds:
-/// its own, the module binders of the witnessed layer it lies over, and every name of the layers
-/// beneath — its cell's earlier events' and its enclosers'. The memo key does not pin the
-/// enclosers' bindings, and the layer's table closes types naming them.
-fn admitting_chain<'here>(
-    writer: Writer<'here, '_>,
-    layer: BuildLayer<'here>,
-) -> BuildLayer<'here> {
-    let scratch = Bump::new();
-    let mut staged = BumpVec::new_in(&scratch);
-    for beneath in std::iter::successors(layer.parent(), |layer| layer.parent()) {
-        staged.extend(beneath.binding().entries().iter().copied());
-    }
-    if staged.is_empty() {
-        return layer;
-    }
-    staged.extend(layer.binding().entries().iter().copied());
-    let binding = Binding::laid(writer, &mut staged);
-    layer.admitting(Admission::binding(writer, binding))
-}
-
 /// What an evaluator asks for to call `callee` over `arguments`, a record of its parameters by name
 /// — and, for a quantified callee a keyworded call selected, of its type parameters, each a type
 /// value: a frame running the callee's body, in a region of its own. `kind` says whether the
 /// arguments were admitted before the call or are checked by the frame, and `contributed` what a
 /// call by name solves each parameter from, per parameter in symbol order — empty, or `None` at a
 /// parameter, where the frame reads the carried type. `call` is the extent of the call's node, and
-/// `owed` what a tail owes, which the frame's hop table and contract continue. `inherit` is where
-/// the asker's decision memo rests, and `passing` what a tail hands on through kept parts
+/// `owed` what a tail owes, which the frame's hop table and contract continue, and `passing` what a
+/// tail hands on through kept parts
 /// ([`Passing`]).
 #[allow(clippy::too_many_arguments)]
 pub fn call<'graph, 'here>(
@@ -1170,7 +667,6 @@ pub fn call<'graph, 'here>(
     contributed: &'here [Option<KType>],
     handed: &'here [Handed],
     (call, owed): (SourceRef, Option<Owed<'here>>),
-    inherit: Option<MemoHome>,
     passing: Option<&'here Passing<'graph, 'here>>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
@@ -1188,8 +684,6 @@ pub fn call<'graph, 'here>(
                 handed,
                 call,
                 owed,
-                inherit,
-                level: None,
                 passing,
                 kept: None,
             },
@@ -1240,7 +734,6 @@ pub fn eval<'step: 'x, 'x, 'graph, 'here>(
     code: Knotted<'graph, 'here>,
     offered: KValue<'graph, 'here>,
     (returns, call): (KType, SourceRef),
-    inherit: Option<MemoHome>,
     use_: Use,
 ) -> Result<Request<'graph, 'here, KBundle>, Fault<'x, KValue<'graph, 'here>>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
@@ -1282,7 +775,6 @@ pub fn eval<'step: 'x, 'x, 'graph, 'here>(
                     checked: false,
                 },
                 call,
-                inherit,
             },
         },
     })
@@ -1358,22 +850,12 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
             stage: Stage::Next,
             seen: 0,
             within: Within::TOP,
-            memo: Memo::at(None, None),
         }
     }
 
-    /// What the runner hands an evaluation it asks for: what it runs within, and the memo a
-    /// frame the evaluation calls seeds its own from — the runner's where it has read it, else
-    /// the one the runner's would have been seeded from.
+    /// What the runner hands an evaluation it asks for: what it runs within.
     pub(super) fn handing(&self) -> Within<'graph, 'cell> {
-        let inherit = match self.memo.read {
-            Some(_) => self.memo.home,
-            None => self.memo.inherit,
-        };
-        Within {
-            inherit,
-            ..self.within
-        }
+        self.within
     }
 
     /// Whether the runner owes a contract: a frame's, or a tail arm's.
@@ -1665,14 +1147,18 @@ fn frame<'graph, 'here>(
             program.builtins(),
         ),
     };
-    let activation = resident(writer, activation);
+    let activation = resident(writer, activation.with_handles(slab(step, shape.segment())));
     let reading = activation.view().reading(&code, facts);
     // What the frame re-stamps its arguments and value at, where the load closed their types: a
     // quantified callee's are solved per call, and an untraced body's composition closed none.
-    let retypes = match quantified || function.composing().is_some() {
-        true => Retypes::NONE,
-        false => facts.retypes(types, scratch, shape),
+    // Where the load left a type open over a run-bound name, the frame reads how it re-stamps off
+    // the type it closes, as the load's own restamp door would.
+    let derives = !(quantified || function.composing().is_some());
+    let retypes = match derives {
+        false => Retypes::NONE,
+        true => facts.retypes(types, scratch, shape),
     };
+    let derived = |declared| derives.then(|| Retype::of(types, scratch, declared));
     let mut parameters = 0;
     for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
         let name = shape.slot_name(slot);
@@ -1698,7 +1184,8 @@ fn frame<'graph, 'here>(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
-                let retype = retypes.parameter(types, name.symbol());
+                let retype =
+                    (retypes.parameter(types, name.symbol())).or_else(|| derived(declared));
                 let value = argument
                     .seen_as(declared, retype, types, scratch)
                     .restamped(writer, types);
@@ -1772,7 +1259,10 @@ fn frame<'graph, 'here>(
     // value is retyped to: a barrier's shown return is no record's.
     let restamp = match (outermost, shown_return) {
         (None, Some(_)) => owed.and_then(|outer| outer.restamp),
-        _ => owed.map_or(retypes.returned(types), |outer| outer.restamp),
+        _ => owed.map_or_else(
+            || retypes.returned(types).or_else(|| derived(returns)),
+            |outer| outer.restamp,
+        ),
     };
     let contract = Contract {
         callee: Some(declared),
@@ -1846,6 +1336,8 @@ pub(super) fn admitted<'x, 'tier: 'x>(
     let TypeNode::KFunction { params, .. } = view.body else {
         return Err(Miss::Misnamed);
     };
+    #[cfg(test)]
+    ADMITTED_BY_NAME.with(|admitted| admitted.set(admitted.get() + 1));
     let mut collector = Collector::<KType>::new(types, scratch, view.group.bounds);
     // The load laid the parameters of the callee it saw out in symbol order, and records
     // contributions only where its argument names no field but those: a record as long as both
@@ -2028,12 +1520,12 @@ fn untraced_closure<'graph, 'here>(
     let bump = Bump::new();
     let links = code_closure(writer, types, member, shape, offered, &bump)
         .expect("a name `unbound` finds bound is bound");
-    // The frame's callables are born under the composition, so its own chain is not placed.
+    // The frame's callables are born under the composition.
     Ok(ClosureBindings::of(
         writer,
         &links,
-        (DepotRef::ROOT, None),
-        None,
+        DepotRef::ROOT,
+        Encloser::default(),
     ))
 }
 
@@ -2052,12 +1544,453 @@ fn code_frame<'graph, 'here>(
     let bump = Bump::new();
     let writer = step.writer();
     let links = code_closure(writer, types, member, shape, offered, &bump)?;
-    // A quote's lexical chain of depot slots is not placed, so its frame seeks from the root.
-    let closure = ClosureBindings::of(writer, &links, (DepotRef::ROOT, None), None);
+    // A quote's frame is placed under no depot slot of its own.
+    let closure = ClosureBindings::of(writer, &links, DepotRef::ROOT, Encloser::default());
+    let activation = KActivation::of_code(writer, shape, &facts, closure, program.builtins());
     Some(resident(
         writer,
-        KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
+        activation.with_handles(slab(step, shape.segment())),
     ))
+}
+
+/// The handle slab of a frame of the body at `segment`: a word for each word of the handles of the
+/// nodes of its base's binding graph, laid in the frame's region. Empty over a base of no graph.
+fn slab<'here>(
+    step: &Taking<'_, '_, '_, 'here, '_, '_>,
+    segment: crate::scope::Segment,
+) -> &'here [Cell<u64>] {
+    let Some(instances) = step.instances() else {
+        return &[];
+    };
+    let laid = instances.graph();
+    let Some(Some(body)) = laid.facts.bodies.get(segment.index() as usize) else {
+        return &[];
+    };
+    step.writer()
+        .fill(laid.layout.width(*body), |_| Cell::new(0))
+}
+
+/// `activation` at its entry bind site ([`instanced`]): closing a base record's types under what its
+/// frame's slots bind there. A refusal its instance answers is the frame's fault.
+fn at_entry<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    activation: &'here KActivation<'graph, 'here>,
+) -> Result<&'here KActivation<'graph, 'here>, &'here ShapeError<'here>> {
+    let view = activation.view();
+    // The entry binds what a base record's types read, though no bind site's node sits there.
+    let binding = instanced(step, types, view, UnitIndex::ENTRY)?.or_else(|| {
+        step.instances()
+            .is_some()
+            .then(|| frame_binding(step, types, view))
+    });
+    Ok(match binding {
+        Some(binding) => resident(step.writer(), activation.binding(Some(binding))),
+        None => activation,
+    })
+}
+
+/// What a frame's slot holding `value` binds its unknown to: a type value its type, a module value
+/// its carried type over its bare member's content, by digest, beside that member as a view over
+/// it reads it ([`Bare`]), retyped where a header carries it: a view over it reads the bare
+/// member, as the run's does. Any other value, the type it carries, where it carries one. `memo`, the slot's digest memo where the load marked it digested, holds the digest
+/// of the value the slot holds: it is read for a bare member and filled where it is empty.
+pub(crate) fn bound_of<'o>(
+    lay: impl Lays<'o>,
+    value: KValue<'_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    memo: Option<&Cell<Option<ContentDigest>>>,
+) -> Option<Bound<'o>> {
+    if let Some(named) = value.as_type() {
+        return Some(Bound::Type(named.handle()));
+    }
+    // A quantified callable carries a scheme, no type: no name stands for it.
+    if value.as_module().is_none() {
+        return value.ktype().as_type().map(Bound::Carried);
+    }
+    let member = value.knot_member()?;
+    let carried = value.concrete_ktype();
+    // The record's carriers are laid beside the tree, which outlives the frame's slot.
+    let bare = view::bare_of(member, types, scratch);
+    let sealing = bare.sealing.map(|sealing| Sealing {
+        record: sealing.record.laid(lay),
+        ..sealing
+    });
+    let as_view = Some(resident(
+        lay,
+        Bare {
+            signature: bare.signature,
+            sealing,
+        },
+    ));
+    let bare = Value::Knotted(member);
+    // A module whose content is known keeps its digest; else the value's is walked.
+    let digest = || {
+        let kept = member.module().and_then(|module| module.digest());
+        debug_assert!(kept.is_none_or(|kept| kept == bare.digest(types, scratch)));
+        kept.unwrap_or_else(|| bare.digest(types, scratch))
+    };
+    // A header's digest is its type over its bare member's, which its memo cannot give back.
+    let tree = match (bare.ktype() == value.ktype(), memo.and_then(Cell::get)) {
+        (true, Some(digest)) => Tree::Digest(digest, as_view),
+        (true, None) => Tree::Digest(digest(), as_view),
+        (false, _) => {
+            let source = resident(lay, Tree::Digest(digest(), as_view));
+            // A module keeps its digest under a root-tier type it is viewed at.
+            let kept = (member.module())
+                .filter(|_| types.in_root(carried))
+                .and_then(|module| {
+                    module
+                        .retyped_digest(carried, || Tree::retyped_closed(carried, source).digest())
+                });
+            match kept {
+                Some(digest) => Tree::retyped_known(carried, source, digest),
+                None => Tree::retyped_closed(carried, source),
+            }
+        }
+    };
+    memo.filter(|memo| memo.get().is_none())
+        .inspect(|memo| memo.set(tree.digest()));
+    Some(Bound::Module {
+        carried,
+        tree: resident(lay, tree),
+    })
+}
+
+/// What the slots and captures of the frame `view` runs, and of the views around it, bind: each
+/// type value its type, and each module value its module ([`bound_of`]), laid in the frame's
+/// region. The binding a base record's types are closed under.
+fn frame_binding<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    view: KActivationView<'graph, 'here>,
+) -> Binding<'here> {
+    let (code, facts) = step.door();
+    let (lay, scratch) = (step.writer(), Bump::new());
+    let shapes = code.shapes();
+    let mut staged: BumpVec<'_, (Unknown, Bound<'here>)> = BumpVec::new_in(&scratch);
+    for view in std::iter::successors(Some(&view), |view| view.enclosing()) {
+        let segment = view.segment();
+        let shape = code.shape(segment);
+        let slots = (0..shape.slots() as u32).map(|at| Address::Slot(Slot(at)));
+        let captures = (0..view.closure().len() as u32)
+            .map(|at| Address::Capture(crate::scope::CaptureSlot(at)));
+        for at in slots.chain(captures) {
+            let (held, unknown) = match at {
+                Address::Held(_) => unreachable!("a frame's slots and captures"),
+                Address::Slot(slot) => (view.bound(slot), Some(Unknown { segment, at })),
+                Address::Capture(capture) => {
+                    let held = match view.closure().get(capture) {
+                        Link::Value(value) => Some(value),
+                        Link::Edge(_) => None,
+                    };
+                    // A type capture past the builder captures holds the name of the body around
+                    // it its closure layout reads, at that name's own unknown; a binder capture
+                    // past those, the binder it reads.
+                    let past = (capture.index()).checked_sub(shape.captures().len());
+                    let layout = shapes.layout(segment);
+                    let unknown = match past {
+                        None => Some(Unknown { segment, at }),
+                        Some(past) => match layout.get(past) {
+                            Some((level, _)) => shapes.unknown_of_level(segment, *level),
+                            None => facts.capture_binder(shape, past - layout.len()),
+                        },
+                    };
+                    (held, unknown)
+                }
+            };
+            let Some(unknown) = unknown else {
+                continue;
+            };
+            let Some(value) = held else {
+                continue;
+            };
+            if staged.iter().any(|(each, _)| *each == unknown) {
+                continue;
+            }
+            // A module, or a value declared `Any` whose name is the type it carries, is bound
+            // where a unit's frontier holds it, as the layers bind one: a parameter its entry
+            // waits on, a seam whose content the load holds as a leaf alone, or a module capture.
+            // Elsewhere its types are written where the load wrote them.
+            let mut memo = None;
+            if value.as_type().is_none() {
+                let waited = facts.entry_waits(shape).contains(&at);
+                let seam = match at {
+                    Address::Slot(slot) if !waited => {
+                        let seams = facts.statement_seams(shape);
+                        let rooting = facts.rooting_seams(shape).binary_search(&slot).is_ok();
+                        let seen = (facts.content(shape, slot)).is_some_and(|tree| {
+                            !matches!(tree, Tree::Leaf(_)) && (!rooting || tree.closed())
+                        });
+                        let closed =
+                            matches!(facts.declared_type(types, shape, slot), Static::Closed(_));
+                        seams.binary_search(&slot).is_ok() && !seen && !closed
+                    }
+                    Address::Capture(_) => value.as_module().is_some(),
+                    _ => false,
+                };
+                if !waited && !seam {
+                    continue;
+                }
+                if let Address::Slot(slot) = at
+                    && value.as_module().is_some()
+                {
+                    memo = view.reading(&code, facts).digest_memo(local(slot));
+                }
+            }
+            let Some(bound) = bound_of(lay, value, types, &scratch, memo) else {
+                continue;
+            };
+            staged.push((unknown, bound));
+            // A module a callable captures is bound at the encloser's binder it reads, too: the
+            // callable's records name a path through it by the binder rooting its chain.
+            if let Address::Capture(capture) = at
+                && capture.index() < shape.captures().len()
+                && value.as_module().is_some()
+                && let Some(Lands::Binder { at: home, slot }) = shapes.follow(
+                    segment,
+                    Coordinate::Activation {
+                        hops: 0,
+                        target: Target::Capture(capture),
+                    },
+                )
+                && home != segment
+            {
+                let binder = Unknown {
+                    segment: home,
+                    at: Address::Slot(slot),
+                };
+                if !staged.iter().any(|(each, _)| *each == binder) {
+                    staged.push((binder, bound));
+                }
+            }
+        }
+        // Each part its body holds in place and has bound, at its held site.
+        let reading = view.reading(&code, facts);
+        for (index, site) in facts.held_sites(shape).iter().enumerate() {
+            let Some(value) = view.held(index) else {
+                continue;
+            };
+            let unknown = Unknown {
+                segment,
+                at: Address::Held(*site),
+            };
+            let memo = Some(reading.held_memo(index));
+            if let Some(bound) = bound_of(lay, value, types, &scratch, memo) {
+                staged.push((unknown, bound));
+            }
+        }
+    }
+    Binding::laid(lay, &mut staged)
+}
+
+/// The bind site of the binding graph at the unit `unit` of the body `view` runs reached: what the
+/// frame's slots and captures bind there ([`frame_binding`]), which a base record's types are
+/// closed under until the next; and the instance of its node under what they bind the names of
+/// its body's bind sites up to it, found filed or made through the instances of its base's graph
+/// the step lends, its handle written into the frame's slab. Nothing where no node sits there or
+/// the step lends no instances; no instance where its node owns no question. The first question
+/// the node owns that the instance refuses is refused, worded under the binding: the frame's
+/// fault at this site.
+fn instanced<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    view: KActivationView<'graph, 'here>,
+    unit: crate::scope::UnitIndex,
+) -> Result<Option<Binding<'here>>, &'here ShapeError<'here>> {
+    let Some(instances) = step.instances() else {
+        return Ok(None);
+    };
+    let shapes = step.door().0.shapes();
+    let site = instances.graph().facts.site(shapes, view.segment(), unit);
+    instanced_at(step, types, view, site)
+}
+
+/// The bind site of the part held in place at `site` of the body `view` runs, its held slot bound:
+/// its node's instance, made as [`instanced`] makes a unit's, under what the frame binds with the
+/// part beside. That binding, which the unit it is held in runs under; `None` where no node sits
+/// there.
+fn held_part<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    view: KActivationView<'graph, 'here>,
+    site: Site,
+) -> Result<Option<Binding<'here>>, KInner<'graph, 'here>> {
+    let Some(instances) = step.instances() else {
+        return Ok(None);
+    };
+    let Some(at) = instances.graph().facts.held_site(view.segment(), site) else {
+        return Ok(None);
+    };
+    instanced_at(step, types, view, at).map_err(|error| laid_refusal(step, error))
+}
+
+/// The value bound for the part `at`'s body holds in place at `site`, once its unit hoisted it.
+pub(super) fn held_value<'graph, 'here>(
+    at: &KReading<'_, 'graph, 'here>,
+    site: Site,
+) -> Option<KValue<'graph, 'here>> {
+    at.held(at.facts().held_index(at.shape(), site)?)
+}
+
+/// The next part the unit at run index `unit` of `at`'s body holds in place and has not bound:
+/// inner parts first, then left to right, as a `LET` spelling would bind them.
+fn next_held(at: &KReading<'_, '_, '_>, unit: u32) -> Option<Site> {
+    let shape = at.shape();
+    let index = UnitIndex::of_run(unit as usize);
+    let mut waiting = (at.facts().held_sites(shape).iter().enumerate())
+        .filter(|(held, site)| shape.unit_of_site(**site) == index && at.held(*held).is_none())
+        .map(|(_, site)| *site);
+    // Sites number an outer part before the parts inside it.
+    let mut next = waiting.next()?;
+    for site in waiting {
+        if shape.within(next, site) {
+            next = site;
+        }
+    }
+    Some(next)
+}
+
+/// [`instanced`] at the site `site` of the graph.
+fn instanced_at<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    view: KActivationView<'graph, 'here>,
+    site: bindgraph::Site,
+) -> Result<Option<Binding<'here>>, &'here ShapeError<'here>> {
+    let Some(instances) = step.instances() else {
+        return Ok(None);
+    };
+    let laid = instances.graph();
+    let shapes = step.door().0.shapes();
+    let Some(node) = laid.graph.node_at(site) else {
+        return Ok(None);
+    };
+    let scratch = Bump::new();
+    let mut bound = BumpVec::new_in(&scratch);
+    let mut read = BumpVec::new_in(&scratch);
+    let binding = frame_binding(step, types, view);
+    // The names of its body's bind sites up to it, and of its enclosers' bodies.
+    let earlier = (laid.graph.nodes().iter()).filter(|held| {
+        let body = held.site().body();
+        (body == site.body() && laid.graph.site_le(held.site(), site))
+            || std::iter::successors(laid.graph.encloser(site.body()), |body| {
+                laid.graph.encloser(*body)
+            })
+            .any(|encloser| encloser == body)
+    });
+    for name in earlier.flat_map(|held| held.names().iter().copied()) {
+        let crate::scope::NameAddress::Site(unknown) = laid.facts.name(name).address else {
+            continue;
+        };
+        // A name the frame's binding binds is bound as it binds it.
+        if let Some(at) = binding.bound(unknown) {
+            bound.push((name, at));
+            continue;
+        }
+        let captured =
+            |view: &KActivationView<'graph, 'here>, capture| match view.closure().get(capture) {
+                Link::Value(value) => Some(value),
+                Link::Edge(_) => None,
+            };
+        // A type name is read where the frame reads its level: its own slot, a block's around it,
+        // or its closure's type capture of an encloser's name.
+        let coordinate = (shapes.level(unknown.segment, unknown.at))
+            .and_then(|level| shapes.coordinate_of(view.segment(), level));
+        let held = match coordinate {
+            Some(Coordinate::Activation { hops, target }) => {
+                let at = (0..hops).try_fold(&view, |view, _| view.enclosing());
+                at.and_then(|at| match target {
+                    Target::Local(slot) => at.bound(slot),
+                    Target::Capture(capture) => captured(at, capture),
+                })
+            }
+            _ => std::iter::successors(Some(&view), |view| view.enclosing())
+                .find(|view| view.segment() == unknown.segment)
+                .and_then(|view| match unknown.at {
+                    Address::Slot(slot) => view.bound(slot),
+                    Address::Capture(capture) => captured(view, capture),
+                    Address::Held(site) => {
+                        let (code, facts) = step.door();
+                        let shape = code.shape(view.segment());
+                        (facts.held_index(shape, site)).and_then(|at| view.held(at))
+                    }
+                }),
+        };
+        if let Some(value) = held
+            && let Some(at) = bound_of(&scratch, value, types, &scratch, None)
+        {
+            bound.push((name, at));
+            if !read.iter().any(|(each, _)| *each == unknown) {
+                read.push((unknown, value));
+            }
+        }
+    }
+    // What the instance binds off the frame's slots, its readers close a base record's types
+    // under too.
+    let binding = match read.is_empty() {
+        true => binding,
+        false => {
+            let mut staged =
+                BumpVec::with_capacity_in(binding.entries().len() + read.len(), &scratch);
+            staged.extend(binding.entries().iter().copied());
+            for (unknown, value) in read.iter() {
+                if let Some(at) = bound_of(step.writer(), *value, types, &scratch, None) {
+                    staged.push((*unknown, at));
+                }
+            }
+            Binding::laid(step.writer(), &mut staged)
+        }
+    };
+    // A binding that leaves a name the node reads open answers less than the frame knows: the
+    // node holds no instance, and its readers read the load's records.
+    let open = (laid.graph.relevant(node).iter())
+        .any(|name| !laid.graph.is_answered(*name) && !bound.iter().any(|(each, _)| each == name));
+    if open || view.handles().is_empty() || laid.graph.node(node).handle_width() == 0 {
+        return Ok(Some(binding));
+    }
+    let range = laid.layout.range(laid.graph, node);
+    let cells = &view.handles()[range];
+    let mut words = BumpVec::new_in(&scratch);
+    words.extend(cells.iter().map(Cell::get));
+    let refused = instances.make(node, &bound, types, &scratch, &mut words);
+    for (cell, word) in cells.iter().zip(words.iter()) {
+        cell.set(*word);
+    }
+    view.handles()[laid.layout.made(node)].set(1);
+    #[cfg(test)]
+    if let Some(instanced) = INSTANCED.with(Cell::get) {
+        let mut typed = BumpVec::new_in(&scratch);
+        typed.extend(bound.iter().filter_map(|(name, at)| match at {
+            crate::scope::Bound::Type(ty) => Some((*name, *ty)),
+            _ => None,
+        }));
+        instanced(node, &words, &typed);
+    }
+    // A question the instance refuses faults the frame here, worded under its binding.
+    if let Some((question, arm)) = refused {
+        let stored = laid.facts.question(question).stored();
+        let Some(Payload::Refusal(refusal)) = stored.map(|stored| stored.arms[usize::from(arm)])
+        else {
+            panic!("a refused answer names its refusal's template");
+        };
+        let facts = (step.door().1).framed(view.handle_words(), Some(binding));
+        let refusal = facts.bound_refusal(types, &scratch, view.segment(), refusal);
+        return Err(relaid_error(step.writer(), refusal));
+    }
+    Ok(Some(binding))
+}
+
+/// What a test hands each instance a bind site holds: its node, its handle's words, and each type
+/// name the instance binds beside the type the frame binds it to.
+#[cfg(test)]
+pub(crate) type Instanced = fn(bindgraph::NodeId, &[u64], &[(bindgraph::NameId, KType)]);
+
+#[cfg(test)]
+thread_local! {
+    /// What each bind site's instance is handed to while a test sets it.
+    pub(crate) static INSTANCED: Cell<Option<Instanced>> = const { Cell::new(None) };
 }
 
 /// The closure run of `member`'s code, run as `shape`, in its capture order: each `$` name and
@@ -2154,6 +2087,25 @@ fn woke<'graph, 'here>(
     let unit = runner.current(shape);
     match (runner.stage, woken) {
         (_, Woken::Fault(inner)) => return Err(Stopped::Raised(inner)),
+        // The part is bound and its bind site visited; the unit it is held in runs next.
+        (Stage::Holding(site), Woken::Value(received)) => {
+            let index = (at.facts().held_index(shape, site)).expect("a hoisted part is held");
+            (runner.activation.hold(index, received.value))
+                .expect("a part is held once, before its unit runs");
+            let view = runner.activation.view();
+            let binding = match held_part(step, types, view, site).map_err(Stopped::Raised)? {
+                Some(binding) => Some(binding),
+                // A part no bind site sits at is a seam, as a `LET` binder holding it is: a base
+                // record's types close under what the frame binds now, the part beside.
+                None => step.instances().map(|_| frame_binding(step, types, view)),
+            };
+            if let Some(binding) = binding {
+                runner.activation =
+                    resident(step.writer(), runner.activation.binding(Some(binding)));
+            }
+            runner.stage = Stage::Next;
+            return Ok(());
+        }
         (Stage::Evaluation, Woken::Value(received)) => match unit.work {
             UnitWork::Component(component) => {
                 let slot = shape.components()[component.index()].members[0];
@@ -2216,6 +2168,9 @@ fn tied<'graph, 'here>(
         types,
         &scratch,
         &mut |site, _| {
+            if let Some(value) = held_value(&reading, site) {
+                return Some(Supplied::Value(value));
+            }
             let at = supplied
                 .binary_search_by_key(&site, |(supplied, _)| *supplied)
                 .ok()?;
@@ -2317,7 +2272,7 @@ pub(super) fn turn<'graph, 'here, 'scratch>(
         return Turn::Stopped(stopped);
     }
     loop {
-        if let Err(stopped) = decided_at_seams(step, types, runner) {
+        if let Err(stopped) = bound_at_seams(step, types, runner) {
             return Turn::Stopped(stopped);
         }
         let at = runner.reading(step);
@@ -2333,6 +2288,19 @@ pub(super) fn turn<'graph, 'here, 'scratch>(
             continue;
         }
         let unit = runner.current(shape);
+        // Each part the unit holds in place is evaluated and bound first, as a `LET` holding it
+        // would be at a statement of its own.
+        if let Some(site) = next_held(&at, runner.unit) {
+            let threads = runner.owed.is_some()
+                && runner.tails(unit, shape)
+                && shape.threaded_parts().binary_search(&site).is_ok();
+            runner.stage = Stage::Holding(site);
+            return Turn::Ask {
+                node: Evaluated::Part(site),
+                use_: if threads { Use::Threads } else { Use::Keeps },
+                owed: None,
+            };
+        }
         let component = match unit.work {
             UnitWork::Statement(statement) => {
                 let node = Evaluated::Statement(statement);
@@ -2443,7 +2411,7 @@ fn top_level_woken<'graph, 'here, 'scratch>(
     let local = Bump::new();
     let mut supplied: BumpVec<'_, (Site, KValue<'graph, 'here>)> = BumpVec::new_in(&local);
     let first = match runner.stage {
-        Stage::Evaluation => step.results_with(types).next(),
+        Stage::Evaluation | Stage::Holding(_) => step.results_with(types).next(),
         _ => None,
     };
     let woken = match (runner.stage, scratch) {
@@ -2467,7 +2435,7 @@ fn top_level_woken<'graph, 'here, 'scratch>(
                 None => Woken::Supplied(&supplied),
             }
         }
-        (Stage::Evaluation, _) => match first {
+        (Stage::Evaluation | Stage::Holding(_), _) => match first {
             Some(Ok(Received::Here(held))) => Woken::Value(held),
             Some(Ok(Received::Fault(inner))) => Woken::Fault(inner),
             _ => return step.failed(StepError::Unredeemable),
@@ -2477,11 +2445,12 @@ fn top_level_woken<'graph, 'here, 'scratch>(
     top_level(step, runner, Some(woken), types)
 }
 
-/// The statement seams of the body the runner performs, a block's and an inline module body's
-/// included: each slot its units bound since it last looked that some unit's frontier holds and
-/// its facts leave unbound, bound to what it holds and decided in its activation over what it and
-/// its enclosers decided before.
-fn decided_at_seams<'graph, 'here>(
+/// The bind sites and statement seams of the body the runner performs, a block's and an inline
+/// module body's included, among the units it ran since it last looked: each bind site makes its
+/// instance ([`instanced`]); and where a seam's slot, which some unit's frontier holds and its
+/// facts leave unbound, binds a type or a module, a base record's types close under what the
+/// frame binds now ([`frame_binding`]).
+fn bound_at_seams<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
@@ -2491,6 +2460,14 @@ fn decided_at_seams<'graph, 'here>(
     if from == to {
         return Ok(());
     }
+    for ran in from..to {
+        let view = runner.activation.view();
+        let binding = instanced(step, types, view, UnitIndex::of_run(ran))
+            .map_err(|error| Stopped::Raised(laid_refusal(step, error)))?;
+        if let Some(binding) = binding {
+            runner.activation = resident(step.writer(), runner.activation.binding(Some(binding)));
+        }
+    }
     let at = runner.reading(step);
     let (shape, facts, view) = (at.shape(), *at.facts(), at.view());
     let seams = facts.statement_seams(shape);
@@ -2498,7 +2475,7 @@ fn decided_at_seams<'graph, 'here>(
         return Ok(());
     }
     let scratch = Bump::new();
-    let mut own = BumpVec::new_in(&scratch);
+    let mut bound = false;
     for slot in seams {
         let ran = shape.unit_of_slot(*slot).run_index();
         if !ran.is_some_and(|ran| (from..to).contains(&ran)) {
@@ -2520,19 +2497,15 @@ fn decided_at_seams<'graph, 'here>(
             continue;
         }
         let memo = at.digest_memo(local(*slot));
-        let bound =
-            (view.bound(*slot)).and_then(|value| bound_of(&scratch, value, types, &scratch, memo));
-        own.extend(bound.map(|bound| (unknown, bound)));
+        bound |= (view.bound(*slot))
+            .and_then(|value| bound_of(&scratch, value, types, &scratch, memo))
+            .is_some();
     }
-    if own.is_empty() {
-        return Ok(());
+    // The seam's slots are bound: a base record's types close under what the frame binds now.
+    if bound && step.instances().is_some() {
+        let binding = frame_binding(step, types, view);
+        runner.activation = resident(step.writer(), runner.activation.binding(Some(binding)));
     }
-    let (program, below) = (runner.program, view.decided());
-    let site = EventSite::seam(shape.segment(), to as u32);
-    let memo = &mut runner.memo;
-    let decided = decide(step, types, program, memo, facts, below, &own, false, site)
-        .map_err(|error| Stopped::Raised(laid_refusal(step, error)))?;
-    runner.activation = resident(step.writer(), runner.activation.deciding(decided));
     Ok(())
 }
 
@@ -2575,6 +2548,9 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
         types,
         &scratch,
         &mut |site, part| {
+            if let Some(value) = held_value(&reading, site) {
+                return Some(Supplied::Value(value));
+            }
             missed.extend(part.map(|_| site));
             None
         },

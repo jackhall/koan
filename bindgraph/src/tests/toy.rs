@@ -287,11 +287,15 @@ fn mentions(term: Term, nesting: Nesting, out: &mut Vec<(NameId, Nesting)>) {
 /// A span's upper bound as counted: 0 to 255, or 256 for unbounded.
 const BOUNDS: u32 = 257;
 
-impl Facts for Toy {
+impl crate::Kept for Toy {
     type Term = Term;
     type NameQuestion = Probe;
     type NameAnswer = Span;
     type SiteAnswer = Verdict;
+}
+
+impl Facts for Toy {
+    type Kept = Toy;
 
     fn mentions(&self, term: Term) -> Vec<(NameId, Nesting)> {
         let mut out = Vec::new();
@@ -389,6 +393,10 @@ impl crate::Domain for Toy {
     fn lasts(&self, content: Term) -> bool {
         closed(content)
     }
+
+    fn arrives(&self, _: NameId, content: Term) -> bool {
+        closed(content)
+    }
 }
 
 /// One step of a question's plan: probe read names, perhaps only where the step before allows.
@@ -456,6 +464,8 @@ pub(super) struct ToyEdge {
     pub(super) on: ToyOn,
     pub(super) callee: usize,
     pub(super) mapping: Vec<(usize, Term)>,
+    /// An onward call into this statement's node.
+    pub(super) onto: Option<ToySite>,
 }
 
 /// Where an `AnswersName` edge takes its content from, as plain data.
@@ -543,6 +553,10 @@ impl ToyText {
                 .iter()
                 .map(|&(name, term)| (NameId::new(name), term));
             let callee = BodyId::new(edge.callee);
+            if let Some(at) = edge.onto {
+                text.arrives(site(at), mapping.collect());
+                continue;
+            }
             match edge.on {
                 ToyOn::Arm { question, arm } => {
                     text.passes(QuestionId::new(question), arm, callee, mapping.collect())
@@ -680,9 +694,11 @@ pub(super) fn bases(text: &ToyText) -> Bases {
                 inputs.extend(of(&bases, &text.questions[question].reads));
             }
             let at = call_site(text, edge);
-            for &name in &bases.captured[edge.callee] {
-                if sees(text, text.names[name], at) {
-                    inputs.insert(name);
+            if edge.onto.is_none() {
+                for &name in &bases.captured[edge.callee] {
+                    if sees(text, text.names[name], at) {
+                        inputs.insert(name);
+                    }
                 }
             }
             bases.inputs[index].extend(inputs);
@@ -806,7 +822,7 @@ impl Draw {
 /// The raw stream a generated text and its bindings are drawn from: the text from the first 640,
 /// the bindings from the rest.
 pub(super) fn raw() -> impl Strategy<Value = Vec<u32>> {
-    prop::collection::vec(any::<u32>(), 1280)
+    prop::collection::vec(any::<u32>(), 1408)
 }
 
 /// What a reader at `at` may read: the visible site names, and each answered name of `sources`
@@ -902,6 +918,7 @@ fn call_into(
         on,
         callee,
         mapping,
+        onto: None,
     }
 }
 
@@ -985,6 +1002,7 @@ fn tail_loop(draw: &mut Draw, text: &mut ToyText, sources: &mut Vec<ToySite>) {
                 on,
                 callee,
                 mapping,
+                onto: None,
             });
             out.push(text.edges.len() - 1);
         }
@@ -1149,6 +1167,8 @@ pub(super) fn toy_text(draw: &mut Draw, closed: bool) -> ToyText {
     let mut background = draw.split(384);
     let mut loops = draw.split(192);
     let mut late = draw.split(64);
+    let mut held = draw.split(128);
+    let mut holders: Vec<usize> = Vec::new();
     let draw = &mut background;
     let mut text = ToyText::default();
     let bodies = 1 + draw.pick(5);
@@ -1163,6 +1183,10 @@ pub(super) fn toy_text(draw: &mut Draw, closed: bool) -> ToyText {
             let names = if closed { 0 } else { draw.pick(2) };
             text.names
                 .extend((0..names).map(|_| (body, Some(statement))));
+            if held.chance(1, 2) {
+                holders.push(text.names.len());
+                text.names.push((body, Some(statement)));
+            }
         }
     }
 
@@ -1249,18 +1273,176 @@ pub(super) fn toy_text(draw: &mut Draw, closed: bool) -> ToyText {
             tail_loop(&mut loops, &mut text, &mut sources);
         }
     }
+    let mut decided: Vec<(usize, usize)> = Vec::new();
+    for &holder in &holders {
+        held_call(&mut held, &mut text, &mut sources, &mut decided, holder);
+    }
     for _ in 0..late.pick(3) {
         let at = any_site(&mut late, &text);
         let readable = readable(&text, &sources, at);
         if !readable.is_empty() {
             let question = question_at(&mut late, at, &readable, 0);
             text.questions.push(question);
+            // A late reader may make a body capture a holder its own arrival's call
+            // enters: taken back.
+            if matches!(text.build().0.lay(&Toy), Err(crate::LayError::Malformed(_))) {
+                text.questions.pop();
+            }
         }
     }
     if !closed {
         text.open_callers = (1..bodies).filter(|_| late.chance(1, 4)).collect();
     }
     text
+}
+
+/// A holder drawn whole: `holder`, a statement's name, given an arrival by an onward
+/// call. The arrival is a new answered name typed on the statement's site, or through a new call
+/// there taking an entry name or a name an earlier holder's node decides, or an answered name
+/// already bound before the statement. Two times in three a question at or after the statement
+/// reads the holder and decides a new name on its arms, bound at the holder's node; half of
+/// those, a call from any site into the holder's body types a name taking it. A scenario the
+/// crate finds malformed is taken back whole.
+fn held_call(
+    draw: &mut Draw,
+    text: &mut ToyText,
+    sources: &mut Vec<ToySite>,
+    decided: &mut Vec<(usize, usize)>,
+    holder: usize,
+) {
+    let at = text.names[holder];
+    let (body, Some(statement)) = at else {
+        unreachable!("a holder is a statement's name")
+    };
+    let saved = (
+        text.questions.len(),
+        text.edges.len(),
+        text.answers.len(),
+        text.answered,
+        sources.len(),
+        decided.len(),
+    );
+    let based = bases(text);
+    let before: Vec<usize> = (0..text.names.len() + text.answered)
+        .filter(|&name| {
+            (based.names[name].iter())
+                .all(|&site| text.names[site] != at && sees(text, text.names[site], at))
+        })
+        .collect();
+    let fresh = |text: &ToyText| text.names.len() + text.answered;
+    let arrival = match draw.pick(4) {
+        0 => {
+            let name = fresh(text);
+            let content = term_over(draw, &before);
+            let source = ToySource::Site { site: at, content };
+            text.answers.push(ToyAnswer { name, source });
+            sources.push(at);
+            text.answered += 1;
+            name
+        }
+        1 | 2 if text.bodies.len() > 1 => {
+            let name = fresh(text);
+            let taken: Vec<(usize, usize)> = decided.clone();
+            let (callee, takes) = if !taken.is_empty() && draw.chance(2, 3) {
+                taken[draw.pick(taken.len())]
+            } else {
+                let callee = any_callee(draw, text);
+                let entry = text.entry_names(callee);
+                (callee, entry[draw.pick(entry.len())])
+            };
+            let edge = call_into(draw, text, ToyOn::Site(at), callee, &before);
+            text.edges.push(edge);
+            let source = ToySource::Call {
+                edge: text.edges.len() - 1,
+                takes,
+            };
+            text.answers.push(ToyAnswer { name, source });
+            sources.push(at);
+            text.answered += 1;
+            name
+        }
+        _ => {
+            let answered: Vec<usize> = (before.iter().copied())
+                .filter(|&name| name >= text.names.len())
+                .collect();
+            if answered.is_empty() {
+                return;
+            }
+            answered[draw.pick(answered.len())]
+        }
+    };
+    let content = match draw.pick(6) {
+        0 => list(name_of(arrival)),
+        _ => name_of(arrival),
+    };
+    text.edges.push(ToyEdge {
+        on: ToyOn::Site(at),
+        callee: body,
+        mapping: vec![(holder, content)],
+        onto: Some(at),
+    });
+    if draw.chance(5, 6) {
+        let later = statement + draw.pick((text.bodies[body].1 - statement) as usize) as u32;
+        let arms = 1 + draw.pick(2) as u32;
+        let mut reads = vec![holder];
+        let more = text.visible((body, Some(later)));
+        if draw.chance(1, 3) {
+            let read = more[draw.pick(more.len())];
+            if read != holder {
+                reads.push(read);
+            }
+        }
+        let plan = (0..1 + draw.pick(2)).map(|_| step(draw, &reads)).collect();
+        text.questions.push(ToyQuestion {
+            site: (body, Some(later)),
+            reads: reads.clone(),
+            plan,
+            arms,
+        });
+        let question = text.questions.len() - 1;
+        let name = fresh(text);
+        for arm in 0..arms {
+            let content = term_over(draw, &reads);
+            let source = ToySource::Arm {
+                question,
+                arm,
+                content,
+            };
+            text.answers.push(ToyAnswer { name, source });
+        }
+        sources.push((body, Some(later)));
+        text.answered += 1;
+        decided.push((body, name));
+        if body != 0 && draw.chance(3, 4) {
+            // From another body where one is drawn, so the taking crosses into the holder's.
+            let mut from = any_site(draw, text);
+            if from.0 == body {
+                from = any_site(draw, text);
+            }
+            let readable = readable(text, sources, from);
+            let edge = call_into(draw, text, ToyOn::Site(from), body, &readable);
+            text.edges.push(edge);
+            let taker = fresh(text);
+            let source = ToySource::Call {
+                edge: text.edges.len() - 1,
+                takes: name,
+            };
+            text.answers.push(ToyAnswer {
+                name: taker,
+                source,
+            });
+            sources.push(from);
+            text.answered += 1;
+        }
+    }
+    if matches!(text.build().0.lay(&Toy), Err(crate::LayError::Malformed(_))) {
+        text.questions.truncate(saved.0);
+        text.edges.truncate(saved.1);
+        text.answers.truncate(saved.2);
+        text.answered = saved.3;
+        sources.truncate(saved.4);
+        decided.truncate(saved.5);
+    }
 }
 
 /// The name at `index` as a term.
@@ -1409,6 +1591,21 @@ pub(super) fn grows_by_terms(text: &ToyText) -> bool {
                 }
                 for cut in add {
                     changed |= local[body][answer.name].insert(cut);
+                }
+            }
+            // An onward call's mapping types a statement's name, as a term on a site.
+            for edge in text.edges.iter().filter(|edge| edge.onto.is_some()) {
+                for &(to, term) in &edge.mapping {
+                    if outside(body, to) {
+                        continue;
+                    }
+                    let mut add = Vec::new();
+                    for (from, built) in mentions(term) {
+                        compose(&mut add, &local[body][from], built);
+                    }
+                    for cut in add {
+                        changed |= local[body][to].insert(cut);
+                    }
                 }
             }
         }

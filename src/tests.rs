@@ -18,11 +18,6 @@ pub(crate) fn allocation_count() -> u64 {
     counting_alloc::thread_allocations()
 }
 
-/// The bytes this thread has asked for since it started.
-pub(crate) fn allocation_bytes() -> u64 {
-    counting_alloc::thread_bytes()
-}
-
 #[global_allocator]
 static COUNTING_ALLOCATOR: counting_alloc::Counting<std::alloc::System> =
     counting_alloc::Counting(std::alloc::System);
@@ -46,25 +41,6 @@ pub(crate) fn nowhere() -> crate::source::SourceRef {
     }
 }
 
-/// The syntax of the quote `#(1)`, copied into storage of its own, as a composition owns its
-/// syntax: what a suite below the parser builds a composition over.
-pub(crate) fn composed_syntax() -> crate::scope::ComposedSyntax {
-    let symbols = crate::symbols::SymbolInterner::new();
-    let storage = crate::memory::program_storage();
-    let parsed = crate::parse::parse(storage.brand(), &symbols, "#(1)").expect("a quote parses");
-    let crate::parse::ExpressionPart::QuotedExpression(syntax) = parsed[0].parts[0].value else {
-        panic!("the statement is a quote")
-    };
-    let digest = crate::values::digest::DigestHasher::new(crate::values::digest::Tag::Number)
-        .count(0)
-        .finished();
-    crate::scope::ComposedSyntax::of(crate::scope::ComposedRoot {
-        syntax,
-        digest,
-        parameters: &[],
-    })
-}
-
 /// The load's walk of koan over `shapes`, as a program's load runs it: what a suite below the
 /// language reads facts through where it needs the walk's, beside the walk's refusal, rendered.
 pub(crate) fn walked<'graph, 'x>(
@@ -81,7 +57,7 @@ pub(crate) fn walked<'graph, 'x>(
     .map_err(|error| error.display(symbols, types).to_string())
 }
 
-/// Koan's load walk over the records `store` keeps, rooted at `at`: what a test language below
+/// Koan's load walk over the records `store` keeps: what a test language below
 /// koan runs as its own [`Language::facts`](crate::program::Language::facts), so every fact a run
 /// reads is the walk's.
 pub(crate) fn walk<'graph: 'o, 'tier: 'o, 'o, S: crate::scope::Store<'o>>(
@@ -90,10 +66,9 @@ pub(crate) fn walk<'graph: 'o, 'tier: 'o, 'o, S: crate::scope::Store<'o>>(
     store: &S,
     types: &crate::values::Chain<'tier, '_, '_, '_>,
     scratch: crate::memory::BumpAllocator<'_>,
-    at: crate::scope::Segment,
 ) -> Result<(), crate::scope::ShapeError<'o>> {
     use crate::program::Language;
-    crate::dispatch::Koan::facts(shapes, builtins, store, types, scratch, at)
+    crate::dispatch::Koan::facts(shapes, builtins, store, types, scratch)
 }
 
 thread_local! {

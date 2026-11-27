@@ -1,8 +1,7 @@
 //! Library facade for the koan interpreter: the modules the binary and the tests reach the
 //! interpreter through.
 
-/// The build: what the program's text decides, held beside the run tree. Here, the key a
-/// settlement is found by.
+/// The build: what the program's text decides, held beside the run tree.
 pub mod build;
 /// Every type the builtin table names, generated once and compiled in: the tier a load's root
 /// rests on.

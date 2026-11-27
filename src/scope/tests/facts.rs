@@ -1,5 +1,5 @@
-//! The fact vocabulary: a frontier's order, its unknowns through the frontiers it read, and when a
-//! binding wakes it.
+//! The fact vocabulary: a frontier's order, its unknowns through the frontiers it read, and which
+//! bindings name it.
 
 use crate::memory::{Bump, BumpVec, Lays, program_storage};
 use crate::type_lattice::KType;
@@ -32,7 +32,7 @@ impl<'a> Frontier<'a> {
     }
 
     /// Its marks, flattened as [`unknowns`](Self::unknowns) flattens its unknowns.
-    pub fn marks(self) -> Vec<Noted<'a>> {
+    pub fn marks(self) -> Vec<Noted> {
         let mut widest = std::collections::HashMap::<(usize, usize), Segment>::new();
         let (mut stack, mut marks) = (vec![(self, Segment(0))], Vec::new());
         while let Some((frontier, from)) = stack.pop() {
@@ -45,48 +45,6 @@ impl<'a> Frontier<'a> {
         }
         marks.dedup();
         marks
-    }
-
-    /// Whether `binding` binds some unknown here open: whether it re-runs the unit.
-    pub fn meets_open(self, binding: Binding<'_>) -> bool {
-        (self.marks().iter()).any(|noted| noted.is_open() && binding.bound(noted.unknown).is_some())
-    }
-
-    /// How the record stands, its marks flattened: it re-runs where a mark on a `checked` name
-    /// is undecided or unkept, or one on a `witness` name is and none there is undecided of a
-    /// holding kind; else it is read closed where it names what `chain` binds.
-    pub fn wakes_flat(
-        self,
-        checked: Binding<'_>,
-        witness: Binding<'_>,
-        chain: Binding<'_>,
-        keeps: &dyn Fn(&crate::scope::Answered<'_>) -> bool,
-    ) -> crate::scope::Wake {
-        let marks = self.marks();
-        let open = |names: Binding<'_>| {
-            (marks.iter()).any(|noted| match noted.mark {
-                crate::scope::Mark::Open(open) => {
-                    names.bound(noted.unknown).is_some()
-                        && open.answered.is_none_or(|answered| !keeps(answered))
-                }
-                crate::scope::Mark::Named => false,
-            })
-        };
-        let holds = (marks.iter()).any(|noted| match noted.mark {
-            crate::scope::Mark::Open(open) => {
-                witness.bound(noted.unknown).is_some()
-                    && open.answered.is_none()
-                    && open.kind.holds()
-            }
-            crate::scope::Mark::Named => false,
-        });
-        if open(checked) || (open(witness) && !holds) {
-            crate::scope::Wake::Open
-        } else if self.meets_binding(chain) {
-            crate::scope::Wake::Named
-        } else {
-            crate::scope::Wake::Untouched
-        }
     }
 
     /// Whether `binding` binds some unknown here: whether it wakes the unit's record.

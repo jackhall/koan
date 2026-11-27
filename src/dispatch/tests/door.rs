@@ -20,7 +20,7 @@ PRINT (TWICE seven)";
 fn facts_over_no_layers_answer_as_the_load_does() {
     loaded(SOURCE, |program| {
         let load = program.facts();
-        let facts = Facts::of(load);
+        let facts = Facts::under(load);
         let types = program.tiers().resting();
         let same = |what: &str, left: String, right: String| {
             assert_eq!(left, right, "{what} reads alike through the door");
@@ -83,7 +83,6 @@ fn facts_over_no_layers_answer_as_the_load_does() {
                 laid!(instance_at(site));
                 laid!(selection(site));
                 laid!(named_contributions(site));
-                alike!(mint_at(site));
                 alike!(mints_at(site));
                 alike!(view_tree(site));
                 alike!(path_read(site));

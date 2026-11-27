@@ -10,7 +10,7 @@
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, Writer, bump_table, collect,
 };
-use crate::parse::{ExpressionPart, KExpression, Role};
+use crate::parse::{ExpressionPart, KEYWORDS, KExpression, Role, quantifier_entries};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::values::{Chain, Knotted};
 
@@ -22,7 +22,7 @@ use super::shape::{
     Position, Segment, ShapeError, ShapeKind, Site, Slot, Target, UnitIndex, follow,
 };
 use super::signature::declare_quantifiers;
-use super::typed::{Handoff, Root, ViewSlots};
+use super::typed::{AsWritten, Handoff, Root, Unwalked, ViewSlots};
 
 mod memos;
 mod tails;
@@ -378,7 +378,7 @@ impl Shapes<'_> {
     /// Where `unknown` binds. A callable's parameter, `FOR ALL` name or `:Type` parameter, a
     /// block's parameter — a `USING … SCOPE` block's surfaced name, an arm's `it` — and a quote's
     /// code's capture bind at that body's entry; a local or a type binder at the unit that binds
-    /// it.
+    /// it; an inline holder at the unit holding its site.
     pub fn bind_site(&self, unknown: Unknown) -> BindSite {
         let segment = unknown.segment;
         let declaring = self.shape_at(segment);
@@ -389,6 +389,7 @@ impl Shapes<'_> {
         };
         let slot = match unknown.at {
             Address::Capture(_) => return at(segment, UnitIndex::ENTRY),
+            Address::Held(site) => return at(segment, declaring.unit_of_site(site)),
             Address::Slot(slot) => slot,
         };
         match declaring.position_of(slot) == Position::PARAMETER {
@@ -426,11 +427,60 @@ impl Shapes<'_> {
         }
     }
 
+    /// Whether the run-bound type name at `level`, read from `segment`, is a type binder the first
+    /// body outward holding it in a slot of its own declares: a declaration the load left unknown,
+    /// which no bound describes, rather than a `FOR ALL` name or a type parameter.
+    pub fn declares_type(&self, mut segment: Segment, level: usize) -> bool {
+        loop {
+            match self.home(segment, level) {
+                Some(Target::Local(slot)) => {
+                    return self.shape_at(segment).declarations(slot).is_some();
+                }
+                Some(Target::Capture(_)) | None => match self.parent(segment) {
+                    Some((parent, _)) => segment = parent,
+                    None => return false,
+                },
+            }
+        }
+    }
+
+    /// The bound the run-bound type name at `level`, read from `segment`, was written with: the
+    /// first body outward that declares it in a slot of its own, its callable's `FOR ALL` group
+    /// entry. `None` for a name written with no bound, and for one no callable's group declares.
+    pub fn written_bound(&self, mut segment: Segment, level: usize) -> Option<AsWritten> {
+        let declared = loop {
+            match self.home(segment, level) {
+                Some(Target::Local(slot)) => break (self.shape_at(segment), slot),
+                Some(Target::Capture(_)) | None => segment = self.parent(segment)?.0,
+            }
+        };
+        let (shape, slot) = declared;
+        let BinderSymbol::Type(name) = shape.slot_name(slot) else {
+            return None;
+        };
+        let form = shape.form()?;
+        let group = form.parts.windows(2).find_map(|pair| match pair[0].value {
+            ExpressionPart::Keyword(keyword) if keyword == KEYWORDS.all.symbol() => {
+                Some(&pair[1].value)
+            }
+            _ => None,
+        })?;
+        let entry = quantifier_entries(group).find(|entry| entry.name == Some(name))?;
+        match entry.bound? {
+            ExpressionPart::Type(name) => Some(AsWritten::Name(*name)),
+            ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
+                Some(AsWritten::Source(node.source))
+            }
+            _ => None,
+        }
+    }
+
     /// The level of the run-bound type name `address` of `segment`; `None` for any other address.
     pub fn level(&self, segment: Segment, address: Address) -> Option<usize> {
         let target = match address {
             Address::Slot(slot) => Target::Local(slot),
             Address::Capture(capture) => Target::Capture(capture),
+            Address::Held(_) => return None,
         };
         let by_home = self.levels[segment.index() as usize].levels_by_home;
         let at = by_home
@@ -440,9 +490,10 @@ impl Shapes<'_> {
     }
 
     /// The level of the path `segment`'s types spell at index `index` of [`BodyShape::spelled`];
-    /// `None` where it names no identity.
-    pub fn path_level(&self, segment: Segment, index: usize) -> Option<usize> {
-        self.levels[segment.index() as usize].paths[index]
+    /// [`Unwalked`] where it names no identity: its root lands past the chain, where no binding is
+    /// written in.
+    pub fn path_level(&self, segment: Segment, index: usize) -> Result<usize, Unwalked> {
+        self.levels[segment.index() as usize].paths[index].ok_or(Unwalked::outside_a_walk())
     }
 
     /// The chain root `segment` lies on: the program, or the composed code it lies in.
@@ -692,18 +743,6 @@ impl Shapes<'_> {
     /// born in a `MODULE` or `GROUP` body, or named as a value anywhere but a call's head.
     pub fn escapes(&self, segment: Segment) -> bool {
         self.tails[segment.index() as usize].escapes
-    }
-
-    /// The parameters of the callable `segment` a tail edge from it into itself passes anything but
-    /// that same parameter at, sorted.
-    pub fn rebound(&self, segment: Segment) -> &[Slot] {
-        self.tails[segment.index() as usize].rebound
-    }
-
-    /// The parameters of the callable `segment` every tail edge into it passes on bare, sorted:
-    /// empty where it escapes.
-    pub fn invariant(&self, segment: Segment) -> &[Slot] {
-        self.tails[segment.index() as usize].invariant
     }
 
     /// Every site in the text that calls the callable `segment` or offers it to code, sorted.

@@ -3,7 +3,7 @@
 //! each shape carries — each minting site closed, invariant or varying, and each warm composite.
 
 use crate::program::Program;
-use crate::scope::{BodyClass, BodyShape, Mint, ShapeKind};
+use crate::scope::{BodyClass, BodyShape, ShapeKind};
 
 use super::run;
 use super::statics::{body, loaded, module_body};
@@ -198,7 +198,7 @@ fn a_value_the_body_received_passed_on_is_no_exit() {
                   (h)))";
     loaded(&format!("{COUNTER}{source}"), |program| {
         let mk = body(program, program.shape(), "mk");
-        assert!(record_of(program, body(program, mk, "h")).1, "a capture");
+        assert!(record_of(program, body(program, mk, "h")), "a capture");
     });
 }
 
@@ -549,21 +549,15 @@ fn the_program_and_a_quote_are_frame_bodies() {
     );
 }
 
-/// The caching record of `shape`: each own minting site's class in site order, and whether its
-/// frame caches.
-fn record_of(program: &Program<'_>, shape: &BodyShape<'_>) -> (Vec<Mint>, bool) {
-    let caching = (program.facts().caching(shape)).expect("the load fixed the record");
-    let mints = caching
-        .mints
-        .entries()
-        .iter()
-        .map(|(_, mint)| *mint)
-        .collect();
-    (mints, caching.caches)
+/// Whether the frame `shape` runs in caches, as the load fixed it.
+fn record_of(program: &Program<'_>, shape: &BodyShape<'_>) -> bool {
+    (program.facts().caching(shape))
+        .expect("the load fixed the record")
+        .caches
 }
 
 /// [`record_of`] the body the top-level binder `name` of `COUNTER` and `source` births.
-fn caching(source: &str, name: &str) -> (Vec<Mint>, bool) {
+fn caching(source: &str, name: &str) -> bool {
     loaded(&format!("{COUNTER}{source}"), |program| {
         record_of(program, body(program, program.shape(), name))
     })
@@ -571,17 +565,14 @@ fn caching(source: &str, name: &str) -> (Vec<Mint>, bool) {
 
 #[test]
 fn a_closed_view_mints_nothing_at_run() {
-    assert_eq!(
-        caching(
-            "LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (c)))",
-            "f"
-        ),
-        (vec![Mint::Closed], false)
-    );
+    assert!(!caching(
+        "LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (c)))",
+        "f"
+    ));
 }
 
 #[test]
-fn a_view_over_a_parameter_a_tail_loop_passes_on_is_invariant() {
+fn a_tail_loop_passing_its_module_on_bare_caches() {
     let looping = |passed: &str| {
         caching(
             &format!(
@@ -592,16 +583,11 @@ fn a_view_over_a_parameter_a_tail_loop_passes_on_is_invariant() {
         )
     };
     // Passing the module on bare is no exit, so the loop caches.
-    assert_eq!(looping("m"), (vec![Mint::Invariant], true));
-    assert_eq!(
-        looping("ints").0,
-        [Mint::Varying],
-        "a parameter rebound on a tail edge varies"
-    );
+    assert!(looping("m"));
 }
 
 #[test]
-fn a_keyworded_tail_loop_pairs_its_arguments_by_slot() {
+fn a_keyworded_tail_loop_passing_its_module_on_caches() {
     let looping = |passed: &str| {
         let source = format!(
             "NEWTYPE Link = :{{next :Any}}\n\
@@ -612,82 +598,14 @@ fn a_keyworded_tail_loop_pairs_its_arguments_by_slot() {
         loaded(&format!("{COUNTER}{source}"), |program| {
             let (_, looping) = (program.shape().nested_shapes().iter())
                 .find(|(_, nested)| {
-                    nested.kind() == ShapeKind::Callable
-                        && (program.facts().caching(nested))
-                            .is_some_and(|c| !c.mints.entries().is_empty())
+                    nested.kind() == ShapeKind::Callable && nested.body().len() == 2
                 })
                 .expect("the looping registration births a callable body");
             record_of(program, looping)
         })
     };
     // A member of a received value is no exit either, so the loop caches.
-    assert_eq!(looping("m"), (vec![Mint::Invariant], true));
-    assert_eq!(looping("ints").0, [Mint::Varying], "a slot rebound varies");
-}
-
-#[test]
-fn a_callable_read_as_a_value_keeps_its_parameters_varying() {
-    assert_eq!(
-        caching(
-            "LET h = (FN :{m :Counter} -> Number = #((LET v = (m :| Counter)) (1)))\n\
-             LET k = h",
-            "h"
-        ),
-        (vec![Mint::Varying], true)
-    );
-}
-
-#[test]
-fn a_view_over_a_local_binder_varies() {
-    assert_eq!(
-        caching(
-            "LET f = (FN :{n :Number} -> Number = \
-             #((LET w = (MATCH (n) WITH #{Number: (ints)})) (LET v = (w :| Counter)) (n)))",
-            "f"
-        )
-        .0,
-        [Mint::Varying]
-    );
-}
-
-#[test]
-fn a_view_over_a_capture_is_invariant() {
-    let source = "LET mk = (FN :{m :Counter} -> Any = #(\
-                  (LET h = (FN :{n :Number} -> Number = #((LET v = (m :| Counter)) (n)))) \
-                  (h)))";
-    loaded(&format!("{COUNTER}{source}"), |program| {
-        let mk = body(program, program.shape(), "mk");
-        assert_eq!(
-            record_of(program, body(program, mk, "h")),
-            (vec![Mint::Invariant], true)
-        );
-    });
-}
-
-#[test]
-fn a_view_over_a_view_follows_the_parameter_under_it() {
-    assert_eq!(
-        caching(
-            "LET f = (FN :{m :Counter} -> Number = #((LET v = ((m :| Counter) :| Counter)) (1)))",
-            "f"
-        ),
-        (vec![Mint::Invariant, Mint::Invariant], true)
-    );
-}
-
-#[test]
-fn a_nominal_declared_per_call_follows_the_type_it_reads() {
-    let source = "EXPR FOR ALL #[Elt] #(BOXED x :Elt) -> Number = \
-                  #((NEWTYPE Box = :{v :Elt}) (1))";
-    loaded(&format!("{COUNTER}{source}"), |program| {
-        let (_, registered) = (program.shape().nested_shapes().iter())
-            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
-            .expect("the registration births a callable body");
-        assert_eq!(
-            record_of(program, registered),
-            (vec![Mint::Invariant], true)
-        );
-    });
+    assert!(looping("m"));
 }
 
 /// Debug builds check at each minting door that the load recorded the site: a view and a nominal

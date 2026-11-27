@@ -24,7 +24,7 @@ use crate::type_lattice::{
 };
 use crate::values::Chain;
 
-use super::judge::{self, Marks};
+use super::judge::{self, Derives};
 
 /// How many members of a module of signature `schema` are values — the index the type channel
 /// starts at.
@@ -109,14 +109,15 @@ pub struct SignatureMember {
 /// variable in one kept: a pin is invariant, so its variable has no bound to read it through.
 /// A variable no binding gives a type is read through its bound ([`judge::variable_above`]); a
 /// variable whose declared bound holds no module has no member at any binding. A value
-/// member of a type a run's binding decides is [`Rule::SignatureValue`]'s output over it, partial
-/// on whether the binding's module declares it ([`judge::defined_else`]), `Any` where it does not,
-/// as a closed operand declaring none reads unknown. An arrival guard is read at the type it
+/// member of a type a run's binding decides is [`Rule::SignatureValue`]'s output over it: over
+/// `FOR ALL` names alone licensed by the bound ([`judge::bound_declares`]), `None` where the bound
+/// declares none; through a module the run builds, partial on whether the module declares it
+/// ([`judge::defined_else`]), `Any` where it does not. An arrival guard is read at the type it
 /// arrives at ([`judge::arriving`]).
 ///
 /// [`Rule::SignatureValue`]: crate::scope::Rule::SignatureValue
-pub fn signature_member(
-    marks: &dyn Marks,
+pub fn signature_member<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     upper: Parametric,
@@ -134,9 +135,9 @@ pub fn signature_member(
     if judge::variable_outside(types, scratch, upper, KType::EMPTY_SIGNATURE) {
         return None;
     }
-    // A value member of a type a binding decides — a variable a run binds, a union holding one —
-    // is what the binding's module declares, read whole; `Any`, the read's fallback, where it
-    // declares none.
+    // A value member of a type a binding decides is what the binding's module declares, read
+    // whole. Over `FOR ALL` names alone, the bound licenses it, so every binding declares it;
+    // through a module the run builds, `Any`, the read's fallback, where the module declares none.
     if let BinderSymbol::Value(value) = name
         && judge::varies(types, upper)
         && matches!(
@@ -146,14 +147,19 @@ pub fn signature_member(
     {
         let operands = [DeclaredType::Type(upper)];
         let rule = crate::scope::Rule::SignatureValue(value);
-        let read = (rule, &operands[..]);
-        if let Some(read) = judge::defined_else(marks, types, scratch, read, KType::ANY.into()) {
-            return read.map(|declared| SignatureMember {
-                declared: DeclaredType::Type(declared),
-                unpinned: None,
-            });
-        }
-        return None;
+        let read = if judge::over_for_all_names(marks, types, scratch, upper) {
+            if !judge::bound_declares(marks, types, scratch, upper, name) {
+                return None;
+            }
+            judge::ruled_one(marks, types, scratch, rule, &operands)
+        } else {
+            judge::defined_else(marks, types, scratch, (rule, &operands), KType::ANY.into())?
+                .map(Some)
+        };
+        return read.ok().flatten().map(|declared| SignatureMember {
+            declared: DeclaredType::Type(declared),
+            unpinned: None,
+        });
     }
     if let Some(above) = judge::variable_above(types, scratch, upper) {
         return signature_member(marks, types, scratch, above.into(), name);
@@ -195,11 +201,11 @@ pub fn signature_member(
                     Some(held) => match (name, held.as_type(), read.declared.as_type()) {
                         // A value member is read at the meet of the types each declares it at.
                         (BinderSymbol::Value(_), Some(a), Some(b)) => {
-                            DeclaredType::Type(judge::met(marks, types, scratch, a, b)?)
+                            DeclaredType::Type(judge::met(marks, types, scratch, a, b).ok()?)
                         }
                         // Two applications declaring a type member, or a scheme, otherwise
                         // disagree.
-                        _ if judge::same(marks, types, held, read.declared) => held,
+                        _ if judge::same(marks, types, scratch, held, read.declared) => held,
                         _ => return None,
                     },
                 });

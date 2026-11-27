@@ -44,9 +44,6 @@ though the text names both members and what each selects.
 
 ## Dependencies
 
-**Requires:**
-
-- [The build over the binding graph](build-over-the-binding-graph.md) — a
-  split is an `AnswerBranch` at a bind site.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

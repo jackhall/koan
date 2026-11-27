@@ -336,7 +336,28 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             wanted,
             at,
         },
-        E::NoInstance { scheme, wanted, .. } => E::NoInstance { scheme, wanted, at },
+        E::NoInstance {
+            scheme,
+            rebounds,
+            wanted,
+            ..
+        } => E::NoInstance {
+            scheme,
+            rebounds,
+            wanted,
+            at,
+        },
+        E::MemberUninstanced {
+            name,
+            carried,
+            wanted,
+            ..
+        } => E::MemberUninstanced {
+            name,
+            carried,
+            wanted,
+            at,
+        },
         E::AmbiguousInstance { key, .. } => E::AmbiguousInstance { key, at },
         E::NoInstanceAtCandidates { key, .. } => E::NoInstanceAtCandidates { key, at },
         E::QuantifiedValue { .. } => E::QuantifiedValue { at },
@@ -355,7 +376,13 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             scrutinee,
             at,
         },
-        E::NotUnion { clause, .. } => E::NotUnion { clause, at },
+        E::NotUnion {
+            clause, written, ..
+        } => E::NotUnion {
+            clause,
+            written,
+            at,
+        },
         E::NoVariant { label, union, .. } => E::NoVariant { label, union, at },
         E::Uncovered { union, variant, .. } => E::Uncovered { union, variant, at },
         E::LoneVariant { name, .. } => E::LoneVariant { name, at },
@@ -400,16 +427,25 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             key,
             arguments,
             listed,
+            members,
             shapes,
             ..
         } => E::NoAdmittingCandidate {
             key,
             arguments,
             listed,
+            members,
             shapes,
             at,
         },
-        E::NoField { of, field, .. } => E::NoField { of, field, at },
+        E::NoField {
+            of, written, field, ..
+        } => E::NoField {
+            of,
+            written,
+            field,
+            at,
+        },
         E::NoMember { of, member, .. } => E::NoMember { of, member, at },
         E::Unlisted { name, .. } => E::Unlisted { name, at },
         E::OpenPathInType { .. } => E::OpenPathInType { at },
@@ -423,11 +459,13 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::Ambiguous {
             key,
             arguments,
+            members,
             count,
             ..
         } => E::Ambiguous {
             key,
             arguments,
+            members,
             count,
             at,
         },
@@ -436,11 +474,13 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::AnnotationNeverSatisfied { refused, .. } => E::AnnotationNeverSatisfied { refused, at },
         E::CallNeverSatisfied {
             callee,
+            rebounds,
             payload,
             parameters,
             ..
         } => E::CallNeverSatisfied {
             callee,
+            rebounds,
             payload,
             parameters,
             at,
@@ -463,10 +503,12 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::ReadNeverSatisfied {
             container,
             argument,
+            member,
             ..
         } => E::ReadNeverSatisfied {
             container,
             argument,
+            member,
             at,
         },
         E::EvalNeverSatisfied { refused, .. } => E::EvalNeverSatisfied { refused, at },
@@ -477,6 +519,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             at,
         },
         E::UnderCall { refusal, .. } => E::UnderCall { call: at, refusal },
+        E::Grows { name, .. } => E::Grows { name, at },
     }
 }
 

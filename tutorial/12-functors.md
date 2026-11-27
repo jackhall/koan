@@ -574,7 +574,7 @@ Without the first line, `BOTH 1 AND "x"` is refused: `1` fixes `Elt` to
 `Number`, and `"x"` does not lie under it.
 
 A quantified `FN` works the same way, called by name. Bound with a plain `LET`,
-it lives in a module, where each call works out `Elt` afresh:
+here in a module, each call works out `Elt` afresh:
 
 ```koan
 MODULE lib = (
@@ -618,12 +618,15 @@ Where nothing says which type is wanted, as in `LET keep = [pick]`, the program
 is refused before it runs, naming the type parameter left open:
 
 ```text
-error: <input>:3:14: nothing fixes `Elt` here: a quantified function is read only at the head of a call, as the binding of a `MODULE` member, or where the type it is wanted at solves its group
+error: <input>:3:14: nothing fixes `Elt` here: a quantified function is read only at the head of a call, held by a `LET` whose value its body does not return, or where the type it is wanted at solves its group
 ```
 
-Outside a module, a quantified `FN` is bound only under a type that settles it,
-`LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))`;
-a plain `LET pick = (FN FOR ALL …)` there is refused the same way. A quantified
+A plain `LET pick = (FN FOR ALL …)` keeps the function generic in any body,
+and each call by name works out `Elt` afresh. A `LET` whose value its body
+returns — a function's last statement, a `MATCH` arm's, a quote's — is used
+at the type the body returns, as is one with a stated type,
+`LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))`.
+A quantified
 type such as `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)` is written only as a
 signature member's type, below; a slot that wants a function usable at several
 types takes a module instead.

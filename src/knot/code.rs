@@ -427,7 +427,7 @@ pub(super) fn staged<'graph: 'cell, 'cell, 'x>(
     layout.extend(
         (facts.type_captures(shape).iter().zip(contract)).map(|(at, composed)| TypeCapture {
             composed: *composed,
-            value: activation.read(*at),
+            value: activation.read_capture(*at),
         }),
     );
     // A quote of composed code is its syntax under the root it lies in, not its code as resolved

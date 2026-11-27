@@ -103,8 +103,6 @@ the lower layer of the root, is what it stubs a reference into by handle.
 
 - [The graph written out and read back](../../bindgraph/roadmap/graph-export.md)
   — the export the image writes the graph through.
-- [The build over the binding graph](build-over-the-binding-graph.md) — the
-  image writes the graph, not tables a later build would reshape.
 - [What the agent tier keeps](agent-tier-keeps.md) — which of the tier's
   content is the cold layer's and which the warm's.
 - [A refused program stays loaded](refused-programs-stay-loaded.md) — program

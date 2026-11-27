@@ -1,5 +1,5 @@
 //! What a koan cell delivers to its consumer, as the substrate's two-family bundle: a value, or —
-//! filed as a carrier — a [fault](super::README.md#faults).
+//! filed as a carrier — a [fault](README.md#faults).
 
 use crate::knot::{KInner, KValue, KValueFamily};
 use crate::memory::{Delivery, DropFree, covariant, reattachable};

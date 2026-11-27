@@ -1,47 +1,48 @@
-//! The build module's tests: a settlement's key, the keys fold, the load's store, the wake memo,
-//! and the import boundary.
+//! The build module's tests: the folds, the load's store, and the import boundary; and the count
+//! of the units each walk types, which the dispatch suite reads.
+
+use std::cell::RefCell;
+
+use crate::scope::Shapes;
 
 mod boundary;
 mod folds;
 mod load;
-mod wake;
 
-use crate::scope::Segment;
-use crate::values::ContentDigest;
-use crate::values::digest::{DigestHasher, Tag};
-
-use super::key_of;
-
-/// A digest standing in for an argument's content.
-fn digest(at: usize) -> ContentDigest {
-    DigestHasher::new(Tag::Number).count(at).finished()
+thread_local! {
+    /// How many units the walks on this thread typed, by the address of the shapes each walked: a
+    /// composition walks shapes of its own, so a program's count is its own load's alone.
+    static TYPED: RefCell<Vec<(usize, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
-#[test]
-fn a_key_is_equal_for_equal_inputs_and_tells_segments_and_bindings_apart() {
-    let key = |segment, digests: &[usize]| {
-        key_of(
-            digest(0),
-            Segment(segment),
-            digests.iter().map(|at| digest(*at)),
-        )
-    };
-    assert_eq!(key(3, &[1, 2]), key(3, &[1, 2]));
-    assert_ne!(
-        key(3, &[1, 2]),
-        key(4, &[1, 2]),
-        "segments with equal digests differ"
-    );
-    assert_ne!(
-        key(3, &[1, 2]),
-        key(3, &[2, 1]),
-        "the digests count in slot order"
-    );
-    assert_ne!(key(3, &[1]), key(3, &[1, 1]));
-    assert_ne!(key(3, &[]), key(4, &[]));
-    assert_ne!(
-        key(3, &[1]),
-        key_of(digest(9), Segment(3), [digest(1)].into_iter()),
-        "bases with equal segments differ"
-    );
+/// Starts the count of a walk over the shapes at `shapes` afresh: a later load may lay its shapes
+/// where a dropped one's were.
+pub(super) fn walking(shapes: usize) {
+    TYPED.with(|typed| typed.borrow_mut().retain(|(at, _)| *at != shapes));
+}
+
+/// Counts a unit a walk over the shapes at `shapes` typed.
+pub(super) fn typed(shapes: usize) {
+    TYPED.with(|typed| {
+        let mut typed = typed.borrow_mut();
+        match typed.iter_mut().find(|(at, _)| *at == shapes) {
+            Some((_, count)) => *count += 1,
+            None => typed.push((shapes, 1)),
+        }
+    });
+}
+
+/// How many units the walks on this thread have typed of `shapes`.
+pub(crate) fn typed_over(shapes: &Shapes<'_>) -> u64 {
+    let at = std::ptr::from_ref(shapes) as usize;
+    TYPED.with(|typed| {
+        (typed.borrow().iter())
+            .find(|(shapes, _)| *shapes == at)
+            .map_or(0, |(_, count)| *count)
+    })
+}
+
+/// How many units the walks on this thread have typed, of any shapes.
+pub(crate) fn typed_in_all() -> u64 {
+    TYPED.with(|typed| typed.borrow().iter().map(|(_, count)| count).sum())
 }

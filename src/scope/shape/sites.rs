@@ -46,6 +46,8 @@ pub enum Located<'graph> {
 pub struct Sites<'graph> {
     by_address: &'graph [(usize, Site)],
     located: &'graph [Located<'graph>],
+    /// Each statement's first site: a statement's sites run up to the next statement's first.
+    starts: &'graph [Site],
 }
 
 impl<'graph> Sites<'graph> {
@@ -53,6 +55,7 @@ impl<'graph> Sites<'graph> {
     pub(in crate::scope) const EMPTY: Self = Sites {
         by_address: &[],
         located: &[],
+        starts: &[],
     };
 
     /// The sites of `statements`, laid through `lay`.
@@ -68,13 +71,16 @@ impl<'graph> Sites<'graph> {
             nodes: bump_set(scratch),
             parts: bump_set(scratch),
         };
+        let mut starts = BumpVec::with_capacity_in(statements.len(), scratch);
         for node in statements {
+            starts.push(Site(numbering.located.len() as u32));
             numbering.node(node);
         }
         numbering.by_address.sort_unstable();
         Sites {
             by_address: collect(lay, numbering.by_address.iter().copied()),
             located: collect(lay, numbering.located.iter().copied()),
+            starts: collect(lay, starts.iter().copied()),
         }
     }
 
@@ -102,6 +108,12 @@ impl<'graph> Sites<'graph> {
     #[cfg(test)]
     pub fn find_at_address(&self, address: usize) -> Option<Site> {
         self.find_at(address)
+    }
+
+    /// The index of the statement holding `site`.
+    pub fn statement_of(&self, site: Site) -> usize {
+        debug_assert!(site.index() < self.located.len(), "a site of this shape");
+        self.starts.partition_point(|start| *start <= site) - 1
     }
 
     /// What `site` names.

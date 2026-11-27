@@ -539,12 +539,13 @@ pub(super) fn run<'graph, 'here>(
                         });
                     }
                 },
-                None if member.ktype().as_type().is_none() => {
+                // A member read the binding leaves open has no instance.
+                None | Some(InstanceRead::Member { .. }) if member.ktype().as_type().is_none() => {
                     return Err(Fault::QuantifiedMember {
                         name: name.symbol(),
                     });
                 }
-                None => member,
+                None | Some(InstanceRead::Member { .. }) => member,
             }
         }
         Native::Field => {

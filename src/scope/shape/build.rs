@@ -4073,11 +4073,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             "a body's nested bodies take the segments before its own"
         );
         nested_starts.resize(draft.statements as usize + 1, nested.len() as u32);
-        let births = nested.iter().any(|(_, child)| match child.kind() {
-            ShapeKind::Callable => true,
-            ShapeKind::Block | ShapeKind::Module => child.births_callable(),
-            ShapeKind::Code | ShapeKind::Program => false,
-        });
         // A site is numbered in program order, so the children, drafted in program order, are
         // sorted already.
         let nested = Keyed::from_sorted(collect(writer, nested.iter().copied()));
@@ -4212,8 +4207,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 code: draft.code,
                 top_captures: collect(writer, draft.top_captures.iter().copied()),
                 nested,
-                // An untraced body's code may birth a callable when its composition runs.
-                births: births || draft.deferred,
                 form: draft.form,
                 binders,
                 units: collect(writer, draft.units.iter().copied()),
@@ -4319,10 +4312,7 @@ impl<'graph> Builder<'graph, '_, '_> {
                     .map(|at| draft.mentions[at])
                     .and_then(|mention| match mention.landing {
                         Lands::Binder { at, slot } if mention.rooted => {
-                            Some(Root::Binder(TreeBinder {
-                                body: chain[at].segment,
-                                slot,
-                            }))
+                            Some(Root::Binder(TreeBinder::at_slot(chain[at].segment, slot)))
                         }
                         _ => None,
                     })

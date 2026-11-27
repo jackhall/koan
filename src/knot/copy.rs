@@ -8,8 +8,7 @@
 //! storage, so it is carried as-is. The copied member is the one at the source's own index.
 //!
 //! [`carried_types`](values::KnottedFamily::carried_types) lists every type a node carries beside
-//! them, a function's closure's decided layers' included, which the crossing makes resolve in the
-//! destination before the rebuild runs.
+//! them, which the crossing makes resolve in the destination before the rebuild runs.
 //!
 //! [`held`](values::KnottedFamily::held) lists the values a rebuild asks for, in the order it asks,
 //! so each arm below sits beside its rebuild's twin. The crossing copies those values over its own
@@ -75,14 +74,6 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     }
                     for solved in function.instance().unwrap_or(&[]) {
                         out((*solved).into());
-                    }
-                    // What its encloser decided names types a call of it reads, and so does the
-                    // stamp a call replays.
-                    if let Some(decided) = function.closure().decided() {
-                        decided.each_type(out);
-                    }
-                    if let Some(stamp) = function.closure().stamp() {
-                        stamp.each_type(out);
                     }
                 }
                 Node::Builtin(builtin) => out(builtin.ktype().into()),

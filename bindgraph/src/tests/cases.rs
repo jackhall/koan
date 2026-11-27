@@ -442,6 +442,29 @@ fn an_inner_question_on_an_outer_name_is_owned_by_the_outer_entry() {
     assert!(graph.node(graph.entry(inner)).owns().is_empty());
 }
 
+/// A staged body's question and call on an outer name are owned at the staged body's entry, and
+/// one in a body nested in it at that entry too; the outer entry owns neither.
+#[test]
+fn what_a_staged_body_asks_on_an_outer_name_is_owned_at_its_entry() {
+    let mut case = Case::new();
+    let outer = case.text.body(case.text.root());
+    let staged = case.text.body(outer);
+    let nested = case.text.body(staged);
+    let callee = case.text.body(case.text.root());
+    case.text.staged(staged);
+    let x = case.text.name(Site::Entry(outer));
+    let asked = case.ask(Site::Entry(staged), &[x], &[], 0);
+    let deeper = case.ask(Site::Entry(nested), &[x], &[], 0);
+    let at = case.text.statement(staged);
+    let call = case.call(at, callee, vec![]);
+    let (graph, _) = case.lay();
+    let entry = graph.entry(staged);
+    assert_eq!(graph.question(asked).owner(), entry);
+    assert_eq!(graph.question(deeper).owner(), entry);
+    assert_eq!(graph.edge(call).owner(), entry);
+    assert!(graph.node(graph.entry(outer)).owns().is_empty());
+}
+
 #[test]
 fn one_body_splits_its_questions_across_its_entry_and_statements() {
     let mut case = Case::new();
@@ -577,7 +600,7 @@ fn each_malformed_text_is_refused() {
     let (refusal, edge, _, _, local) = mapped(|_, _, local| vec![(local, atom(0))]);
     assert_eq!(
         refusal,
-        LayError::Malformed(Malformed::MapsNonEntryName { edge, name: local })
+        LayError::Malformed(Malformed::MapsUnboundName { edge, name: local })
     );
     let (refusal, edge, _, entry, _) =
         mapped(|_, entry, _| vec![(entry, atom(0)), (entry, atom(1))]);

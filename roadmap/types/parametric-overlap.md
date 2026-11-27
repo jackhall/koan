@@ -5,8 +5,8 @@ is closed or quantified.
 
 **Problem.** [The overlap check](../../src/dispatch/README.md#the-overlap-check)
 reads a registration's load-time expression shape, and checks a closed or a
-rigid one: a rigid one's check is a question each binding answers
-([resumption](../../src/build/README.md#resumption)). A quantified one is
+rigid one: a rigid one's check is a stored question each instance answers
+([stored questions](../../src/build/README.md#stored-questions)). A quantified one is
 never checked: `EXPR FOR ALL #[Elt] #(x :Elt + y :Elt) -> Str = #("mine")`
 loads beside the builtin `+`, which wins every call the two share:
 `PRINT (1 + 2)` prints `3`.

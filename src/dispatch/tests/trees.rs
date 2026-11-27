@@ -68,7 +68,11 @@ fn leaf_binder<'graph>(
     let declaring = program.shapes().shape_at(binder.body);
     let name = program
         .symbols()
-        .display(declaring.slot_name(binder.slot).symbol())
+        .display(
+            declaring
+                .slot_name(binder.slot().expect("a slot binder"))
+                .symbol(),
+        )
         .to_string();
     (name, binder.body == shape.segment())
 }

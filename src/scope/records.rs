@@ -1,6 +1,6 @@
 //! The **load's facts**, read through one set of readers over a source of records: [`LoadFacts`]
-//! over one load's own, and [`Facts`], what a step reads through its door, over a cell's layers and
-//! the load they rest on. Every reader takes the body's shape, so no reader names where a fact is
+//! over one load's own, and [`Facts`], what a step reads through its door, over the load or
+//! composition a cell rests on and the instances its frame holds. Every reader takes the body's shape, so no reader names where a fact is
 //! kept. A shape names its body by its segment alone, so a reader may hand in a shape
 //! borrowed for any lifetime. A reader whose fact names a type takes the reading frame's chain
 //! before the shape and hands back the fact with every type it names resolving there, minted from
@@ -9,8 +9,7 @@
 //! It reads the one walk's records: one [`UnitFacts`] per unit the walk ran, each beside the
 //! frontier it gathered, one [`Closing`] per owning body, and the [`Folds`] the load lays per body
 //! after the walk. Every record is `Copy`, names bodies by segment and holds no cell, so each is
-//! covariant. A load may sit over a base: every read tries its own records, then its base's, and a
-//! unit it re-ran replaces the base's record of it whole. The records index every closed tree their
+//! covariant. The records index every closed tree their
 //! units computed by its identity, read through [`LoadFacts::tree_of`].
 //!
 //! A `LoadFacts` is laid in program storage before the program is. A step reads it at its own
@@ -22,25 +21,29 @@ use crate::memory::{BumpAllocator, BumpVec, Lays, Writer, collect, resident};
 use crate::parse::{ExpressionPart, KExpression, copied};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, Symbol};
-use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, PathClass, Term, TypeDigest};
-use crate::values::{Chain, ContentDigest, LayerKey, Restamping, Retype, Weight};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Term, TypeDigest, Verdict};
+use crate::values::{Chain, ContentDigest, Restamping, Retype, Weight};
 
 use super::build_layer::BuildLayer;
 use super::composition::Composition;
 use super::derived::{Derived, DerivedName, DerivedTerm};
 use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
+use super::question::{Answer, Posed, Question};
 use super::record_types::{Close, CloseLaying, Closed, Closer, Laying, Named};
 use super::shape::{
-    BodyShape, CaptureSlot, Coordinate, Lands, Located, Position, Segment, ShapeError, Site, Slot,
+    BodyShape, Candidate, CaptureSlot, Coordinate, Lands, Located, Segment, ShapeError, Site, Slot,
     Target,
 };
 use super::shapes::Shapes;
-use super::stamp::SiteRequest;
-use super::tree::{Identity, Leaf, NodeCapture, Tree};
+use super::site::{
+    AskedBy, Passing, Payload, Selectable, SiteAnswer, SiteAnswers, SiteQuestion, SiteRule,
+};
+use super::tree::Tree;
 use super::typed::{
-    Arms, BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathName, Pick,
-    Points, Resolution, Resolved, Route, Static, StaticCallable, StaticInstance, StaticRegistered,
+    Arms, BodyClass, Caching, CandidateRoute, Elaboration, Elimination, Handoff, Holding,
+    InstanceRead, Kept, MemberWanted, Narrowing, PathEntry, PathName, Pick, Point, Points,
+    Rebounds, Resolution, Route, Shaped, Static, StaticCallable, StaticInstance, StaticRegistered,
     StaticType, UseStatics, Variable, ViewSlots,
 };
 
@@ -85,14 +88,16 @@ pub struct UnitFacts<'a> {
     /// Each path entry this unit resolved first on its chain, by its chain root and name, beside
     /// its resolution.
     pub paths: Keyed<'a, ((Segment, PathName), (PathEntry<'a>, Resolution<'a>))>,
-    /// What the caching fold reads of each minting and composite site the unit typed.
-    pub sites: &'a [SiteDeps<'a>],
     /// Each lexical variable a contribution or a solution names, beside the body reading it: what
     /// the contract fold reads.
     pub named_variables: &'a [NamedVariable],
     /// An entry unit's frontier of each binder it seeds, by slot: a read of a binder's static type
     /// gathers its seed alone, and the unit's own frontier reads every seed.
     pub seeds: Keyed<'a, (Slot, Frontier<'a>)>,
+    /// Each question a door posed over a run-bound name as the unit ran, in the order posed.
+    pub posed: &'a [Posed<'a>],
+    /// Each rule the unit decided at a site of a body it ran, stored whole, by body, site and rule.
+    pub questions: Keyed<'a, SiteQuestion<'a>>,
 }
 
 /// Whether `key` reads a path class or the type a `:Module` binder carries, itself or through a
@@ -136,7 +141,7 @@ pub struct Typed<'a> {
     /// Each statement's static type, by index into the body.
     pub statements: Keyed<'a, (u32, Interval<Parametric>)>,
     /// Each binder's static type, by slot.
-    pub binders: Keyed<'a, (Slot, DeclaredType<Interval<Parametric>>)>,
+    pub binders: Keyed<'a, (Slot, Holding<'a>)>,
     /// Each ascription the walk settled.
     pub settled: Keyed<'a, Site>,
     pub instances: Keyed<'a, (Site, InstanceRead<'a>)>,
@@ -161,15 +166,17 @@ pub struct Typed<'a> {
     pub picks: Keyed<'a, (Site, &'a [Pick<'a>])>,
     /// Each module binder's content tree, by slot, where the load read one.
     pub contents: Keyed<'a, (Slot, Tree<'a>)>,
-    /// The identity of each module each of those binders holds, its own and each one a member of
-    /// a module body holds, by slot: what a class's variable is read through a binder by.
-    pub holding: Keyed<'a, (Slot, &'a [Identity])>,
     /// The body's own minting sites.
     pub minting: Keyed<'a, Site>,
-    /// A `MODULE` or `GROUP` body's exact signature, written over names, where the walk typed one.
+    /// Each part the walk holds in place: a call or an `EVAL` written inline whose value's type
+    /// is the name its holder gives it ([`Address::Held`](crate::scope::Address::Held)), beside
+    /// its content tree: what a class's variable is read through the part by.
+    pub held: Keyed<'a, (Site, Tree<'a>)>,
+    /// A `MODULE` or `GROUP` body's signature, written over names, where the walk typed one: the
+    /// decided name on whether every member is exact, the signature where each is and `Never`
+    /// where one is not.
     pub signature: Option<Parametric>,
-    /// What the unit's facts give the body's class, folded back in where a resumption absorbs
-    /// the unit: a porous exit, how many of its minting sites are views over closed trees, and
+    /// What the unit's facts give the body's class, which its closing folds: a porous exit, how many of its minting sites are views over closed trees, and
     /// the run mints of the blocks and module bodies it ran.
     pub exits: bool,
     pub closed: u32,
@@ -178,8 +185,7 @@ pub struct Typed<'a> {
 
 /// A call the walk resolved to one callable body — a keyworded use it selected the body at, or a
 /// call by name whose head's tree is a closure of it — beside what the site passes at its callee's
-/// slots: what the trace folds, and what the load reads to lay a layer for the call where that
-/// fixes its key.
+/// slots: what the binding graph's fold reads to map the call.
 #[derive(Clone, Copy, Debug)]
 pub struct Traced<'a> {
     /// The callee's body.
@@ -188,12 +194,15 @@ pub struct Traced<'a> {
     pub call: SourceRef,
     /// Whether the call is by name, kept at its head's site.
     pub by_name: bool,
-    /// What the site passes at each callee slot it passes anything the trace follows at, sorted
-    /// by slot.
+    /// What the site passes at each callee slot it passes load content or a slot of its own body
+    /// at, sorted by slot.
     pub fixed: &'a [(Slot, Fixed)],
+    /// What the site passes at each callee slot it passes anything at, written over names, sorted
+    /// by slot: each `FOR ALL` name at its point. The binding graph's call mapping.
+    pub passes: &'a [(Slot, Passing)],
 }
 
-/// Load content at one of a callee's slots: what a layer binds it to.
+/// Load content at one of a callee's slots: what a binding binds it to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Content {
     /// A `FOR ALL` name's closed point, or a closed type value: its handle in the root.
@@ -227,7 +236,7 @@ impl Content {
 }
 
 /// What a call site passes at one of its callee's slots.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fixed {
     /// Load content.
     Content(Content),
@@ -242,42 +251,6 @@ impl Fixed {
             content.each_type(each);
         }
     }
-}
-
-/// What the [trace](../build/README.md#the-trace) names at one call site of a keyed body.
-#[derive(Clone, Copy, Debug)]
-pub enum CallTrace<'a> {
-    /// Every binding the site passes: per binding, the content at each of the callee's keys, in
-    /// key order, sorted.
-    Named {
-        callee: Segment,
-        bindings: &'a [&'a [Content]],
-    },
-    Untraced(Untraced),
-}
-
-/// Why the trace names nothing at a call site.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Untraced {
-    /// The load resolves the site to no one callee.
-    Unresolved,
-    /// A keyed slot is passed nothing the trace follows.
-    Unfollowed,
-    /// The site lies in a quote's code, which composed code can re-make with run content.
-    Composed,
-    /// A keyed slot passes on a slot of the site's own body, whose bindings are open.
-    Caller(Open),
-}
-
-/// Why a body's bindings are open: the trace names none of them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Open {
-    /// Its name escapes, so the load cannot list its callers.
-    Escapes,
-    /// A call into it is untraced, or passes on a slot of an open caller.
-    Fed,
-    /// It has more bindings than the limit.
-    Capped,
 }
 
 impl Typed<'_> {
@@ -301,8 +274,8 @@ impl Typed<'_> {
         trees: Keyed::EMPTY,
         picks: Keyed::EMPTY,
         contents: Keyed::EMPTY,
-        holding: Keyed::EMPTY,
         minting: Keyed::EMPTY,
+        held: Keyed::EMPTY,
         signature: None,
         exits: false,
         closed: 0,
@@ -316,9 +289,10 @@ impl UnitFacts<'_> {
         typed: Keyed::EMPTY,
         born: Keyed::EMPTY,
         paths: Keyed::EMPTY,
-        sites: &[],
         named_variables: &[],
         seeds: Keyed::EMPTY,
+        posed: &[],
+        questions: Keyed::EMPTY,
     };
 }
 
@@ -331,9 +305,6 @@ pub struct Born<'a> {
     pub levels: &'a [Parametric],
     /// The solution its `FOR ALL` is born instantiated at, where the walk solved one.
     pub instance: Option<StaticInstance<'a>>,
-    /// Its parameters whose arguments digest at a constant cost, sorted: a type binder, or one
-    /// declared closed under `Module` or as a type value. The keys and caching folds read it.
-    pub digestible: &'a [Slot],
 }
 
 /// What the walk computes for an owning body once its units and deferred bodies are typed.
@@ -353,6 +324,9 @@ pub struct Closing<'a> {
     pub overlap: Option<&'a ShapeError<'a>>,
     /// What a callable's frame re-stamps its arguments and its value at.
     pub retypes: Retypes<'a>,
+    /// Each rule the closing's checks decided at a site of the body, stored whole, by body, site
+    /// and rule, as a unit's record stores its own.
+    pub questions: Keyed<'a, SiteQuestion<'a>>,
 }
 
 /// What a callable's frame re-stamps each argument and its value at, where the walk knew how: the
@@ -383,8 +357,8 @@ impl Retypes<'_> {
     }
 }
 
-/// How a retype to `at` re-stamps, laid where the walk knew how — `at` closed, or the witness's
-/// answer over a rigid `at` — so a binding's table closes `at` as it closes any type a record
+/// How a retype to `at` re-stamps, laid where the walk knew how — `at` closed, or the rigid answer
+/// over a rigid `at` — so a binding's table closes `at` as it closes any type a record
 /// names, and the retype is read once it is closed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Restamp {
@@ -402,238 +376,26 @@ impl Restamp {
 /// What the load folds per body after the walk.
 #[derive(Clone, Copy, Debug)]
 pub struct Folds<'a> {
-    pub caching: Option<&'a Caching<'a>>,
-    /// The parameter slots a callable's settlement keys on: `None` where a call seeks nothing.
-    pub keys: Option<&'a [Slot]>,
+    pub caching: Option<&'a Caching>,
     /// A callable's or a block's parameters, or a quote's code's captures, that some unit beneath
-    /// it waits on with its entry as its seam, keyable or not: what its cell's entry binds in its
-    /// activation where nothing settled them.
+    /// it waits on with its entry as its seam: what its frame's entry binds.
     pub waits: &'a [Address],
-    /// A body's slots bound at a statement that some unit's frontier holds: where the cell running
-    /// it decides again once the statement binds them.
+    /// A body's slots bound at a statement that some unit's frontier holds: where the frame running
+    /// it binds again once the statement binds them.
     pub seams: &'a [Slot],
-    /// The seams some path the load left open is rooted at, sorted: decided at their statement
-    /// even where the load built their content, which a path reads off what the run binds.
+    /// The seams some path the load left open is rooted at, sorted: bound at their statement even
+    /// where the load built their content, which a path reads off what the run binds.
     pub rooting: &'a [Slot],
     /// Which of the body's type captures its content composes, parallel to its layout.
     pub contract: &'a [bool],
-    /// What the trace names at each call site of a keyed body in this shape, by site.
-    pub traces: Keyed<'a, (Site, CallTrace<'a>)>,
-    /// On an owning body — a callable, or the program — each call site it owns that covers its
-    /// callee's keys, sorted by shape and site.
-    pub slot_maps: &'a [SlotMap<'a>],
-}
-
-/// One call site of a keyed callee whose record covers every key of the callee, outside a quote's
-/// code: what a layer of the site's owning body lays the site's request from.
-#[derive(Clone, Copy, Debug)]
-pub struct SlotMap<'a> {
-    /// The shape the site lies in — the owning body or an inline body it runs — and the site.
-    pub at: Segment,
-    pub site: Site,
-    /// Where the call is written.
-    pub call: SourceRef,
-    pub callee: Segment,
-    /// What the site passes at each of the callee's keys, in key order.
-    pub passed: &'a [(Slot, Fixed)],
-}
-
-impl SlotMap<'_> {
-    /// Whether it passes a slot of its owning body at some key.
-    pub fn passes_on(&self) -> bool {
-        (self.passed.iter()).any(|(_, fixed)| matches!(fixed, Fixed::Passed(_)))
-    }
-}
-
-/// What a site's content depends on: nothing that varies per hop born under one park, the frame
-/// body's parameters at these slots, or something that varies regardless.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Deps<'a> {
-    Closed,
-    On(&'a [Slot]),
-    Varying,
-}
-
-/// The dependencies of content as they gather in scratch while it is walked, laid once at the end:
-/// the union of every [`Deps`] added.
-pub struct DepsGathering<'x> {
-    varying: bool,
-    /// Whether the content reads anything open: a capture or a parameter.
-    open: bool,
-    slots: BumpVec<'x, Slot>,
-}
-
-impl<'x> DepsGathering<'x> {
-    /// Nothing gathered: closed.
-    pub fn new(scratch: BumpAllocator<'x>) -> Self {
-        DepsGathering {
-            varying: false,
-            open: false,
-            slots: BumpVec::new_in(scratch),
-        }
-    }
-
-    /// Gather `deps`.
-    pub fn add(&mut self, deps: Deps<'_>) {
-        match deps {
-            Deps::Varying => self.varying = true,
-            Deps::Closed => {}
-            Deps::On(slots) => {
-                self.open = true;
-                self.slots.extend_from_slice(slots);
-            }
-        }
-    }
-
-    /// What is gathered, laid through `lay`: the slots sorted and deduplicated.
-    pub fn laid<'a>(&mut self, lay: impl Lays<'a>) -> Deps<'a> {
-        if self.varying {
-            return Deps::Varying;
-        }
-        if !self.open {
-            return Deps::Closed;
-        }
-        self.slots.sort_unstable();
-        self.slots.dedup();
-        Deps::On(collect(lay, self.slots.iter().copied()))
-    }
-}
-
-/// Gather what the content `tree`, read at `holder` whose frame body is `frame`, depends on: each
-/// leaf bound to a parameter of the frame body, no parameter for a leaf captured from a body
-/// enclosing the frame, and anything for a leaf no binder names, one bound per run of a body, or
-/// one bound by a non-parameter of the frame or of a block or module body it runs. A type value
-/// written over names depends on the binder of each run-bound name it is written over, and on
-/// anything where it holds another variable.
-pub fn tree_deps(
-    (shapes, types): (&Shapes<'_>, &Chain<'_, '_, '_, '_>),
-    (holder, frame): (Segment, Segment),
-    tree: &Tree<'_>,
-    into: &mut DepsGathering<'_>,
-    scratch: BumpAllocator<'_>,
-) {
-    let mut stack = BumpVec::new_in(scratch);
-    stack.push(*tree);
-    while let Some(tree) = stack.pop() {
-        match tree {
-            Tree::Digest(..) => {}
-            Tree::Body { captures, .. } => stack.extend(captures.iter().map(|(_, at)| *at)),
-            Tree::Knot { members, .. } => {
-                for member in members {
-                    stack.extend(
-                        member
-                            .captures
-                            .iter()
-                            .filter_map(|(_, capture)| match capture {
-                                NodeCapture::Tree(tree) => Some(*tree),
-                                NodeCapture::Fellow(_) => None,
-                            }),
-                    );
-                }
-            }
-            Tree::View {
-                source, underlying, ..
-            } => stack.extend([*source, *underlying]),
-            Tree::Retyped { source, .. } => stack.push(*source),
-            Tree::TypeValue { named, .. } => {
-                type_value_deps((shapes, types), (holder, frame), named, into, scratch);
-            }
-            Tree::Leaf(Leaf::Unnamed(_) | Leaf::Call { .. })
-            | Tree::Leaf(Leaf::Bound {
-                within: Some(_), ..
-            }) => return into.add(Deps::Varying),
-            Tree::Leaf(Leaf::Bound { binder, .. }) => {
-                binder_deps(shapes, (holder, frame), (binder.body, binder.slot), into);
-            }
-        }
-    }
-}
-
-/// Gather what the type value `named`, read at `holder` whose frame body is `frame`, depends on:
-/// the binder each lexical variable in it is homed at, the first body outward from `holder`
-/// declaring its level; anything for any other variable, or a level no body there declares.
-fn type_value_deps(
-    (shapes, types): (&Shapes<'_>, &Chain<'_, '_, '_, '_>),
-    (holder, frame): (Segment, Segment),
-    named: Parametric,
-    into: &mut DepsGathering<'_>,
-    scratch: BumpAllocator<'_>,
-) {
-    let mut levels = BumpVec::new_in(scratch);
-    let mut varying = false;
-    crate::type_lattice::read_through(
-        types,
-        scratch,
-        named,
-        crate::type_lattice::Side::Above,
-        &mut |variable| {
-            match variable {
-                crate::type_lattice::Variable::Lexical { level, .. } => levels.push(level),
-                _ => varying = true,
-            }
-            None
-        },
-    );
-    if varying {
-        return into.add(Deps::Varying);
-    }
-    for level in levels {
-        let mut at = Some(holder);
-        let declared = loop {
-            let Some(segment) = at else {
-                break None;
-            };
-            if let Some(Target::Local(slot)) = shapes.home(segment, level) {
-                break Some((segment, slot));
-            }
-            at = shapes.parent(segment).map(|(parent, _)| parent);
-        };
-        match declared {
-            Some(binder) => binder_deps(shapes, (holder, frame), binder, into),
-            None => return into.add(Deps::Varying),
-        }
-    }
-}
-
-/// Gather what the binder at `slot` of `body`, read at `holder` whose frame body is `frame`,
-/// depends on: a parameter of the frame body is itself; a capture from a body enclosing the frame
-/// is no parameter — open, but the same at every frame of one closure; anything else varies.
-fn binder_deps(
-    shapes: &Shapes<'_>,
-    (holder, frame): (Segment, Segment),
-    (body, slot): (Segment, Slot),
-    into: &mut DepsGathering<'_>,
-) {
-    // The chain from the holder up: the bodies the frame runs, the frame, then those around it.
-    let mut at = Some(holder);
-    let mut past_frame = false;
-    while let Some(segment) = at {
-        if segment == body {
-            let parameter = shapes.shape_at(body).position_of(slot) == Position::PARAMETER;
-            let own = [slot];
-            return into.add(match (past_frame, segment == frame) {
-                (true, _) => Deps::On(&[]),
-                (false, true) if parameter => Deps::On(&own),
-                _ => Deps::Varying,
-            });
-        }
-        past_frame |= segment == frame;
-        at = shapes.parent(segment).map(|(parent, _)| parent);
-    }
-    into.add(Deps::Varying)
-}
-
-/// One minting or composite site the caching fold classes: where it sits, the frame body its
-/// dependencies name parameters of, what it depends on, and the content tree of each path class
-/// it reads.
-#[derive(Clone, Copy, Debug)]
-pub struct SiteDeps<'a> {
-    pub holder: Segment,
-    pub frame: Segment,
-    pub site: Site,
-    pub minting: bool,
-    pub deps: Deps<'a>,
-    pub pending: &'a [Tree<'a>],
+    /// A callable's or `MODULE` body's captures past its type captures, sorted: each binder of a
+    /// body around it that some unit inside it reads through no type capture, which a frame of it
+    /// binds. Its content composes none: the walk's content tree of the body holds none either.
+    pub binders: &'a [Unknown],
+    /// The sites of the parts the body holds in place that bind at a statement of their own or
+    /// their encloser's, sorted: a held part's index is its rank, the slot its activation keeps
+    /// its value in.
+    pub held: &'a [Site],
 }
 
 /// A lexical variable at `level` a contribution or a solution names, read from the body `reading`:
@@ -644,8 +406,8 @@ pub struct NamedVariable {
     pub level: usize,
 }
 
-/// The fact readers over a source of records: [`LoadFacts`] over one load's, [`Facts`] over a
-/// cell's layers and the load they rest on. Every reader takes the body's shape and finds the fact
+/// The fact readers over a source of records: [`LoadFacts`] over one load's, [`Facts`] over the
+/// load or composition a cell rests on and the instances its frame holds. Every reader takes the body's shape and finds the fact
 /// by its segment, so a reader may hand in a shape borrowed for any lifetime; one whose fact names
 /// a type takes the reading frame's chain before it.
 #[derive(Clone, Copy)]
@@ -654,9 +416,9 @@ pub struct FactsOver<S>(S);
 /// Every fact one load decided, by body, beside the shape table they are facts of.
 pub type LoadFacts<'graph> = FactsOver<LoadRecords<'graph>>;
 
-/// What a step reads facts through, at the step's own lifetime `'step`: the load its cell's chain
-/// rests on, beneath the cell's own layers. Built per step from the cell's depot reference, so
-/// keeping one past the step does not compile:
+/// What a step reads facts through, at the step's own lifetime `'step`: the load or the composition
+/// its cell's chain rests on. Built per step from the cell's depot reference, so keeping one past
+/// the step does not compile:
 ///
 /// ```compile_fail
 /// use koan::memory::{Writer, resident};
@@ -676,66 +438,48 @@ pub struct LoadRecords<'graph> {
     /// The load's base layer: binding nothing in production.
     layer: &'graph BuildLayer<'graph>,
     /// Each body, by segment, beside its type captures as its birth reads them and its folds: none
-    /// before the load folds, when a read falls to the base.
+    /// before the load folds.
     bodies: &'graph [Laid<'graph>],
-    /// A test's resumption laid as a load over the load: every read tries its own layer first.
-    base: Option<&'graph LoadFacts<'graph>>,
-    /// Each layer the load laid for a traced call, in lay order, a parent before its children:
-    /// never evicted. A layer's ordinal is its index.
-    layers: &'graph [LoadLayer<'graph>],
-    /// `layers` by parent and key, each beside its ordinal, sorted.
-    index: &'graph [(Option<u32>, LayerKey, u32)],
 }
 
-/// A layer the load laid: the layer it lies beneath — by ordinal in the load's table, or the root
-/// — its key, the body it was laid for, and the layer.
-#[derive(Clone, Copy)]
-pub struct LoadLayer<'a> {
-    pub parent: Option<u32>,
-    pub key: LayerKey,
-    pub body: Segment,
-    pub layer: &'a BuildLayer<'a>,
-}
-
-/// A cell's layers over the base its chain rests on — the load, or a composition: the layers its
-/// frame's activation decided, innermost first, then the depot layer it runs under, whose parents
-/// lie below it. A read tries each layer from the innermost, then the base, and a unit an inner
-/// layer re-ran replaces every outer record of it whole.
+/// What a cell reads over the base its chain rests on — the load, or a composition: the base's
+/// records, and what the instances its frame and its enclosers hold answer.
 #[derive(Clone, Copy)]
 pub struct Layers<'step> {
     base: LoadRecords<'step>,
     composition: Option<&'step Composition<'step>>,
-    depot: Option<&'step BuildLayer<'step>>,
-    decided: Option<&'step BuildLayer<'step>>,
+    /// What the instances the cell's frame and its enclosers hold answer, through their handle
+    /// words.
+    answers: Option<&'step dyn SiteAnswers>,
+    /// What writes a frame's binding into a base record's type, through the program's fact domain.
+    rebinds: Option<&'step dyn super::site::Rebinds>,
+    handles: super::site::Handles<'step>,
+    /// What the reading frame's slots bound at its last bind site.
+    binding: Option<Binding<'step>>,
 }
 
 impl<'step> Facts<'step> {
-    /// The facts a cell under the load reads: the load's alone.
-    pub fn of(load: &LoadFacts<'step>) -> Self {
-        Facts::under(load, None)
-    }
-
-    /// The facts a cell under the depot layer `top` reads: its layers over the load.
-    pub fn under(load: &LoadFacts<'step>, top: Option<&'step BuildLayer<'step>>) -> Self {
+    /// The facts a cell under the load reads.
+    pub fn under(load: &LoadFacts<'step>) -> Self {
         FactsOver(Layers {
             base: load.0,
             composition: None,
-            depot: top,
-            decided: None,
+            answers: None,
+            rebinds: None,
+            handles: super::site::Handles::default(),
+            binding: None,
         })
     }
 
-    /// The facts a cell whose chain rests on `composition` reads: its layers over the
-    /// composition's, under the depot layer `top`.
-    pub fn composed(
-        composition: &'step Composition<'step>,
-        top: Option<&'step BuildLayer<'step>>,
-    ) -> Self {
+    /// The facts a cell whose chain rests on `composition` reads.
+    pub fn composed(composition: &'step Composition<'step>) -> Self {
         FactsOver(Layers {
             base: composition.facts().0,
             composition: Some(composition),
-            depot: top,
-            decided: None,
+            answers: None,
+            rebinds: None,
+            handles: super::site::Handles::default(),
+            binding: None,
         })
     }
 
@@ -744,93 +488,39 @@ impl<'step> Facts<'step> {
         self.0.composition
     }
 
-    /// These facts beneath `decided`, the layers a frame's activation decided, in place of any
-    /// these read.
-    pub fn activated(self, decided: Option<&'step BuildLayer<'step>>) -> Self {
-        FactsOver(Layers { decided, ..self.0 })
-    }
-
-    /// These facts as an event's witnessing walk reads them: each layer of `top`, the
-    /// activation's decided layers — its cell's earlier events' and its enclosers' — that
-    /// witnessed or was walked closed, re-parented through `lay` over the next kept below it and,
-    /// at the bottom, over none. A binding's layer over a witnessed one is dropped, so the names
-    /// its event witnessed stay rigid. These facts as they are where none is dropped.
-    pub fn spine(
-        self,
-        lay: impl Lays<'step>,
-        scratch: BumpAllocator<'_>,
-        top: Option<&'step BuildLayer<'step>>,
-    ) -> Self {
-        let chain = || std::iter::successors(top, |layer| layer.parent());
-        if !chain().any(BuildLayer::over_witnessed) {
-            return self;
-        }
-        let mut kept: BumpVec<'_, &BuildLayer<'step>> = BumpVec::new_in(scratch);
-        kept.extend(chain().filter(|layer| !layer.over_witnessed()));
-        let spine =
-            (kept.iter().rev()).fold(None, |below, layer| Some(resident(lay, layer.over(below))));
-        self.activated(spine)
-    }
-
-    /// These facts without the depot's layers: what a quote's code's entry decides over, its frame
-    /// reading through no settlement around it — its own decided layers read before them.
-    pub fn undeposited(self) -> Self {
+    /// These facts answering a stored site question through `answers`, the instances the cell's
+    /// frames make.
+    pub fn answering(self, answers: &'step dyn SiteAnswers) -> Self {
         FactsOver(Layers {
-            depot: None,
+            answers: Some(answers),
             ..self.0
         })
     }
 
-    /// The innermost depot layer these facts read, if any.
-    pub fn top(&self) -> Option<&'step BuildLayer<'step>> {
-        self.0.depot
+    /// These facts writing a frame's binding into a base record's type through `rebinds`.
+    pub fn rebinding(self, rebinds: &'step dyn super::site::Rebinds) -> Self {
+        FactsOver(Layers {
+            rebinds: Some(rebinds),
+            ..self.0
+        })
     }
 
-    /// The innermost layer these facts read: the activation's decided top, else the depot's.
-    pub fn innermost(&self) -> Option<&'step BuildLayer<'step>> {
-        self.0.decided.or(self.0.depot)
-    }
-
-    /// These facts with `layer`, whose parent is their innermost layer or the bottom of an
-    /// activation's decided chain, read before it: a witnessed layer a closing walk reads over.
-    pub fn beneath(self, layer: &'step BuildLayer<'step>) -> Self {
-        let below = layer.parent();
-        let decided = self.0.decided.is_some() || (below.is_none() && self.0.depot.is_some());
-        debug_assert!(
-            match decided {
-                true =>
-                    below
-                        .zip(self.0.decided)
-                        .is_none_or(|(below, top)| { std::ptr::addr_eq(below, top) })
-                        && below.is_some() == self.0.decided.is_some(),
-                false => match (below, self.0.depot) {
-                    (Some(below), Some(top)) => std::ptr::addr_eq(below, top),
-                    (None, None) => true,
-                    _ => false,
-                },
-            },
-            "a layer read beneath facts lies over their innermost"
-        );
-        match decided {
-            true => self.activated(Some(layer)),
-            false => FactsOver(Layers {
-                depot: Some(layer),
-                ..self.0
-            }),
-        }
-    }
-
-    /// The request of the call site `site` of `shape`: the depot layer's this cell runs under,
-    /// else the base's. `None` where neither carries one.
-    pub fn request(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'step SiteRequest<'step>> {
-        let at = shape.segment();
-        (self.0.depot.and_then(|layer| layer.request(at, site)))
-            .or_else(|| self.0.base.layer.request(at, site))
+    /// These facts as a frame holding the handle words `handles` reads them, its slots binding
+    /// `binding` at its last bind site.
+    pub fn framed(
+        self,
+        handles: super::site::Handles<'step>,
+        binding: Option<Binding<'step>>,
+    ) -> Self {
+        FactsOver(Layers {
+            handles,
+            binding,
+            ..self.0
+        })
     }
 
     /// Hand `each` every term a frame reading these facts mints so every type they name resolves
-    /// in its chain, in the order a term's leaves resolve: the composition's, then each
-    /// settlement's from the outermost. None over the load.
+    /// in its chain, in the order a term's leaves resolve: the composition's. None over the load.
     pub fn each_term(&self, each: &mut dyn FnMut(&'step Term<'step>)) {
         #[cfg(test)]
         let each = &mut |term| {
@@ -838,52 +528,18 @@ impl<'step> Facts<'step> {
             each(term)
         };
         (self.0.base.layer.terms().entries().iter()).for_each(|(_, term)| each(term));
-        let mut settlements: smallvec::SmallVec<[&BuildLayer<'step>; 4]> =
-            std::iter::successors(self.0.depot, |layer| layer.parent()).collect();
-        settlements.reverse();
-        (settlements.iter())
-            .flat_map(|layer| layer.terms().entries())
-            .for_each(|(_, term)| each(term));
     }
 
-    /// These facts' layers, for a walk to rest on: every term they hold is minted into `types`
-    /// first, so each type their records name resolves in the walk's chain.
-    pub(crate) fn whole(&self, types: &Chain<'_, '_, '_, '_>) -> Layers<'step> {
-        self.each_term(&mut |term| {
-            types.mint(term);
-        });
-        self.0
-    }
-
-    /// Whether any layer binds `unknown`.
+    /// Whether the base binds `unknown`.
     pub fn binds(&self, unknown: Unknown) -> bool {
         self.0.bound(unknown).is_some()
     }
 
-    /// The refusal the innermost settlement's walk reached, else the refusal of the composed code
-    /// the chain rests on, if either reached one, its types resolving in `types`.
+    /// The refusal of the composed code the chain rests on, if it reached one, its types
+    /// resolving in `types`.
     pub fn refusal(&self, types: &Chain<'_, '_, '_, '_>) -> Option<&'step ShapeError<'step>> {
-        let refusal = match self.0.depot {
-            Some(top) => top.refusal(),
-            None => self.0.base.layer.refusal(),
-        };
-        // A walk's own refusal is worded under the binding it walked: nothing to close.
-        self.minted(types, refusal)
-    }
-}
-
-impl<'step> Layers<'step> {
-    /// Each layer, innermost first: the activation's decided chain, then the depot chain.
-    fn layers(&self) -> impl Iterator<Item = &'step BuildLayer<'step>> {
-        (std::iter::successors(self.decided, |layer| layer.parent()))
-            .chain(std::iter::successors(self.depot, |layer| layer.parent()))
-    }
-
-    /// Whether a layer inner to `outer` — every layer where `outer` is `None` — re-ran `unit`.
-    fn rerun_within(&self, outer: Option<&BuildLayer<'_>>, unit: UnitId) -> bool {
-        (self.layers())
-            .take_while(|layer| outer.is_none_or(|outer| !std::ptr::addr_eq(*layer, outer)))
-            .any(|layer| layer.unit(unit).is_some())
+        // A walk's own refusal is worded as the load words it: nothing to close.
+        self.minted(types, self.0.base.layer.refusal())
     }
 }
 
@@ -908,9 +564,12 @@ pub(crate) trait RecordSource<'a>: Copy {
     /// The record holding `held`, beside its unit.
     fn holding(&self, held: Held) -> Option<(UnitId, &'a UnitFacts<'a>)>;
 
-    /// Hand `each` every holder in `segment` a current record says holds a module of `identity`'s
-    /// tree, beside its unit, perhaps more than once.
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder));
+    /// What the instance the reading frame holds answers the stored question of `rule` at `site`
+    /// of `segment`: `None` where it holds none owning it.
+    fn site_answer(&self, segment: Segment, site: Site, rule: SiteRule) -> Option<SiteAnswer> {
+        let _ = (segment, site, rule);
+        None
+    }
 
     /// `body` as its load laid it.
     fn laid(&self, body: Segment) -> &'a Laid<'a>;
@@ -930,26 +589,14 @@ pub(crate) trait RecordSource<'a>: Copy {
         false
     }
 
-    /// The term a layer laid for the type whose digest is `digest`: the composition's, then each
-    /// settlement's. None over the load.
+    /// The term the composition laid for the type whose digest is `digest`. None over the load.
     fn term(&self, _digest: TypeDigest) -> Option<&'a Term<'a>> {
         None
     }
 
-    /// Whether some layer holds a table of closed types: else no fact needs closing.
-    fn closes(&self) -> bool {
-        false
-    }
-
-    /// What the innermost layer whose table holds `ty` closes it to, whole or in part.
-    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<Closed> {
-        let _ = ty;
-        None
-    }
-
-    /// The tree the innermost layer whose table holds the tree of `identity` gives it.
-    fn closed_tree(&self, identity: Identity) -> Option<&'a Tree<'a>> {
-        let _ = identity;
+    /// What writes a frame's binding into a base record's type, beside the binding the reading
+    /// frame's slots hold: `None` where nothing does, or the frame holds none.
+    fn rebinding(&self) -> Option<(&'a dyn super::site::Rebinds, Binding<'a>)> {
         None
     }
 }
@@ -959,97 +606,41 @@ impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
         self.shapes
     }
 
-    fn bound(&self, unknown: Unknown) -> Option<Bound<'graph>> {
-        (self.layer.binding.bound(unknown)).or_else(|| self.base?.0.bound(unknown))
+    /// A load binds nothing.
+    fn bound(&self, _: Unknown) -> Option<Bound<'graph>> {
+        None
     }
 
-    fn each_bound(&self, each: &mut dyn FnMut(Unknown, Bound<'graph>)) {
-        for (unknown, bound) in self.layer.binding.entries() {
-            each(*unknown, *bound);
-        }
-        if let Some(base) = self.base {
-            base.0.each_bound(&mut |unknown, bound| {
-                if self.layer.binding.bound(unknown).is_none() {
-                    each(unknown, bound);
-                }
-            });
-        }
-    }
+    fn each_bound(&self, _: &mut dyn FnMut(Unknown, Bound<'graph>)) {}
 
     fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
-        match self.layer.unit(unit) {
-            Some(record) => record.typed(),
-            None => self.base?.0.unit(unit),
-        }
+        self.layer.unit(unit)?.typed()
     }
 
     fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
-        (self.layer.closing(body)).or_else(|| self.base?.0.closing(body))
+        self.layer.closing(body)
     }
 
-    /// The record holding `held`, beside its unit: this load's, else its base's where this load did
-    /// not re-run the unit, since a re-run record replaces the base's whole.
     fn holding(&self, held: Held) -> Option<(UnitId, &'graph UnitFacts<'graph>)> {
-        if let Some(found) = self.layer.holding(held) {
-            return Some(found);
-        }
-        let (unit, facts) = self.base?.0.holding(held)?;
-        self.layer.unit(unit).is_none().then_some((unit, facts))
+        self.layer.holding(held)
     }
 
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder)) {
-        self.layer.holders(segment, identity, each);
-        if let Some(base) = self.base {
-            base.0.holders(segment, identity, &mut |unit, holder| {
-                if self.layer.unit(unit).is_none() {
-                    each(unit, holder);
-                }
-            });
-        }
-    }
-
-    /// `body` as this load laid it, or its base where this load has not folded yet.
     fn laid(&self, body: Segment) -> &'graph Laid<'graph> {
-        match self.bodies.get(body.index() as usize) {
-            Some(laid) => laid,
-            None => (self.base)
-                .expect("a load folds its records before a body is read")
-                .0
-                .laid(body),
-        }
+        self.bodies
+            .get(body.index() as usize)
+            .expect("a load folds its records before a body is read")
     }
 
-    /// The folds of `body`: this load's, else its base's.
     fn folds(&self, body: Segment) -> Option<Folds<'graph>> {
-        match (self.bodies.get(body.index() as usize)).and_then(|laid| laid.folds) {
-            Some(folds) => Some(folds),
-            None => self.base?.0.folds(body),
-        }
+        (self.bodies.get(body.index() as usize)).and_then(|laid| laid.folds)
     }
 
     fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'graph>> {
-        match self.layer.derived().get(id) {
-            Some(name) => Some(*name),
-            None => self.base?.0.derived_name(id),
-        }
-    }
-
-    /// Whether this load's layer or its base's holds a table of closed types: a test's resumption
-    /// laid as a load closes what it absorbed as a layer does.
-    fn closes(&self) -> bool {
-        self.layer.closes() || self.base.is_some_and(|base| base.0.closes())
-    }
-
-    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<Closed> {
-        (self.layer.closed().probe(ty)).or_else(|| self.base?.0.closed(ty))
-    }
-
-    fn closed_tree(&self, identity: Identity) -> Option<&'graph Tree<'graph>> {
-        (self.layer.closed().tree(identity)).or_else(|| self.base?.0.closed_tree(identity))
+        self.layer.derived().get(id).copied()
     }
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'graph Tree<'graph>> {
-        (self.layer.tree_of(digest)).or_else(|| self.base?.0.tree_of(digest))
+        self.layer.tree_of(digest)
     }
 }
 
@@ -1058,26 +649,17 @@ impl<'step> RecordSource<'step> for Layers<'step> {
         self.composition.is_some()
     }
 
-    fn closes(&self) -> bool {
-        self.decided.is_some_and(BuildLayer::closes) || self.depot.is_some_and(BuildLayer::closes)
+    fn site_answer(&self, segment: Segment, site: Site, rule: SiteRule) -> Option<SiteAnswer> {
+        self.answers?.answered(segment, site, rule, self.handles)
     }
 
-    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<Closed> {
-        self.layers().find_map(|layer| layer.closed().probe(ty))
-    }
-
-    fn closed_tree(&self, identity: Identity) -> Option<&'step Tree<'step>> {
-        self.layers()
-            .find_map(|layer| layer.closed().tree(identity))
+    fn rebinding(&self) -> Option<(&'step dyn super::site::Rebinds, Binding<'step>)> {
+        Some((self.rebinds?, self.binding?))
     }
 
     fn term(&self, digest: TypeDigest) -> Option<&'step Term<'step>> {
         self.composition?;
-        let term = self.base.layer.terms().get(digest).or_else(|| {
-            std::iter::successors(self.depot, |layer| layer.parent())
-                .find_map(|layer| layer.terms().get(digest))
-        });
-        term.map(|(_, term)| term)
+        self.base.layer.terms().get(digest).map(|(_, term)| term)
     }
 
     fn shapes(&self) -> &'step Shapes<'step> {
@@ -1085,70 +667,23 @@ impl<'step> RecordSource<'step> for Layers<'step> {
     }
 
     fn bound(&self, unknown: Unknown) -> Option<Bound<'step>> {
-        (self.layers())
-            .find_map(|layer| layer.binding.bound(unknown))
-            .or_else(|| self.base.bound(unknown))
+        self.base.bound(unknown)
     }
 
     fn each_bound(&self, each: &mut dyn FnMut(Unknown, Bound<'step>)) {
-        let shadowed = |unknown, inner: &BuildLayer<'_>| {
-            (self.layers())
-                .take_while(|layer| !std::ptr::addr_eq(*layer, inner))
-                .any(|layer| layer.binding.bound(unknown).is_some())
-        };
-        for layer in self.layers() {
-            for (unknown, bound) in layer.binding.entries() {
-                if !shadowed(*unknown, layer) {
-                    each(*unknown, *bound);
-                }
-            }
-        }
-        self.base.each_bound(&mut |unknown, bound| {
-            if self
-                .layers()
-                .all(|layer| layer.binding.bound(unknown).is_none())
-            {
-                each(unknown, bound);
-            }
-        });
+        self.base.each_bound(each);
     }
 
     fn unit(&self, unit: UnitId) -> Option<(&'step UnitFacts<'step>, Frontier<'step>)> {
-        match self.layers().find_map(|layer| layer.unit(unit)) {
-            Some(record) => record.typed(),
-            None => self.base.unit(unit),
-        }
+        self.base.unit(unit)
     }
 
     fn closing(&self, body: Segment) -> Option<(&'step Closing<'step>, Frontier<'step>)> {
-        (self.layers())
-            .find_map(|layer| layer.closing(body))
-            .or_else(|| self.base.closing(body))
+        self.base.closing(body)
     }
 
     fn holding(&self, held: Held) -> Option<(UnitId, &'step UnitFacts<'step>)> {
-        for layer in self.layers() {
-            if let Some((unit, facts)) = layer.holding(held) {
-                return (!self.rerun_within(Some(layer), unit)).then_some((unit, facts));
-            }
-        }
-        let (unit, facts) = self.base.holding(held)?;
-        (!self.rerun_within(None, unit)).then_some((unit, facts))
-    }
-
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder)) {
-        for layer in self.layers() {
-            layer.holders(segment, identity, &mut |unit, holder| {
-                if !self.rerun_within(Some(layer), unit) {
-                    each(unit, holder);
-                }
-            });
-        }
-        self.base.holders(segment, identity, &mut |unit, holder| {
-            if !self.rerun_within(None, unit) {
-                each(unit, holder);
-            }
-        });
+        self.base.holding(held)
     }
 
     fn laid(&self, body: Segment) -> &'step Laid<'step> {
@@ -1160,21 +695,16 @@ impl<'step> RecordSource<'step> for Layers<'step> {
     }
 
     fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'step>> {
-        (self.layers())
-            .find_map(|layer| layer.derived().get(id).copied())
-            .or_else(|| self.base.derived_name(id))
+        self.base.derived_name(id)
     }
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'step Tree<'step>> {
-        (self.layers())
-            .find_map(|layer| layer.tree_of(digest))
-            .or_else(|| self.base.tree_of(digest))
+        self.base.tree_of(digest)
     }
 }
 
-// A resumption's base is the load facts it extends. Every type the load's records name lies in the
-// root or the agent tier, so a raw read of them needs no mint; a step's [`Facts`] hands a walk its
-// layers only through [`Facts::whole`].
+// Every type the load's records name lies in the root or the agent tier, so a raw read of them
+// needs no mint; a step's [`Facts`] hands a walk its records only through [`Facts::whole`].
 impl<'a> RecordSource<'a> for LoadFacts<'a> {
     fn shapes(&self) -> &'a Shapes<'a> {
         self.0.shapes()
@@ -1200,10 +730,6 @@ impl<'a> RecordSource<'a> for LoadFacts<'a> {
         self.0.holding(held)
     }
 
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder)) {
-        self.0.holders(segment, identity, each);
-    }
-
     fn laid(&self, body: Segment) -> &'a Laid<'a> {
         self.0.laid(body)
     }
@@ -1218,10 +744,6 @@ impl<'a> RecordSource<'a> for LoadFacts<'a> {
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>> {
         self.0.tree_of(digest)
-    }
-
-    fn closed_tree(&self, identity: Identity) -> Option<&'a Tree<'a>> {
-        self.0.closed_tree(identity)
     }
 }
 
@@ -1464,26 +986,16 @@ impl<'graph, 'root, 'step> Written<'graph, 'root, 'step> {
 /// segment there, its code digest, and which of its closure slots its content composes — its
 /// builder captures but those reading the program's top level, then the type captures its contract
 /// names. A value's identity, digest and equality read those alone. Beside them, what a caller
-/// needs of a body it did not shape: the slots a call's settlement keys on, by name, and the root
-/// of the composed code it lies in, at `'root`, which finds or rebuilds its composition. One
-/// pointer, so a value holds it in place of its shape's.
+/// needs of a body it did not shape: the root of the composed code it lies in, at `'root`, which
+/// finds or rebuilds its composition. One pointer, so a value holds it in place of its shape's.
 #[derive(Clone, Copy)]
 pub struct BodyRef<'root, 'a> {
     pub base: ContentDigest,
     pub segment: Segment,
     pub code: ContentDigest,
     pub composes: &'a [bool],
-    /// The parameter slots a call's settlement keys on, beside their names: `None` where a call
-    /// seeks nothing.
-    pub keys: Option<&'a [(Slot, BinderSymbol)]>,
     /// `None` for written code.
     pub root: Option<ComposedRoot<'root>>,
-    /// Whether the body can birth a callable, which a call seeking a settlement of it lays a level
-    /// for.
-    pub births: bool,
-    /// Whether a key of the body is a parameter its own tail rebinds: a hop of it seeks rather than
-    /// borrowing its frame's layer.
-    pub rebinds: bool,
 }
 
 /// The root of code composed at run time: its syntax, laid where the code value holding it lives,
@@ -1532,10 +1044,7 @@ impl BodyRef<'_, '_> {
                 segment: self.segment,
                 code: self.code,
                 composes: collect(lay, self.composes.iter().copied()),
-                keys: self.keys.map(|keys| collect(lay, keys.iter().copied())),
                 root,
-                births: self.births,
-                rebinds: self.rebinds,
             },
         )
     }
@@ -1547,10 +1056,51 @@ impl BodyRef<'_, '_> {
             None => Weight::ZERO,
             Some(root) => Weight::flat::<BodyRef<'_, '_>>()
                 .plus(Weight::run::<bool>(self.composes.len()))
-                .plus(Weight::run::<(Slot, BinderSymbol)>(
-                    self.keys.map_or(0, <[_]>::len),
-                ))
                 .plus(root.weight()),
+        }
+    }
+}
+
+/// Where a birth in `born_in` reads `binder`: in its slot or capture, a hop per block around
+/// `born_in`, or the capture the callable or `MODULE` body holding `born_in` keeps of it
+/// ([`Folds::binders`]).
+fn binder_coordinate(
+    shapes: &Shapes<'_>,
+    folds: &[Folds<'_>],
+    born_in: Segment,
+    binder: Unknown,
+) -> Option<CaptureRead> {
+    let (mut at, mut hops) = (born_in, 0);
+    loop {
+        if at == binder.segment {
+            let target = match binder.at {
+                Address::Slot(slot) => Target::Local(slot),
+                Address::Capture(capture) => Target::Capture(capture),
+                Address::Held(site) => {
+                    let held = folds.get(at.index() as usize)?.held;
+                    let index = held.binary_search(&site).ok()? as u32;
+                    return Some(CaptureRead::Held { hops, index });
+                }
+            };
+            return Some(CaptureRead::At(Coordinate::Activation { hops, target }));
+        }
+        let shape = shapes.shape_at(at);
+        match shape.kind() {
+            super::ShapeKind::Block => {
+                at = shapes.parent(at)?.0;
+                hops += 1;
+            }
+            super::ShapeKind::Callable | super::ShapeKind::Module => {
+                let index = folds
+                    .get(at.index() as usize)?
+                    .binders
+                    .binary_search(&binder)
+                    .ok()?;
+                let past = shape.captures().len() + shapes.layout(at).len();
+                let target = Target::Capture(CaptureSlot((past + index) as u32));
+                return Some(CaptureRead::At(Coordinate::Activation { hops, target }));
+            }
+            super::ShapeKind::Code | super::ShapeKind::Program => return None,
         }
     }
 }
@@ -1570,11 +1120,22 @@ fn composes<'graph>(
     })
 }
 
+/// Where a birth reads a capture past its builder captures: at a coordinate, or, for a binder
+/// that is a part held in place, at held slot `index` of the activation `hops` enclosing block
+/// activations out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CaptureRead {
+    At(Coordinate),
+    Held { hops: u32, index: u32 },
+}
+
 /// One body as the load lays it.
 #[derive(Clone, Copy)]
 pub(crate) struct Laid<'graph> {
     body: BodyRef<'graph, 'graph>,
-    captures: &'graph [Coordinate],
+    /// Where a birth reads each capture past the builder captures: the type captures, then the
+    /// binders ([`Folds::binders`]).
+    captures: &'graph [CaptureRead],
     folds: Option<Folds<'graph>>,
 }
 
@@ -1586,21 +1147,16 @@ pub enum Held {
     Site(Segment, Site),
     /// A path entry, by its chain root and name.
     Path(Segment, PathName),
-    /// A class a path entry resolved to, by its chain root and the class: where a reader finds
-    /// what a class reads. Of the units resolving a path to one class, a layer keeps the first.
-    Class(Segment, PathClass),
-    /// A module binder or a view written in place of a body holding a module of a tree of this
-    /// identity, by the body, the identity and the holder: where a reader finds the roots a class
-    /// is read through.
-    Holder(Segment, Identity, Holder),
 }
 
-/// What holds a module of a tree in a body: a module binder, by its slot, or a view written in
-/// place, by the site of the `:|` building it. Binders order first.
+/// What holds a module of a tree in a body: a module binder, by its slot, a view written in
+/// place, by the site of the `:|` building it, or a part held in place, by its site. Binders
+/// order first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Holder {
     Slot(Slot),
     Site(Site),
+    Held(Site),
 }
 
 impl<'graph> LoadFacts<'graph> {
@@ -1609,9 +1165,6 @@ impl<'graph> LoadFacts<'graph> {
         shapes: &Shapes::EMPTY,
         layer: &BuildLayer::EMPTY,
         bodies: &[],
-        base: None,
-        layers: &[],
-        index: &[],
     });
 
     /// The bytes of this load's records index.
@@ -1639,7 +1192,6 @@ impl<'graph> LoadFacts<'graph> {
                 + size_of_val(typed.trees.entries())
                 + size_of_val(typed.picks.entries())
                 + size_of_val(typed.minting.entries())
-                + size_of_val(typed.holding.entries())
         };
         (self.own_units())
             .map(|(_, (facts, _))| {
@@ -1657,44 +1209,25 @@ impl<'graph> LoadFacts<'graph> {
             shapes,
             layer: &BuildLayer::EMPTY,
             bodies: &[],
-            base: None,
-            layers: &[],
-            index: &[],
         })
         .folded(lay, &[])
     }
 
-    /// One walk's records over `shapes`, laid through `lay`, over `base` where the walk resumed
-    /// one under `binding`: `units` and `closings` sorted by id, not yet folded.
-    #[allow(clippy::too_many_arguments)]
+    /// One walk's records over `shapes`, laid through `lay`: `units` and `closings` sorted by id,
+    /// not yet folded.
     pub fn of_records(
         lay: impl Lays<'graph>,
         scratch: BumpAllocator<'_>,
         shapes: &'graph Shapes<'graph>,
-        base: Option<&'graph LoadFacts<'graph>>,
         derived: Derived<'graph>,
-        binding: Binding<'graph>,
         units: &[(UnitId, UnitRecord<'graph>)],
         closings: &[(Segment, (&'graph Closing<'graph>, Frontier<'graph>))],
     ) -> Self {
-        if cfg!(debug_assertions)
-            && let Some(base) = base
-        {
-            base.each_bound(&mut |unknown, below| {
-                let bound = binding.bound(unknown);
-                assert!(bound.is_some_and(|bound| bound.same_as(&below)));
-            });
-        }
-        debug_assert!(base.is_none_or(|base| std::ptr::eq(base.0.shapes, shapes)));
-        let layer = BuildLayer::laid(lay, scratch, shapes, None, binding, units, closings)
-            .deriving(derived);
+        let layer = BuildLayer::laid(lay, scratch, shapes, units, closings).deriving(derived);
         FactsOver(LoadRecords {
             shapes,
             layer: resident(lay, layer),
             bodies: &[],
-            base,
-            layers: &[],
-            index: &[],
         })
     }
 
@@ -1709,145 +1242,60 @@ impl<'graph> LoadFacts<'graph> {
         self.0.layer
     }
 
-    /// These records beside `layers`, the layers the load laid for its traced calls in lay order,
-    /// their index by parent and key staged in `scratch` and laid through `lay`.
-    pub fn laying(
-        &self,
-        lay: impl Lays<'graph>,
-        scratch: BumpAllocator<'_>,
-        layers: &'graph [LoadLayer<'graph>],
-    ) -> Self {
-        debug_assert!(
-            (layers.iter().enumerate())
-                .all(|(at, laid)| laid.parent.is_none_or(|parent| (parent as usize) < at)),
-            "a load layer's parent precedes it"
-        );
-        let mut index = BumpVec::with_capacity_in(layers.len(), scratch);
-        index.extend(
-            (layers.iter().enumerate()).map(|(at, laid)| (laid.parent, laid.key, at as u32)),
-        );
-        index.sort_unstable();
-        debug_assert!(
-            index
-                .windows(2)
-                .all(|pair| (pair[0].0, pair[0].1) != (pair[1].0, pair[1].1)),
-            "the load lays one layer per parent and key"
-        );
-        let index = collect(lay, index.iter().copied());
-        FactsOver(LoadRecords {
-            layers,
-            index,
-            ..self.0
-        })
-    }
-
-    /// The layer the load laid beneath `parent` — a load layer's ordinal, or the root — under
-    /// `key`, beside its ordinal in the load's table, if any.
-    pub fn layer(
-        &self,
-        parent: Option<u32>,
-        key: LayerKey,
-    ) -> Option<(u32, &'graph BuildLayer<'graph>)> {
-        let index = self.0.index;
-        let at = index
-            .binary_search_by_key(&(parent, key), |(parent, key, _)| (*parent, *key))
-            .ok()?;
-        let ordinal = index[at].2;
-        Some((ordinal, self.0.layers[ordinal as usize].layer))
-    }
-
-    /// The layer at `ordinal` in the load's table.
-    pub fn load_layer(&self, ordinal: u32) -> &'graph BuildLayer<'graph> {
-        self.0.layers[ordinal as usize].layer
-    }
-
-    /// The layers the load laid for its traced calls, in lay order.
-    pub fn layers(&self) -> &'graph [LoadLayer<'graph>] {
-        self.0.layers
-    }
-
-    /// The witnessed layer under each binding's layer the load laid for `body` beneath `top` — a
-    /// load layer, or the root where `None` — once per binding: what a settlement of another
-    /// binding beneath it may read over. A miss scans the table, as it walks a body.
-    pub fn witnessed(
-        &self,
-        top: Option<&BuildLayer<'_>>,
-        body: Segment,
-    ) -> impl Iterator<Item = &'graph BuildLayer<'graph>> + use<'graph> {
-        let layers = self.0.layers;
-        let top = top.map(|top| std::ptr::from_ref(top).addr());
-        let beneath = move |laid: &LoadLayer<'_>| {
-            let parent = laid.parent.map(|parent| layers[parent as usize].layer);
-            parent.map(|parent| std::ptr::from_ref(parent).addr()) == top
-        };
-        (layers.iter())
-            .filter(move |laid| laid.body == body && beneath(laid))
-            .filter_map(|laid| {
-                laid.layer
-                    .parent()
-                    .filter(|below| below.witnessing().is_some())
-            })
-    }
-
     /// These records beside `folds`, by segment: every capture composing where it is empty.
     pub fn folded(&self, lay: impl Lays<'graph>, folds: &[Folds<'graph>]) -> Self {
         let shapes = self.0.shapes;
         debug_assert!(folds.is_empty() || folds.len() == shapes.bodies().len());
         let bodies = shapes.bodies();
         let base = shapes.root().code_digest();
+        let all = folds;
         let bodies = lay.fill(bodies.len(), |at| {
             let shape = bodies[at];
             let layout = shapes.layout(shape.segment());
             let folds = folds.get(at).copied();
-            let contract = |index: usize| folds.is_none_or(|folds| folds.contract[index]);
-            let keys = (folds.and_then(|folds| folds.keys)).filter(|_| !shape.deferred());
-            let rebound = shapes.rebound(shape.segment());
+            let binders = folds.map_or(&[][..], |folds| folds.binders);
+            let contract = |index: usize| {
+                index < layout.len() && folds.is_none_or(|folds| folds.contract[index])
+            };
+            let born_in = shapes.parent(shape.segment()).map(|(parent, _)| parent);
+            let binder_at = |binder: &Unknown| {
+                born_in
+                    .and_then(|born_in| binder_coordinate(shapes, all, born_in, *binder))
+                    .expect("a body's binder lies around it, read through each body between")
+            };
             Laid {
                 body: BodyRef {
                     base,
                     segment: shape.segment(),
                     code: shape.code_digest(),
-                    composes: composes(lay, shape, contract, layout.len()),
-                    // An untraced body's call runs under its composition, keyed on nothing.
-                    keys: keys.map(|keys| {
-                        collect(lay, keys.iter().map(|slot| (*slot, shape.slot_name(*slot))))
-                    }),
+                    composes: composes(lay, shape, contract, layout.len() + binders.len()),
                     root: None,
-                    births: shape.births_callable(),
-                    rebinds: keys.is_some_and(|keys| {
-                        keys.iter().any(|slot| rebound.binary_search(slot).is_ok())
-                    }),
                 },
-                captures: collect(lay, layout.iter().map(|(_, coordinate)| *coordinate)),
+                captures: lay.fill(layout.len() + binders.len(), |at| {
+                    match at.checked_sub(layout.len()) {
+                        None => CaptureRead::At(layout[at].1),
+                        Some(index) => binder_at(&binders[index]),
+                    }
+                }),
                 folds,
             }
         });
         FactsOver(LoadRecords { bodies, ..self.0 })
     }
 
-    /// The newest record of `unit` beside its frontier, its base's where this load did not re-run
-    /// it.
+    /// The record of `unit` beside its frontier.
     pub fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
         self.0.unit(unit)
     }
 
-    /// The newest closing record of the owning body `body`, beside its frontier.
+    /// The closing record of the owning body `body`, beside its frontier.
     pub fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
         self.0.closing(body)
     }
 
     /// Hand `each` every type these records name.
     pub fn each_type(&self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
-        self.0.layer.each_own_type(each);
-    }
-
-    /// The request the base carries for the call site `site` of `shape`, if any.
-    pub fn request(
-        &self,
-        shape: &BodyShape<'_>,
-        site: Site,
-    ) -> Option<&'graph SiteRequest<'graph>> {
-        self.0.layer.request(shape.segment(), site)
+        self.0.layer.each_type(each);
     }
 
     /// The units this load marked unreached, sorted.
@@ -1864,6 +1312,22 @@ impl<'graph> LoadFacts<'graph> {
         (self.0.layer.units.entries().iter())
             .filter_map(|(unit, record)| Some((*unit, record.typed()?)))
     }
+
+    /// The base's own closing records, by owning body.
+    pub fn own_closings(
+        &self,
+    ) -> impl Iterator<Item = (Segment, (&'graph Closing<'graph>, Frontier<'graph>))> + 'graph {
+        self.0.layer.closings.entries().iter().copied()
+    }
+
+    /// Each site question the base's own records store: its unit records', then its closing
+    /// records'.
+    #[cfg(test)]
+    pub fn own_questions(&self) -> impl Iterator<Item = &'graph SiteQuestion<'graph>> + 'graph {
+        let units = (self.own_units()).flat_map(|(_, (facts, _))| facts.questions.iter());
+        let closings = (self.own_closings()).flat_map(|(_, (closing, _))| closing.questions.iter());
+        units.chain(closings)
+    }
 }
 
 #[expect(
@@ -1874,7 +1338,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// `fact`, read off these records, with every type it names resolving in `types`, the reading
     /// frame's chain: each the chain lacks is minted from its term ([`RecordSource::term`]). A frame
     /// mints only what it reads, once per tier the chain interns in. Over the load and the
-    /// settlements under the root, every type a fact names lies in the root or the agent tier
+    /// under the root, every type a fact names lies in the root or the agent tier
     /// already. Every reader of a fact naming a type reads through it, so none can skip it.
     fn minted<T: Named>(&self, types: &Chain<'_, '_, '_, '_>, fact: T) -> T {
         if !self.0.composed() {
@@ -1894,18 +1358,32 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         fact
     }
 
-    /// `fact`, read off these records, closed and minted ([`minted`](Self::minted)): each rigid
-    /// type it names that a table of closed types its chain's layers hold gives a closed type takes
-    /// it ([`ClosedTypes`](super::ClosedTypes)), and then every type it names resolves. A probe
-    /// reads a type's digest alone, so a table's value is minted as any other type is. Nothing
-    /// interns, and a fact naming no such type is handed back as read.
-    fn resolved<T: Named + Close>(&self, types: &Chain<'_, '_, '_, '_>, fact: T) -> T {
-        let fact = match self.0.closes() {
-            false => fact,
-            true => fact.closed(&mut Probing::<S, BumpAllocator<'_>> {
-                source: &self.0,
-                lay: None,
-            }),
+    /// `fact`, read off these records, closed and minted ([`minted`](Self::minted)): each type it
+    /// names written over a name the reading frame's slots bind takes the type the binding gives
+    /// it, written in by the program's fact domain ([`Rebinds`](super::Rebinds)). Then every type
+    /// it names resolves. A fact naming no such type is handed back as read.
+    fn resolved<T: Named + Close>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        segment: Segment,
+        fact: T,
+    ) -> T {
+        let fact = self.minted(types, fact);
+        let fact = match self.0.rebinding() {
+            Some((rebinds, binding)) => {
+                let scratch = crate::memory::Bump::new();
+                fact.closed(
+                    &mut Rebinding::<'_, '_, '_, '_, '_, '_, BumpAllocator<'_>> {
+                        rebinds,
+                        binding,
+                        segment,
+                        types,
+                        scratch: &scratch,
+                        lay: None,
+                    },
+                )
+            }
+            None => fact,
         };
         self.minted(types, fact)
     }
@@ -1916,14 +1394,20 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         &self,
         types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'l>,
+        segment: Segment,
         fact: T,
     ) -> T {
-        let fact = match self.0.closes() {
-            false => fact,
-            true => fact.closed_laying(&mut Probing {
-                source: &self.0,
+        let fact = self.minted(types, fact);
+        let fact = match self.0.rebinding() {
+            Some((rebinds, binding)) => fact.closed_laying(&mut Rebinding {
+                rebinds,
+                binding,
+                segment,
+                types,
+                scratch,
                 lay: Some(scratch),
             }),
+            None => fact,
         };
         self.minted(types, fact)
     }
@@ -1972,7 +1456,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
                     "the type at {site:?} of body {:?} is open where it runs",
                     shape.segment()
                 );
-                Err(Elaboration::Unknown { site })
+                Err(Elaboration::OpenAtRun { site })
             }
         }
     }
@@ -2015,7 +1499,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         });
         match name {
             Some(name) => Elaboration::Unbound { name, site },
-            None => Elaboration::Unknown { site },
+            None => Elaboration::OpenAtRun { site },
         }
     }
 
@@ -2076,6 +1560,17 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         table(typed).get(key).map(|(_, value)| *value)
     }
 
+    /// What the instance the reading frame holds answers the stored question of `rule` at `site`
+    /// of `shape`: `None` where it holds none owning it, and the load's record stands.
+    pub fn site_answer(
+        &self,
+        shape: &BodyShape<'_>,
+        site: Site,
+        rule: SiteRule,
+    ) -> Option<SiteAnswer> {
+        self.0.site_answer(shape.segment(), site, rule)
+    }
+
     /// The entry at `site` of the site-keyed `table` of `shape`'s facts.
     fn at_site<V: Copy + 'a>(
         &self,
@@ -2129,7 +1624,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         site: Site,
     ) -> StaticType<'a> {
         let typed = self.at_site(shape, site, |typed| typed.expressions);
-        self.resolved(types, typed.unwrap_or(Static::Unknown))
+        self.resolved(types, shape.segment(), typed.unwrap_or(Static::Unknown))
     }
 
     /// What the load fixed for the type binder at `slot` of `shape`.
@@ -2140,7 +1635,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         slot: Slot,
     ) -> StaticType<'a> {
         let declared = self.at_slot(shape, slot, |typed| typed.declared);
-        self.resolved(types, declared.unwrap_or(Static::Unknown))
+        self.resolved(types, shape.segment(), declared.unwrap_or(Static::Unknown))
     }
 
     /// What the load fixed for the registration at `slot` of `shape`.
@@ -2151,7 +1646,11 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         slot: Slot,
     ) -> StaticRegistered<'a> {
         let registered = self.at_slot(shape, slot, |typed| typed.registered);
-        self.resolved(types, registered.unwrap_or(Static::Unknown))
+        self.resolved(
+            types,
+            shape.segment(),
+            registered.unwrap_or(Static::Unknown),
+        )
     }
 
     /// Whether the callable body `body` is born with `name` among its `FOR ALL` names: where a
@@ -2160,7 +1659,8 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         let BinderSymbol::Type(name) = name else {
             return false;
         };
-        match self.born(body).map(|born| born.callable) {
+        let born = self.born(body);
+        match born.map(|born| born.callable) {
             Some(Static::Closed(callable)) => callable.quantifier_map.get(name).is_some(),
             Some(Static::Rigid { value, .. }) => value.quantifier_map.get(name).is_some(),
             _ => false,
@@ -2174,7 +1674,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         shape: &BodyShape<'_>,
     ) -> StaticCallable<'a> {
         let callable = (self.born(shape.segment())).map_or(Static::Unknown, |born| born.callable);
-        self.resolved(types, callable)
+        self.resolved(types, shape.segment(), callable)
     }
 
     /// The callable body `shape`'s own `FOR ALL` group as its body reads it, by group order.
@@ -2201,7 +1701,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         'a: 'l,
     {
         let instance: Option<StaticInstance<'l>> = self.born(shape.segment())?.instance;
-        self.resolved_laying(types, scratch, instance)
+        self.resolved_laying(types, scratch, shape.segment(), instance)
     }
 
     /// Each lexical variable `shape` declares, by level, beside where its activation holds it.
@@ -2209,13 +1709,20 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.0.shapes().homes(shape.segment())
     }
 
-    /// Each type capture of `shape` past its builder captures, as the coordinate its birth reads.
-    pub fn type_captures(&self, shape: &BodyShape<'_>) -> &'a [Coordinate] {
+    /// Each capture of `shape` past its builder captures, as where its birth reads it: its
+    /// type captures, then its binders ([`Folds::binders`]).
+    pub fn type_captures(&self, shape: &BodyShape<'_>) -> &'a [CaptureRead] {
         self.0.laid(shape.segment()).captures
     }
 
-    /// How many closure slots a birth of `shape` fills: its builder captures, then its type
-    /// captures.
+    /// The binder of a body around `shape` its capture `index` past its type captures holds
+    /// ([`Folds::binders`]).
+    pub fn capture_binder(&self, shape: &BodyShape<'_>, index: usize) -> Option<Unknown> {
+        self.0.folds(shape.segment())?.binders.get(index).copied()
+    }
+
+    /// How many closure slots a birth of `shape` fills: its builder captures, its type captures,
+    /// then its binders.
     pub fn capture_count(&self, shape: &BodyShape<'_>) -> usize {
         shape.captures().len() + self.type_captures(shape).len()
     }
@@ -2230,7 +1737,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// the body rooting its chain, beside its level there. A text fact, read off the shape table.
     pub fn path_read(&self, shape: &BodyShape<'_>, site: Site) -> Option<(Segment, usize)> {
         let index = shape.spelled_at(site)?;
-        let level = self.0.shapes().path_level(shape.segment(), index)?;
+        let level = self.0.shapes().path_level(shape.segment(), index).ok()?;
         Some((self.0.shapes().chain_root(shape.segment()), level))
     }
 
@@ -2247,7 +1754,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
             .paths
             .get((root.segment(), name))
             .map(|(_, path)| *path);
-        self.resolved(types, path)
+        self.resolved(types, root.segment(), path)
     }
 
     /// The first registration of the quote's code `shape` that overlaps a builtin overload,
@@ -2278,7 +1785,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         'a: 'l,
     {
         let refusal: Option<&'l ShapeError<'l>> = self.refused(shape);
-        let refusal = self.resolved_laying(types, scratch, refusal)?;
+        let refusal = self.resolved_laying(types, scratch, shape.segment(), refusal)?;
         let (shapes, segment) = (self.0.shapes(), shape.segment());
         let captured = std::cell::RefCell::new(captured);
         Some(refusal.closed_laying(&mut Capturing {
@@ -2289,6 +1796,22 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
                 Target::Local(_) => None,
             },
         }))
+    }
+
+    /// `refusal`, an arm of a question a bind site's instance refuses in the body `segment`,
+    /// worded as a load with the frame's binding declared words it: closed by the binding, laid in
+    /// `scratch` where some type closes.
+    pub fn bound_refusal<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        segment: Segment,
+        refusal: &'l ShapeError<'l>,
+    ) -> &'l ShapeError<'l>
+    where
+        'a: 'l,
+    {
+        self.resolved_laying(types, scratch, segment, refusal)
     }
 
     /// Whether the code shape `shape`'s code cannot be built or does not type: a binding closes a
@@ -2305,14 +1828,16 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
             .or_else(|| self.at(shape).refusal())
     }
 
-    /// The static type of the part at `site` of `shape`, where the load typed one.
+    /// The static type of the part at `site` of `shape`, where the load typed one: the load's
+    /// record, closed under a frame's binding.
     pub fn value_type(
         &self,
         types: &Chain<'_, '_, '_, '_>,
         shape: &BodyShape<'_>,
         site: Site,
     ) -> Option<Interval> {
-        self.resolved(types, self.at_site(shape, site, |typed| typed.parts))
+        let typed = self.at_site(shape, site, |typed| typed.parts);
+        self.resolved(types, shape.segment(), typed)
     }
 
     /// The static type of statement `index` of `shape`'s body.
@@ -2324,7 +1849,11 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     ) -> Option<Interval> {
         let index = index as u32;
         let typed = self.typed_in(shape, self.0.shapes().running(shape.segment(), index))?;
-        self.resolved(types, typed.statements.get(index).map(|(_, typed)| *typed))
+        self.resolved(
+            types,
+            shape.segment(),
+            typed.statements.get(index).map(|(_, typed)| *typed),
+        )
     }
 
     /// The static type of the binder at `slot` of `shape`.
@@ -2333,8 +1862,12 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         types: &Chain<'_, '_, '_, '_>,
         shape: &BodyShape<'_>,
         slot: Slot,
-    ) -> Option<DeclaredType<Interval>> {
-        self.resolved(types, self.at_slot(shape, slot, |typed| typed.binders))
+    ) -> Option<Holding<'a>> {
+        self.resolved(
+            types,
+            shape.segment(),
+            self.at_slot(shape, slot, |typed| typed.binders),
+        )
     }
 
     /// What the load fixed about the keyworded use whose node sits at `site` of `shape`.
@@ -2348,32 +1881,433 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     where
         'a: 'l,
     {
-        let statics: UseStatics<'l> =
-            (self.at_site(shape, site, |typed| typed.uses)).unwrap_or(UseStatics::UNFIXED);
-        self.resolved_laying(types, scratch, statics)
+        let read = self.use_read(types, scratch, shape, site);
+        self.use_statics_by(types, scratch, shape, site, read)
+    }
+
+    /// What the instance the reading frame holds answers at the keyworded use at `site` of
+    /// `shape`: what a call reads once and hands each of [`use_statics_by`](Self::use_statics_by),
+    /// [`selection_by`](Self::selection_by) and [`route_by`](Self::route_by).
+    pub fn use_read<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> UseRead<'a, 'l>
+    where
+        'a: 'l,
+    {
+        let (segment, held) = (shape.segment(), Held::Site(shape.segment(), site));
+        let facts = self.0.holding(held).map(|(_, facts)| facts);
+        let question =
+            facts.and_then(|facts| facts.questions.get((segment, site, SiteRule::Selection)));
+        UseRead {
+            site,
+            typed: facts
+                .and_then(|facts| facts.typed.get(segment))
+                .map(|(_, typed)| typed),
+            answered: question
+                .and_then(|question| self.answered_use(types, scratch, shape, site, question)),
+        }
+    }
+
+    /// [`use_statics`](Self::use_statics) over the instance's answer `read`.
+    pub fn use_statics_by<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+        read: UseRead<'a, 'l>,
+    ) -> UseStatics<'l>
+    where
+        'a: 'l,
+    {
+        let record: UseStatics<'l> = read
+            .record(|typed| typed.uses)
+            .unwrap_or(UseStatics::UNFIXED);
+        let answered = self.answered_narrowing(types, scratch, shape, site, read);
+        // The load's record, its contributions closed under the frame's binding, as the points it
+        // solves by are; its narrowing the instance's where the instance answers the selection.
+        let statics = UseStatics {
+            narrowing: answered.unwrap_or(record.narrowing),
+            ..record
+        };
+        let statics = self.resolved_laying(types, scratch, shape.segment(), statics);
+        // A contribution the binding closes to `Any` is the argument's carried type, as the load
+        // reads an upper end of `Any`: the points the load solved from it do not hold, so the call
+        // admits and solves each candidate the load solved, as the load leaves one with no point.
+        let narrowing = match statics.contributions.iter().any(closed_to_any) {
+            true => solved_at_call(scratch, statics.narrowing),
+            false => statics.narrowing,
+        };
+        UseStatics {
+            narrowing,
+            contributions: carried_at_any(scratch, statics.contributions),
+            ..statics
+        }
+    }
+
+    /// The candidates of the keyworded use at `site` of `shape` as the instance the reading frame
+    /// holds narrows them, laid in `scratch`: the one it selects, or those it keeps, each beside its
+    /// verdict and an *always* one's points. Where the instance ranks them, the load's table does
+    /// where it keeps what the load kept, else [`ranked_table`](Self::ranked_table); the rest rank
+    /// at the call.
+    fn answered_narrowing<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+        read: UseRead<'a, 'l>,
+    ) -> Option<Narrowing<'l>>
+    where
+        'a: 'l,
+    {
+        let (answer, picked) = read.answered?;
+        let listed = shape.candidates(site)?.candidates;
+        let listed_at = |picked: &Picked<'_, '_>| listed[usize::from(picked.selectable.position)];
+        let SiteAnswer::Kept { ranked, always, .. } = answer else {
+            return match listed_at(&picked[0]) {
+                Candidate::One(coordinate) => Some(Narrowing::Selected(coordinate)),
+                Candidate::Spread(_) => None,
+            };
+        };
+        if picked.len() == listed.len() && !ranked && always == 0 {
+            return Some(Narrowing::Full);
+        }
+        let entries = scratch.fill(picked.len(), |at| {
+            (listed_at(&picked[at]), picked[at].verdict)
+        });
+        let points = scratch.fill(picked.len(), |at| picked[at].points.unwrap_or(Points::NONE));
+        let base = read.record(|typed| typed.uses);
+        let elimination = match base.map(|base| base.narrowing) {
+            _ if !ranked => Elimination::Open,
+            Some(Narrowing::Kept(Kept {
+                entries: kept,
+                elimination: Elimination::Table(table),
+                ..
+            })) if (kept.iter().map(|(candidate, _)| candidate))
+                .eq(entries.iter().map(|(candidate, _)| candidate)) =>
+            {
+                Elimination::Table(*table)
+            }
+            // A pair the load left open the binding ranks: its table, as a fresh load lays it.
+            _ => (self.ranked_table(types, scratch, shape.segment(), picked))
+                .map_or(Elimination::Open, Elimination::Table),
+        };
+        let kept = Kept {
+            entries,
+            points,
+            elimination,
+        };
+        Some(Narrowing::Kept(resident(scratch, kept)))
+    }
+
+    /// The shape `shaped`, its type and its bounds over names closed under the reading frame's
+    /// binding, rebuilt where every bound closes.
+    fn resolved_shape<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        segment: Segment,
+        shaped: Shaped<'_>,
+    ) -> Shaped<'l> {
+        let bounds = shaped.rebounds.0;
+        let resolved = Shaped {
+            ty: self.resolved(types, segment, shaped.ty),
+            rebounds: Rebounds(scratch.alloc_slice_fill_iter(
+                (bounds.iter()).map(|(at, bound)| (*at, self.resolved(types, segment, *bound))),
+            )),
+        };
+        resolved.rebuilt(types, scratch)
+    }
+
+    /// The table ranking `picked`, the candidates an instance keeps and ranks, laid in `scratch`:
+    /// each pair's answer the closed door's to the selection's own ask, its shapes closed under the
+    /// reading frame's binding. `None` where a pair's shapes stay open.
+    fn ranked_table<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        segment: Segment,
+        picked: &[Picked<'a, 'l>],
+    ) -> Option<super::typed::Table<'l>> {
+        let question = picked.first()?.question;
+        let [Payload::Selection(layout), ..] = question.arms else {
+            return None;
+        };
+        let mut open = false;
+        let mut outranks = |class: u16, a: usize, b: usize| {
+            let asked = (picked[a].selectable.rank).zip(picked[b].selectable.rank);
+            let answer = asked.and_then(|(a, b)| {
+                let ask = question.asks[usize::from(layout.outranks(class, a, b))].question;
+                let Question::Outranks { a, b, class } = ask else {
+                    return None;
+                };
+                let closed = Question::Outranks {
+                    a: self.resolved_shape(types, scratch, segment, a),
+                    b: self.resolved_shape(types, scratch, segment, b),
+                    class,
+                };
+                super::question::answer(types, scratch, &closed)
+            });
+            open |= answer.is_none();
+            answer == Some(Answer::Bool(true))
+        };
+        let builtin = |at: usize| picked[at].selectable.builtin;
+        let classes = usize::from(layout.classes);
+        let table =
+            super::typed::Table::laid(scratch, picked.len(), classes, &mut outranks, builtin);
+        table.filter(|_| !open)
+    }
+
+    /// The candidates the instance the reading frame holds runs at the keyworded use at `site` of
+    /// `shape`, laid in `scratch`, beside its answer: the one it selects, or those it keeps in list
+    /// order. `None` where it holds none owning the selection, the selection refuses the use, or a
+    /// point of one it takes as admitted is not closed.
+    fn answered_use<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+        question: &'a SiteQuestion<'a>,
+    ) -> Option<(SiteAnswer, &'l [Picked<'a, 'l>])>
+    where
+        'a: 'l,
+    {
+        let answer = self.site_answer(shape, site, SiteRule::Selection)?;
+        let mut picked = BumpVec::new_in(scratch);
+        for (at, verdict) in runs(question, answer)? {
+            let selectable = selectable(question, at);
+            let points = match verdict {
+                Verdict::Always => {
+                    let points = answered_points(types, scratch, question, selectable)?;
+                    Some(self.resolved_laying(types, scratch, shape.segment(), points))
+                }
+                _ => None,
+            };
+            picked.push(Picked {
+                selectable,
+                verdict,
+                points,
+                question,
+            });
+        }
+        Some((answer, picked.leak()))
+    }
+
+    /// The question of `rule` the load stored at `site` of `shape`.
+    fn stored(
+        &self,
+        shape: &BodyShape<'_>,
+        site: Site,
+        rule: SiteRule,
+    ) -> Option<&'a SiteQuestion<'a>> {
+        let (_, facts) = self.0.holding(Held::Site(shape.segment(), site))?;
+        facts.questions.get((shape.segment(), site, rule))
     }
 
     /// The route the load fixed for the tail call whose node sits at `site` of `shape`, where it
     /// knows the callee.
-    pub fn route(&self, shape: &BodyShape<'_>, site: Site) -> Option<Route<'a>> {
-        self.at_site(shape, site, |typed| typed.routes)
+    /// A call by name's whether its callee's return keeps the frame's contract is the instance's
+    /// the reading frame holds; a keyworded use's candidates the load leaves open are left to the
+    /// call, which checks the contract by the callee it runs.
+    pub fn route<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<Route<'l>>
+    where
+        'a: 'l,
+    {
+        let read = self.use_read(types, scratch, shape, site);
+        self.route_by(scratch, shape, site, read)
     }
 
-    /// What the load fixed about the arms of the `MATCH` whose node sits at `site` of `shape`.
-    pub fn arms(&self, shape: &BodyShape<'_>, site: Site) -> Option<Arms<'a>> {
-        self.at_site(shape, site, |typed| typed.arms)
+    /// [`route`](Self::route) over the instance's answer `read`.
+    pub fn route_by<'l>(
+        &self,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+        read: UseRead<'a, 'l>,
+    ) -> Option<Route<'l>>
+    where
+        'a: 'l,
+    {
+        let record = read.record(|typed| typed.routes);
+        let answered = (self.answered_route(scratch, shape, site, read))
+            .or_else(|| self.answered_use_route(scratch, read));
+        answered.or(record)
     }
 
-    /// What the load recorded a retype at `site` of `shape` re-stamps at, where it knew how and
-    /// the reading frame's binding closes the type it re-stamps at.
+    /// The route of the tail call at `site` of `shape` over the load's record, a call by name's
+    /// kept as the instance the reading frame holds answers: `None` where it holds none owning
+    /// the call's route.
+    fn answered_route<'l>(
+        &self,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+        read: UseRead<'a, 'l>,
+    ) -> Option<Route<'l>>
+    where
+        'a: 'l,
+    {
+        let base = read.record(|typed| typed.routes)?;
+        let answer = self.site_answer(shape, site, SiteRule::TailRoute)?;
+        let [route] = base.per else {
+            return None;
+        };
+        let kept = match answer {
+            SiteAnswer::Bool(kept) => Some(kept),
+            _ => None,
+        };
+        Some(Route {
+            per: scratch.fill(1, |_| CandidateRoute { kept, ..*route }),
+        })
+    }
+
+    /// The route of the keyworded use `read` reads, in the tail, one per candidate the instance
+    /// the reading frame holds narrows it to: whether each keeps the frame's contract where the
+    /// load's answers decide it, the asks a binding decides left to the call.
+    fn answered_use_route<'l>(
+        &self,
+        scratch: BumpAllocator<'l>,
+        read: UseRead<'a, 'l>,
+    ) -> Option<Route<'l>>
+    where
+        'a: 'l,
+    {
+        read.record(|typed| typed.routes)?;
+        let (_, picked) = read.answered?;
+        let per = scratch.fill(picked.len(), |at| {
+            let Picked {
+                selectable,
+                points,
+                question,
+                ..
+            } = picked[at];
+            let Some(routing) = selectable.route else {
+                return CandidateRoute {
+                    kept: None,
+                    hop: false,
+                };
+            };
+            // A scheme's return is read at its points, where each is exact.
+            let solved = points.is_some_and(|points| {
+                !(points.points.iter()).any(|point| matches!(point, Point::Carried(_)))
+            });
+            let kept = match routing.keeps {
+                Some((_, true)) if !solved => None,
+                Some(_) => {
+                    routing.kept(&mut AskedBy(|at: u16| question.asks[usize::from(at)].rigid))
+                }
+                None => None,
+            };
+            CandidateRoute {
+                kept,
+                hop: routing.hop,
+            }
+        });
+        Some(Route { per })
+    }
+
+    /// What the load fixed about the arms of the `MATCH` whose node sits at `site` of `shape`, as
+    /// the instance the reading frame holds decides it: the arm a binding chooses, or the arms it
+    /// keeps, laid in `scratch`.
+    pub fn arms<'l>(
+        &self,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<Arms<'l>>
+    where
+        'a: 'l,
+    {
+        let record = self.at_site(shape, site, |typed| typed.arms);
+        let answered = self.answered_arms(scratch, shape, site);
+        answered.or(record)
+    }
+
+    /// The arms of the `MATCH` at `site` of `shape` the instance the reading frame holds decides,
+    /// over the load's record of them: `None` where it holds none owning its question, or the
+    /// question's answer is one no run reaches the `MATCH` under.
+    fn answered_arms<'l>(
+        &self,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<Arms<'l>>
+    where
+        'a: 'l,
+    {
+        let answer = self.site_answer(shape, site, SiteRule::ArmsRun)?;
+        let base = self.at_site(shape, site, |typed| typed.arms)?;
+        match answer {
+            SiteAnswer::Arm(arm) => Some(Arms {
+                chosen: Some(arm - 1),
+                ..base
+            }),
+            SiteAnswer::Kept { kept, always, .. } => {
+                let mut arms = BumpVec::with_capacity_in(kept.count_ones() as usize, scratch);
+                arms.extend((0..64u16).filter(|at| kept & 1 << at != 0).map(|at| {
+                    let verdict = match always & 1 << at != 0 {
+                        true => Verdict::Always,
+                        false => Verdict::Maybe,
+                    };
+                    (at, verdict)
+                }));
+                Some(Arms {
+                    kept: arms.leak(),
+                    ranking: base.ranking,
+                    chosen: None,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// What the retype at `site` of `shape` re-stamps at, where the load or the instance the
+    /// reading frame holds knows how and the frame's binding closes the type it re-stamps at.
     pub fn retype(
         &self,
         types: &Chain<'_, '_, '_, '_>,
         shape: &BodyShape<'_>,
         site: Site,
     ) -> Option<Retype> {
-        let restamp = self.resolved(types, self.at_site(shape, site, |typed| typed.retypes))?;
+        let record = self.at_site(shape, site, |typed| typed.retypes);
+        let answered = [
+            SiteRule::MemberRetype,
+            SiteRule::HoldRetype,
+            SiteRule::ArmRestamp,
+        ]
+        .into_iter()
+        .find_map(|rule| match self.answered_arm(shape, site, rule)? {
+            Payload::Restamp(restamp) => Some(*restamp),
+            _ => None,
+        });
+        let restamp = self.resolved(types, shape.segment(), answered.or(record))?;
         restamp.retype(types)
+    }
+
+    /// The payload of the arm the instance the reading frame holds chooses for the stored question
+    /// of `rule` at `site` of `shape`: `None` where it holds none owning it, or chooses no arm.
+    fn answered_arm(
+        &self,
+        shape: &BodyShape<'_>,
+        site: Site,
+        rule: SiteRule,
+    ) -> Option<&'a Payload<'a>> {
+        let SiteAnswer::Arm(arm) = self.site_answer(shape, site, rule)? else {
+            return None;
+        };
+        self.stored(shape, site, rule)?.arms.get(usize::from(arm))
     }
 
     /// What a frame of the callable `shape` re-stamps its arguments and its value at, where the
@@ -2391,6 +2325,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.resolved_laying(
             types,
             scratch,
+            shape.segment(),
             retypes.map_or(Retypes::NONE, |(closing, _)| closing.retypes),
         )
     }
@@ -2406,30 +2341,8 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     }
 
     /// Where `shape`'s types intern at run.
-    pub fn caching(&self, shape: &BodyShape<'_>) -> Option<&'a Caching<'a>> {
+    pub fn caching(&self, shape: &BodyShape<'_>) -> Option<&'a Caching> {
         self.0.folds(shape.segment())?.caching
-    }
-
-    /// What the trace names at each call site of a keyed body in `shape`, by site.
-    pub fn traces(&self, shape: &BodyShape<'_>) -> Keyed<'a, (Site, CallTrace<'a>)> {
-        (self.0.folds(shape.segment())).map_or(Keyed::EMPTY, |folds| folds.traces)
-    }
-
-    /// Each call site the owning body `owner` owns that covers its callee's keys, sorted by shape
-    /// and site.
-    pub fn slot_maps(&self, owner: Segment) -> &'a [SlotMap<'a>] {
-        (self.0.folds(owner)).map_or(&[], |folds| folds.slot_maps)
-    }
-
-    /// What the trace names at the call site `site` of `shape`, where it calls a keyed body.
-    pub fn trace(&self, shape: &BodyShape<'_>, site: Site) -> Option<CallTrace<'a>> {
-        self.traces(shape).get(site).map(|(_, trace)| *trace)
-    }
-
-    /// How the load classed the minting site at `site`, one of `shape`'s own.
-    pub fn mint_at(&self, shape: &BodyShape<'_>, site: Site) -> Option<Mint> {
-        let caching = self.caching(shape)?;
-        caching.mints.get(site).map(|(_, mint)| *mint)
     }
 
     /// Whether the load recorded `site` as one of `shape`'s own minting sites.
@@ -2440,22 +2353,34 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// The content tree of the view the `:|` at `site` of `shape` builds, where its signature is
     /// closed.
     pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a Tree<'a>> {
-        let tree = self.at_site(shape, site, |typed| typed.trees)?;
-        Some(self.substitution(*tree).unwrap_or(tree))
+        self.at_site(shape, site, |typed| typed.trees)
     }
 
     /// What the view the `:|` at `site` of `shape` builds carries for each keyworded member, where
-    /// the load sees all of the body-born module it views.
+    /// the load sees all of the body-born module it views: the load records picks only over a
+    /// closed tree, the same at every binding; elsewhere the run computes the covers.
     pub fn picks(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a [Pick<'a>]> {
         self.at_site(shape, site, |typed| typed.picks)
     }
 
-    /// Whether the load settled the ascription at `site` of `shape`.
+    /// Whether the load settled the ascription at `site` of `shape`, or the instance the reading
+    /// frame holds settles it: its value fits its type at every run of the frame.
     pub fn settled(&self, shape: &BodyShape<'_>, site: Site) -> bool {
-        self.lists_site(shape, site, |typed| typed.settled)
+        let record = self.lists_site(shape, site, |typed| typed.settled);
+        let answered = [SiteRule::Hold, SiteRule::View]
+            .into_iter()
+            .find_map(|rule| self.site_answer(shape, site, rule))
+            .map(|answer| answer == SiteAnswer::Bool(true));
+        // An instance may leave to the run a check the walk settled, where module substitution
+        // cannot close a path through a signature meet; it never settles one the walk did not.
+        answered.unwrap_or(record)
     }
 
-    /// What the load fixed where `shape` reads a quantified function at `site`.
+    /// What the load fixed where `shape` reads a quantified function at `site`: the load's record,
+    /// closed under a frame's binding. An instance the binding finds no instance under refuses
+    /// at its bind site. A member of a module the load cannot see is instanced once the binding
+    /// closes its module's carried type, as its member, or read as it is where the member is
+    /// declared at a type; the member read itself while the binding leaves it open.
     pub fn instance_at<'l>(
         &self,
         types: &Chain<'_, '_, '_, '_>,
@@ -2466,8 +2391,96 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     where
         'a: 'l,
     {
-        let read: Option<InstanceRead<'l>> = self.at_site(shape, site, |typed| typed.instances);
-        self.resolved_laying(types, scratch, read)
+        let closed = |read: Option<InstanceRead<'l>>| {
+            self.resolved_laying(types, scratch, shape.segment(), read)
+        };
+        let read = self.at_site(shape, site, |typed| typed.instances)?;
+        let read = match read {
+            InstanceRead::Member {
+                name,
+                carried,
+                wanted:
+                    MemberWanted::OfUse {
+                        site: used,
+                        argument,
+                    },
+            } => {
+                let wanted = self.member_wanted(types, scratch, shape, used, argument)?;
+                InstanceRead::Member {
+                    name,
+                    carried,
+                    wanted: wanted.map_or(MemberWanted::Nothing, MemberWanted::At),
+                }
+            }
+            read => read,
+        };
+        match closed(Some(read))? {
+            InstanceRead::Member {
+                name,
+                carried,
+                wanted,
+            } => {
+                let open = InstanceRead::Member {
+                    name,
+                    carried,
+                    wanted,
+                };
+                let Some(carried) = types.concrete(carried) else {
+                    return Some(open);
+                };
+                let wanted = match wanted.at().map(|wanted| types.concrete(wanted)) {
+                    Some(None) => return Some(open),
+                    Some(Some(wanted)) => Some(wanted),
+                    None => None,
+                };
+                match super::application::member_instance_closed(
+                    types, scratch, carried, name, wanted,
+                ) {
+                    super::application::MemberInstance::Plain(_) => Some(InstanceRead::AsIs),
+                    super::application::MemberInstance::Instance { ktype, solution } => {
+                        Some(InstanceRead::Solved(StaticInstance::Closed {
+                            solution,
+                            ktype,
+                        }))
+                    }
+                    super::application::MemberInstance::Undeclared
+                    | super::application::MemberInstance::Unfixed { .. }
+                    | super::application::MemberInstance::NoInstance(_) => Some(open),
+                }
+            }
+            read => Some(read),
+        }
+    }
+
+    /// The type the member argument `argument` of the keyworded use at `used` of `shape` is wanted
+    /// at, written over names: the one the candidate the instance the reading frame holds runs
+    /// there wants it at, or the one every candidate it keeps agrees on; `Some(None)` where those
+    /// disagree, which reads a member declared at a type as it is. `None` where the instance does
+    /// not answer the selection.
+    fn member_wanted<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        used: Site,
+        argument: u16,
+    ) -> Option<Option<Parametric>>
+    where
+        'a: 'l,
+    {
+        let (_, picked) = self.use_read(types, scratch, shape, used).answered?;
+        let mut agreed: Option<(Parametric, KType)> = None;
+        for each in picked {
+            let wanted = *each.selectable.wanted.get(usize::from(argument))?;
+            let closed = self.resolved_laying(types, scratch, shape.segment(), wanted);
+            let closed = types.concrete(closed)?;
+            match agreed {
+                Some((_, first)) if first != closed => return Some(None),
+                Some(_) => {}
+                None => agreed = Some((wanted, closed)),
+            }
+        }
+        Some(agreed.map(|(wanted, _)| wanted))
     }
 
     /// The point each variable of the group of the candidate the keyworded use at `site` of
@@ -2482,23 +2495,33 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     where
         'a: 'l,
     {
-        let points: Option<Points<'l>> = self.at_site(shape, site, |typed| typed.selections);
-        self.resolved_laying(types, scratch, points)
+        let read = self.use_read(types, scratch, shape, site);
+        self.selection_by(types, scratch, shape, read)
+    }
+
+    /// [`selection`](Self::selection) over the instance's answer `read`.
+    pub fn selection_by<'l>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
+        shape: &BodyShape<'_>,
+        read: UseRead<'a, 'l>,
+    ) -> Option<Points<'l>>
+    where
+        'a: 'l,
+    {
+        let answered = match read.answered {
+            Some((SiteAnswer::Arm(_), [picked])) => picked.points,
+            _ => None,
+        };
+        // A selection the load made at every binding is its record's.
+        let selected = answered.or_else(|| read.record(|typed| typed.selections));
+        self.resolved_laying(types, scratch, shape.segment(), selected)
     }
 
     /// The content tree of the module the binder at `slot` of `shape` holds, if the load read it.
     pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'a>> {
-        let tree = self.at_slot(shape, slot, |typed| typed.contents)?;
-        Some(self.substitution(tree).copied().unwrap_or(tree))
-    }
-
-    /// The tree a table of its chain's layers gives `tree` under their binding, where `tree` is
-    /// open and one does: the tree a fresh load reads under it.
-    fn substitution(&self, tree: Tree<'a>) -> Option<&'a Tree<'a>> {
-        match tree.identity() {
-            identity @ Identity::Open(_) if self.0.closes() => self.0.closed_tree(identity),
-            _ => None,
-        }
+        self.at_slot(shape, slot, |typed| typed.contents)
     }
 
     /// What each parameter of the call by name whose argument sits at `site` of `shape` is solved
@@ -2513,9 +2536,11 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     where
         'a: 'l,
     {
+        // The load's record, closed under the frame's binding.
         let named: &'l [StaticType<'l>] =
             (self.at_site(shape, site, |typed| typed.by_name)).unwrap_or(&[]);
-        self.resolved_laying(types, scratch, named)
+        let named = self.resolved_laying(types, scratch, shape.segment(), named);
+        carried_at_any(scratch, named)
     }
 
     /// The slots `shape` binds at a statement that some unit's frontier holds.
@@ -2529,6 +2554,18 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.0
             .folds(shape.segment())
             .map_or(&[], |folds| folds.seams)
+    }
+
+    /// The sites of the parts `shape` holds in place, sorted: each one's rank is its held slot.
+    pub fn held_sites(&self, shape: &BodyShape<'_>) -> &'a [Site] {
+        self.0
+            .folds(shape.segment())
+            .map_or(&[], |folds| folds.held)
+    }
+
+    /// The held slot of the part `shape` holds in place at `site`, where it holds one there.
+    pub fn held_index(&self, shape: &BodyShape<'_>, site: Site) -> Option<usize> {
+        self.held_sites(shape).binary_search(&site).ok()
     }
 
     /// The parameters of the callable or block `shape`, or the captures of the quote's code
@@ -2566,11 +2603,8 @@ impl UnitFacts<'_> {
         for (segment, typed) in self.typed.iter() {
             typed.held(*segment, each);
         }
-        for ((root, name), (_, resolution)) in self.paths.iter() {
+        for ((root, name), _) in self.paths.iter() {
             each(Held::Path(*root, *name));
-            if let Resolved::Class(class) = resolution.resolved {
-                each(Held::Class(*root, class));
-            }
         }
     }
 }
@@ -2592,16 +2626,6 @@ impl Typed<'_> {
             .chain(self.picks.iter().map(|(site, _)| *site))
             .chain(self.minting.iter().copied());
         sites.for_each(|site| each(Held::Site(segment, site)));
-        for (slot, held) in self.holding.iter() {
-            held.iter()
-                .for_each(|identity| each(Held::Holder(segment, *identity, Holder::Slot(*slot))));
-        }
-        // A view written in place holds a module of its own tree, where a binder could name it.
-        for (site, tree) in self.trees.iter() {
-            if tree.identity() != Identity::Unnamed {
-                each(Held::Holder(segment, tree.identity(), Holder::Site(*site)));
-            }
-        }
     }
 }
 
@@ -2610,6 +2634,12 @@ thread_local! {
     /// How many rigid facts and points reached the run's door: what the door law holds at nothing.
     /// Tests reset it.
     pub(crate) static RIGID_AT_RUN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many types a frame's binding closed. Tests reset it.
+    pub(crate) static REBOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Count a rigid fact or point the run's door met.
@@ -2638,6 +2668,19 @@ impl Closer for Capturing<'_, '_, '_, '_, '_, '_> {
         let binds = super::derived::LevelsOnly(self.bound);
         super::question::rebound(self.types, self.lay, ty, &binds)
     }
+
+    fn concrete(&self, ty: Parametric) -> Option<KType> {
+        self.types.concrete(ty)
+    }
+
+    fn rebuilt(
+        &mut self,
+        scheme: crate::type_lattice::Scheme,
+        rebounds: super::Rebounds<'_>,
+    ) -> Option<DeclaredType<KType>> {
+        let (types, scratch) = (self.types, self.lay);
+        super::rebuilt_closed(types, scratch, scheme, rebounds, &mut |ty| self.close(ty))
+    }
 }
 
 impl<'l> Laying<'l> for Capturing<'_, '_, '_, '_, '_, 'l> {
@@ -2648,23 +2691,199 @@ impl<'l> Laying<'l> for Capturing<'_, '_, '_, '_, '_, 'l> {
     }
 }
 
-/// The run's closer: a probe of the tables of closed types the chain's layers hold, laying what it
-/// copies in `lay`. It never interns.
-struct Probing<'q, S, L> {
-    source: &'q S,
+/// The run's closer over a frame's binding: each type written in by the program's fact domain
+/// under what the reading frame's slots bound, read in the body `segment`, laying what it copies
+/// in `lay`.
+struct Rebinding<'q, 'x, 'tier, 'pair, 'reg, 'door, L> {
+    rebinds: &'q dyn super::site::Rebinds,
+    binding: Binding<'q>,
+    segment: Segment,
+    types: &'q Chain<'tier, 'pair, 'reg, 'door>,
+    scratch: BumpAllocator<'x>,
     lay: Option<L>,
 }
 
-impl<'a, S: RecordSource<'a>, L> Closer for Probing<'_, S, L> {
+impl<L> Closer for Rebinding<'_, '_, '_, '_, '_, '_, L> {
+    /// `ty` with the frame's binding written in. A type the chain does not resolve is left as it
+    /// is.
     fn close(&mut self, ty: DeclaredType<Parametric>) -> Closed {
-        self.source.closed(ty).unwrap_or(Closed::Same)
+        if !self.types.resolves(ty) {
+            return Closed::Same;
+        }
+        let rebound =
+            (self.rebinds).rebound(self.types, self.scratch, self.segment, self.binding, ty);
+        #[cfg(test)]
+        if let Closed::Type(_) = rebound {
+            REBOUND.with(|count| count.set(count.get() + 1));
+        }
+        rebound
+    }
+
+    fn concrete(&self, ty: Parametric) -> Option<KType> {
+        self.types.concrete(ty)
+    }
+
+    fn rebuilt(
+        &mut self,
+        scheme: crate::type_lattice::Scheme,
+        rebounds: super::Rebounds<'_>,
+    ) -> Option<DeclaredType<KType>> {
+        let (types, scratch) = (self.types, self.scratch);
+        super::rebuilt_closed(types, scratch, scheme, rebounds, &mut |ty| self.close(ty))
     }
 }
 
-impl<'a, 'l, S: RecordSource<'a>> Laying<'l> for Probing<'_, S, BumpAllocator<'l>> {
+impl<'l> Laying<'l> for Rebinding<'_, '_, '_, '_, '_, '_, BumpAllocator<'l>> {
     type Lay = BumpAllocator<'l>;
 
     fn lay(&self) -> BumpAllocator<'l> {
         self.lay.expect("a laying read takes a scratch")
     }
+}
+
+/// What a call reads once at its keyworded use ([`FactsOver::use_read`]): the use's facts in the
+/// load's record, and what the instance the reading frame holds answers there beside the
+/// candidates it runs.
+#[derive(Clone, Copy)]
+pub struct UseRead<'a, 'l> {
+    site: Site,
+    /// The facts of the use's body in the record holding the use.
+    typed: Option<&'a Typed<'a>>,
+    /// `None` where the frame holds no instance owning the use's selection.
+    answered: Option<(SiteAnswer, &'l [Picked<'a, 'l>])>,
+}
+
+impl<'a> UseRead<'a, '_> {
+    /// The entry at the use's site of the record's site-keyed `table`.
+    fn record<V: Copy + 'a>(
+        &self,
+        table: impl FnOnce(&Typed<'a>) -> Keyed<'a, (Site, V)>,
+    ) -> Option<V> {
+        table(self.typed?).get(self.site).map(|(_, value)| *value)
+    }
+}
+
+/// One candidate an instance's selection runs: where its asks sit, its verdict, and an *always*
+/// one's points, closed.
+#[derive(Clone, Copy)]
+struct Picked<'a, 'l> {
+    selectable: &'a Selectable<'a>,
+    verdict: Verdict,
+    points: Option<Points<'l>>,
+    question: &'a SiteQuestion<'a>,
+}
+
+/// The candidates a selection's `answer` runs, by their index among `question`'s, each beside its
+/// verdict: the one it selects, *always*, or those it keeps in list order. `None` for an answer
+/// that runs none.
+fn runs(
+    question: &SiteQuestion<'_>,
+    answer: SiteAnswer,
+) -> Option<smallvec::SmallVec<[(u16, Verdict); 4]>> {
+    match answer {
+        SiteAnswer::Arm(arm) => Some(smallvec::SmallVec::from_slice(&[(
+            arm - 1,
+            Verdict::Always,
+        )])),
+        SiteAnswer::Kept { kept, always, .. } => {
+            let count = (question.arms.len() as u16).min(64);
+            Some(
+                (0..count)
+                    .filter(|at| kept & 1 << at != 0)
+                    .map(|at| match always & 1 << at != 0 {
+                        true => (at, Verdict::Always),
+                        false => (at, Verdict::Maybe),
+                    })
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// The candidate at `at` of a selection `question`.
+fn selectable<'a>(question: &SiteQuestion<'a>, at: u16) -> &'a Selectable<'a> {
+    match question.arms[1 + usize::from(at)] {
+        Payload::Candidate(candidate) => candidate,
+        _ => unreachable!("a selection question's arms past its layout are its candidates"),
+    }
+}
+
+/// The points `candidate` of the selection `question` solves its group to where an instance takes
+/// it as admitted, laid in `scratch`, written over names: a point the load read exact is the type
+/// itself, closed where it is; one it could not, but whose slot's carried argument points it, is
+/// that argument's type; any other the binding makes exact. `None` where its group does not solve.
+fn answered_points<'l>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'l>,
+    question: &SiteQuestion<'_>,
+    candidate: &Selectable<'_>,
+) -> Option<Points<'l>> {
+    let asks = candidate.points?;
+    let points = scratch.fill(asks.len(), |at| {
+        let ask = asks[at];
+        let exact = question.asks[usize::from(ask.exact)].rigid;
+        match (exact, ask.carried) {
+            (Some(Answer::Bool(true)), _) | (_, None) => match types.concrete(ask.upper) {
+                Some(point) => Point::Closed(point),
+                None => Point::Rigid(ask.upper),
+            },
+            (_, Some(slot)) => Point::Carried(slot),
+        }
+    });
+    Some(Points {
+        points,
+        variables: &[],
+    })
+}
+
+/// Whether `contribution` is closed at `Any`: a rigid one a binding closed so, since the load lays
+/// an argument whose upper end is `Any` as the carried type.
+fn closed_to_any(contribution: &StaticType<'_>) -> bool {
+    matches!(contribution, Static::Closed(closed) if *closed == KType::ANY)
+}
+
+/// `contributions` with each closed `Any` read as the carried type, as the load lays an argument
+/// whose upper end is `Any`: a rigid contribution a binding closes to `Any` leaves its solve to the
+/// call.
+fn carried_at_any<'l>(
+    scratch: BumpAllocator<'l>,
+    contributions: &'l [StaticType<'l>],
+) -> &'l [StaticType<'l>] {
+    if !contributions.iter().any(closed_to_any) {
+        return contributions;
+    }
+    scratch.fill(contributions.len(), |at| match contributions[at] {
+        ref contribution if closed_to_any(contribution) => Static::Unknown,
+        contribution => contribution,
+    })
+}
+
+/// `narrowing` with each candidate the load solved left to the call to admit and solve, laid in
+/// `scratch`: an *always* one with points is *maybe*, with none, and a selected one the use's
+/// one *maybe* candidate. What the load kept, and how it ranks them, stands.
+fn solved_at_call<'l>(scratch: BumpAllocator<'l>, narrowing: Narrowing<'l>) -> Narrowing<'l> {
+    let kept = match narrowing {
+        Narrowing::Full => return Narrowing::Full,
+        Narrowing::Selected(coordinate) => Kept {
+            entries: scratch.fill(1, |_| (Candidate::One(coordinate), Verdict::Maybe)),
+            points: scratch.fill(1, |_| Points::NONE),
+            elimination: Elimination::Open,
+        },
+        Narrowing::Kept(kept) => {
+            let solved = |at: usize| !kept.points[at].points.is_empty();
+            Kept {
+                entries: scratch.fill(kept.entries.len(), |at| match kept.entries[at] {
+                    (candidate, Verdict::Always) if solved(at) => (candidate, Verdict::Maybe),
+                    entry => entry,
+                }),
+                points: scratch.fill(kept.points.len(), |at| match solved(at) {
+                    true => Points::NONE,
+                    false => kept.points[at],
+                }),
+                elimination: kept.elimination,
+            }
+        }
+    };
+    Narrowing::Kept(resident(scratch, kept))
 }

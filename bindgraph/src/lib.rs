@@ -6,11 +6,12 @@
 //!    at each site and the answered names an answer types, the questions each site asks with the
 //!    names each reads, the asks each answer may make, the arms each answer can take, the calls
 //!    (`PassesName` edges on an arm or on a site), the `AnswersName` edges, and the `OpenCaller`
-//!    marks.
+//!    and staged marks.
 //! 2. **Graph** ([`Graph`]): laying the text computes each name's base, orders the sites, picks
-//!    each question's and call's owner, binds each answered name, fixes each node's handle width,
-//!    checks the description, refuses a recursion that grows and finds where a knot can form. It
-//!    reads no binding, so an owner is the same under every binding.
+//!    each question's and call's owner (no earlier than a staged body's entry around it), binds
+//!    each answered name, fixes each node's handle width, checks the description, refuses a
+//!    recursion that grows and finds where a knot can form. It reads no binding, so an owner is
+//!    the same under every binding.
 //! 3. **Bound** ([`Bound`]): bindings are read against a borrowed graph. An evaluation of one
 //!    node under one view answers its questions through the embedder's [`Answers`], types its
 //!    answered names and follows its calls, ending in a [`Handle`]: the instance's admission,
@@ -47,7 +48,7 @@ mod text;
 #[cfg(feature = "perf")]
 pub use bound::Counts;
 pub use bound::{Bound, Frozen, Handle, Resting};
-pub use domain::{Answers, Binding, Domain, Doors, Facts, Nesting};
+pub use domain::{Answering, Answers, Binding, Domain, Doors, Facts, Kept, Nesting};
 pub use graph::{
     AnswerBranch, AnswersName, Ask, BindingNode, BindsAfter, Edge, Graph, LayError, On, OpenCaller,
     PassesName, SiteQuestion, Source,

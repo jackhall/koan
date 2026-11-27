@@ -11,7 +11,8 @@
 //! value are `Any`. The argument's lower end decides the refusals: a list or a string refuses one
 //! lying outside `Number | {}`, a record naming a bound outside `Number`, and a record naming
 //! neither bound; a dict refuses a key outside `Str | Number | Bool` or outside its key type, a
-//! variable's read at its bound's key, which every binding's lies under. The
+//! variable's read at its bound's key, which every binding's lies under. Each refusing check is
+//! laid as a binding's ([`SiteRule::ReadRefusal`](crate::scope::SiteRule::ReadRefusal)). The
 //! read's upper end is `Result {Ok = O, Error = E}`: an index reads the element (`Str` for a
 //! string), a slice the container's own type, either `E = Number`; an argument that may be either
 //! reads their union. Code reads `Code` either way: a part or a slice is code no load can type, so
@@ -21,9 +22,9 @@
 
 use crate::elaborate::applied_union;
 use crate::elaborate::judge::{self, Marks};
-use crate::memory::BumpVec;
+use crate::memory::{BumpVec, collect};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Rule, ShapeError, Store};
+use crate::scope::{Question, Rule, ShapeError, SiteRule, Store};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Step, TypeNode};
 
@@ -79,16 +80,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if judge::rigid_within(types, scratch, end, KType::ANY_CODE) {
             return Some(Container::Code);
         }
-        if judge::is(self, self.types, end, KType::STR) {
+        if judge::is(self, self.types, self.scratch, end, KType::STR) {
             return Some(Container::Str);
         }
         // A variable is no container but through its bound's pieces, above: any other is read by
         // what a binding gives it ([`Rule::Application`](crate::scope::Rule::Application)).
         let node = judge::node_unless_variable(types, end)?;
-        // Code where every binding, or the witness, puts it under `Code`.
+        // Code where every binding puts it under `Code`.
         let any_code = KType::ANY_CODE.into();
         let code = judge::under_decided(self, types, scratch, end, any_code) == Some(true);
-        if code && !judge::is(self, self.types, end, KType::NEVER) {
+        if code && !judge::is(self, self.types, self.scratch, end, KType::NEVER) {
             return Some(Container::Code);
         }
         match node {
@@ -109,7 +110,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-        (head, typed): (&'graph ExpressionPart<'graph>, Bound),
+        (_, typed): (&'graph ExpressionPart<'graph>, Bound),
         argument: &'graph ExpressionPart<'graph>,
     ) -> Result<Option<Interval>, ShapeError<'o>> {
         let Bound::Type(typed) = typed else {
@@ -133,8 +134,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let payload = self.part(level, argument)?;
         let (types, scratch) = (self.types, self.scratch);
         let marks: &dyn Marks = &*self;
-        let outside =
-            |slot: Parametric| judge::lower_end_outside(marks, types, scratch, payload, slot);
+        // Each check that may refuse is asked, so a binding refuses in the same words.
+        let mut asks = BumpVec::with_capacity_in(4, scratch);
+        let mut outside = |value: Interval, bound: Parametric| {
+            asks.push(Question::LowerEndOutside {
+                value,
+                bound: bound.into(),
+            });
+            judge::lower_end_outside(marks, types, scratch, value, bound)
+        };
         let number: Parametric = KType::NUMBER.into();
         let union = |members: &[Parametric]| types.union_of(scratch, members);
         let bounds = |end: Parametric| match judge::node_unless_variable(types, end)? {
@@ -152,27 +160,40 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let refused = match shape {
             Container::Dict { key, bound_key, .. } => {
                 let scalar = [KType::STR, KType::NUMBER, KType::BOOL].map(Parametric::from);
-                outside(union(&scalar)) || outside(bound_key.map_or(key, Parametric::from))
+                outside(payload, union(&scalar))
+                    || outside(payload, bound_key.map_or(key, Parametric::from))
             }
             _ => {
-                outside(union(&[number, KType::EMPTY_RECORD.into()]))
+                outside(payload, union(&[number, KType::EMPTY_RECORD.into()]))
                     || unbounded
                     || bounds(payload.lower).is_some_and(|named| {
                         named.iter().all(Option::is_none)
-                            || named.iter().flatten().any(|bound| {
-                                let bound = Interval::point(*bound);
-                                judge::lower_end_outside(marks, types, scratch, bound, number)
-                            })
+                            || (named.iter().flatten())
+                                .any(|bound| outside(Interval::point(*bound), number))
                     })
             }
         };
+        let refusal = ShapeError::ReadNeverSatisfied {
+            container: typed.upper,
+            argument: payload.upper,
+            member: None,
+            at: node.source,
+        };
         if refused {
-            return Err(ShapeError::ReadNeverSatisfied {
-                container: typed.upper,
-                argument: payload.upper,
-                at: node.source,
+            return Err(refusal);
+        }
+        if variable {
+            asks.push(Question::Defined {
+                rule: Rule::SliceBounds,
+                operands: collect(scratch, operands.into_iter()),
             });
         }
+        let mut refusals = BumpVec::with_capacity_in(asks.len(), scratch);
+        refusals.resize(asks.len(), refusal);
+        let site = self.node_site(level, node);
+        self.lay_refusals(level, site, SiteRule::ReadRefusal, &asks, &refusals);
+        // Each end a binding decides is the decided name on its door's question, so the read's
+        // type is the same at load and under every binding.
         let (ok, error) = match shape {
             Container::Dict {
                 key,
@@ -181,20 +202,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             } => {
                 // A variable's key is no closed type, so whether the argument lies under it is
                 // *fits*, by the rigid rule; a written key's is the order, decided once closed.
+                let (a, b) = (payload.upper, key);
                 let under = match bound_key {
-                    Some(_) => judge::fits(marks, types, scratch, payload.upper, key),
-                    None => {
-                        judge::under_decided(marks, types, scratch, payload.upper, key)
-                            == Some(true)
-                    }
+                    Some(_) => (
+                        Question::Fits {
+                            a: a.into(),
+                            b: b.into(),
+                        },
+                        judge::fit_decided(self, types, scratch, a, b),
+                    ),
+                    None => (
+                        Question::Under { a, b },
+                        judge::under_decided(self, types, scratch, a, b),
+                    ),
                 };
+                let wide = union(&[key, payload.upper]);
                 (
                     value,
-                    if under {
-                        key
-                    } else {
-                        union(&[key, payload.upper])
-                    },
+                    judge::on_answer(self, types, scratch, under, (wide, key)),
                 )
             }
             _ => {
@@ -208,16 +233,38 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     (_, Some(_)) => typed.upper,
                     (_, None) => KType::ANY.into(),
                 };
-                let ok = if judge::is(marks, types, payload.upper, KType::NUMBER)
-                    || judge::is(marks, types, payload.upper, KType::NEVER)
-                {
-                    element
-                } else if bounds(payload.upper)
-                    .is_some_and(|named| named.iter().any(Option::is_some))
-                {
-                    head_upper
-                } else {
-                    union(&[element, head_upper])
+                let indexed = |constant: KType| {
+                    let question = Question::Same {
+                        a: payload.upper.into(),
+                        b: Parametric::from(constant).into(),
+                    };
+                    (
+                        question,
+                        judge::is_decided(self, types, scratch, payload.upper, constant),
+                    )
+                };
+                let by_number = indexed(KType::NUMBER);
+                let ok = match by_number.1 {
+                    Some(true) => element,
+                    _ => {
+                        // A record the bounds admit is a slice; whether a variable's binding is
+                        // one is the order's to decide, so a binding slices as a fresh load does.
+                        let record: Parametric = KType::EMPTY_RECORD.into();
+                        let by_record = (
+                            Question::Under {
+                                a: payload.upper,
+                                b: record,
+                            },
+                            judge::under_decided(self, types, scratch, payload.upper, record),
+                        );
+                        let wide = union(&[element, head_upper]);
+                        let sliced =
+                            judge::on_answer(self, types, scratch, by_record, (wide, head_upper));
+                        let by_never = indexed(KType::NEVER);
+                        let past =
+                            judge::on_answer(self, types, scratch, by_never, (sliced, element));
+                        judge::on_answer(self, types, scratch, by_number, (past, element))
+                    }
                 };
                 (ok, number)
             }
@@ -226,11 +273,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         arguments.extend([(variant("Ok"), ok), (variant("Error"), error)]);
         arguments.sort_unstable_by_key(|(name, _)| *name);
         let upper = applied_union(types, scratch, result_type(self.builtins), &arguments);
-        self.record_composite(
-            level,
-            self.node_site(level, node),
-            [(head, typed), (argument, payload)].into_iter(),
-        );
         Ok(Some(Interval {
             lower: KType::NEVER.into(),
             upper,

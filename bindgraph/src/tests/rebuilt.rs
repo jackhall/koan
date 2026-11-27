@@ -51,6 +51,10 @@ impl Domain for CountingToy<'_> {
     fn lasts(&self, content: Term) -> bool {
         Toy.lasts(content)
     }
+
+    fn arrives(&self, name: NameId, content: Term) -> bool {
+        Toy.arrives(name, content)
+    }
 }
 
 /// The toy binding of `pairs`.
@@ -397,6 +401,10 @@ impl<'c> Domain for Scoped<'c> {
 
     fn lasts(&self, (term, _): (Term, &'c Scope)) -> bool {
         Toy.lasts(term)
+    }
+
+    fn arrives(&self, name: NameId, (term, _): (Term, &'c Scope)) -> bool {
+        Toy.arrives(name, term)
     }
 }
 

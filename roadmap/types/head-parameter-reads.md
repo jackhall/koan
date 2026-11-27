@@ -94,10 +94,6 @@ refuses as "this type expression is not supported", since
 Pins over a callable's own variables, which a hidden variable's desugaring
 rests on, have shipped.
 
-**Requires:**
-
-- [The build over the binding graph](../one-build/build-over-the-binding-graph.md)
-  — a `TYPE OF` is answered where its operand is bound, and an alias reads
-  the names behind it.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

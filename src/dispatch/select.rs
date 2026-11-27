@@ -327,6 +327,7 @@ fn registration<'here>(callee: KValue<'_, 'here>) -> Option<Registered<'here, KT
             .function()?
             .registered()?
             .parameters,
+        rebounds: crate::scope::Rebounds::NONE,
     })
 }
 

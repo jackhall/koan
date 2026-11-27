@@ -23,11 +23,15 @@ use crate::values::{
     Chain, construction, filled_union, may_hold_record, representation, retyped_to, under,
 };
 
-use super::application::{bounds_refuse, call_closed, laid_out_closed, read_closed, wanted_closed};
-use super::heads::{
-    applied, constructed_upper, declared_member, head_params, needing, pinned, shown_view,
-    signature_value, tag_union, unbuilt, variant_named, variants,
+use super::application::{
+    MemberInstance, applied_closed, bounds_refuse, laid_out_closed, member_applied_closed,
+    member_instance_closed, wanted_closed,
 };
+use super::heads::{
+    applied, closed_variant, constructed_upper, declared_member, head_params, pinned, shown_view,
+    signature_lacks, signature_value, tag_union, variants,
+};
+use super::typed::rebuilt_scheme;
 
 /// A typing rule over operands written over names. Each variant names what it reads off its
 /// operands and how many types it hands back.
@@ -72,33 +76,33 @@ pub enum Rule {
     /// rule has no answer where the payload solves none.
     Constructed,
     /// The instance operand 0, a scheme, takes wanted at operand 1 ([`instance_under`]): each of
-    /// its group's variables' types, `variables` outputs. The rule has no answer where the scheme
+    /// its group's variables' types, `variables` outputs. Where `bounded` names group positions (a
+    /// bit each), the operands after the second are their bounds as written, in order, which the
+    /// scheme is rebuilt with first ([`rebuilt_scheme`]). The rule has no answer where the scheme
     /// has no instance there, or one leaves a variable no contribution reaches.
-    InstanceAt { variables: u8 },
+    InstanceAt { variables: u8, bounded: u64 },
     /// The member operand 0 declares as `name` ([`declared_member`]): a variant of the union under
-    /// it, else a field of the record under it. One output; the rule has no answer where it
-    /// declares none.
+    /// it, else a field of the record under it. One output; no answer where it declares none. Laid
+    /// over names only where operand 0 is a nominal declared over run-bound names, whose
+    /// declaration the load checks declares `name`.
     Member(Symbol),
     /// The family operand 0 names applied ([`applied`]): at the arguments operand 1, a record
     /// type, holds by name, or, `sole`, at its lone parameter, operand 1 the argument. One output;
-    /// the rule has no answer where the head takes no such arguments.
+    /// no answer where the head takes no such arguments. Laid over names only where operand 0 is
+    /// a family declared over run-bound names, whose parameters the load checks.
     Applied { sole: bool },
     /// The declared signature operand 0 names with the head parameters operand 1, a record type,
-    /// names pinned at its fields ([`pinned`]). One output; no answer where it pins none so.
+    /// names pinned at its fields ([`pinned`]). One output; no answer where it pins none so. Laid
+    /// over names only where operand 0 is a signature declared over run-bound names.
     Pinned,
-    /// The code kind operand 0 names needing the names operand 1, a record type, holds as fields
-    /// ([`needing`]). One output; no answer where it is no code kind below `Code`.
-    Needing,
-    /// `UNBUILT` the code kind operand 0 names ([`unbuilt`]). One output; no answer where it is
-    /// neither `Code` nor a code kind below it.
-    Unbuilt,
     /// An end of the construction `(head payload)`, operand 0 the head's type, operand 1 the
     /// payload's end: the lower end where `upper` is unset, the constructed type or `Never`; else
     /// the upper end ([`constructed_upper`]), reached through the union operand 2's owner peels to
     /// ([`tag_union`]) where the head is a tag projection, `projected`. One output.
     Construction { upper: bool, projected: bool },
     /// The variant `label` names of the union operand 0, a `MATCH … UNDER` clause
-    /// ([`variant_named`]). One output; no answer where it names none.
+    /// ([`variant_named`]). One output; no answer where it names none. Laid over names only where
+    /// the clause is a union declared over run-bound names, whose labels the load checks.
     Variant(Symbol),
     /// The payload of the variant `label` names of the union operand 0: its representation, `Any`
     /// for a variant with none. One output; no answer where `label` names no variant.
@@ -108,9 +112,6 @@ pub enum Rule {
     /// has none ([`under`]). Two outputs, the lower end and the upper; no answer where operand 0
     /// is no union.
     Uncovered,
-    /// Whether the variants past operand 0, those the arms' labels name, cover the union operand 0:
-    /// one output, the union itself; no answer where it is no union or a variant is left.
-    Covered,
     /// A type above the field `name` of every value under operand 0 ([`field_above`]): a record's
     /// field type, joined over a union's members, `Never` at `Never`, `Any` where a value may hold
     /// no such field. One output.
@@ -121,9 +122,13 @@ pub enum Rule {
     /// Operand 0 itself where a value of it names fields — a record or a signature — so a field
     /// read narrows its need to a record holding the label. One output; no answer otherwise.
     Fielded,
+    /// Operand 0 itself where it is a record naming no field `name`, or a signature declaring no
+    /// member `name` ([`signature_lacks`]): what a field or member read whose need drops its
+    /// candidate names it lacks. One output; no answer otherwise.
+    Lacks(BinderSymbol),
     /// The type the signature operand 0 declares its value member `name` at
-    /// ([`signature_value`]): a read through the type a `:Module` binder carries. One output; no
-    /// answer where it declares no such member.
+    /// ([`signature_value`]): a read through a type a binding decides. One output, `Any` where it
+    /// declares the member at a scheme; no answer where it declares no such member.
     SignatureValue(ValueSymbol),
     /// `(head argument)` over a head written over names, operands its ends `[lower, upper]`, the
     /// argument's, then the `Result` family: a read where a binding gives a container
@@ -131,6 +136,17 @@ pub enum Rule {
     /// `[Never, Any]`. Two outputs, the lower end and the upper; no answer where the closed read
     /// or call refuses.
     Application,
+    /// `(member argument)` where `member` is the value member `name` of a module the load cannot
+    /// see: operands the member's lower end, the type its module carries, the argument's ends, then
+    /// the `Result` family. The member is read off the carried signature, a scheme included, and
+    /// called ([`member_applied_closed`]); two outputs as [`Rule::Application`]'s.
+    MemberApplication(ValueSymbol),
+    /// `member` read at an instance site, where `member` is the value member `name` of a module
+    /// the load cannot see: operand 0 the type its module carries, then, where `wanted` is set,
+    /// the type it is wanted at. The member is read off the carried signature and instanced there
+    /// ([`member_instance_closed`]): one output, the instance's type, or the member's own where it
+    /// is declared at a type; no answer where a quantified member has no instance there.
+    MemberInstance { name: ValueSymbol, wanted: bool },
     /// The record a call by name of operand 0 wants its argument at: a function's parameters, else
     /// `Any` ([`wanted_closed`]). One output.
     Wanted,
@@ -160,24 +176,26 @@ impl Rule {
             | Rule::Member(_)
             | Rule::Applied { .. }
             | Rule::Pinned
-            | Rule::Needing
-            | Rule::Unbuilt
-            | Rule::Construction { .. }
             | Rule::Variant(_)
             | Rule::Payload(_)
-            | Rule::Covered
+            | Rule::Construction { .. }
             | Rule::FieldAbove(_)
             | Rule::FieldUnder(_)
             | Rule::Fielded
+            | Rule::Lacks(_)
             | Rule::SignatureValue(_)
+            | Rule::MemberInstance { .. }
             | Rule::Wanted
             | Rule::View
             | Rule::SliceBounds => 1,
-            Rule::Fill { .. } | Rule::Uncovered | Rule::Application => 2,
+            Rule::Fill { .. }
+            | Rule::Uncovered
+            | Rule::Application
+            | Rule::MemberApplication(_) => 2,
             Rule::Solved { variables, .. } => *variables,
             Rule::Judged { variables } => variables * 2,
             Rule::LaidOut { slots } => slots * 2,
-            Rule::InstanceAt { variables } => *variables,
+            Rule::InstanceAt { variables, .. } => *variables,
         }
     }
 
@@ -203,10 +221,18 @@ impl Rule {
                 [DeclaredType::Scheme(scheme), rest @ ..],
             ) => return solved_closed(types, scratch, *scheme, rest, (involved, pinned, exact)),
             (
-                Rule::InstanceAt { .. },
-                [DeclaredType::Scheme(scheme), DeclaredType::Type(wanted)],
+                Rule::InstanceAt { bounded, .. },
+                [
+                    DeclaredType::Scheme(scheme),
+                    DeclaredType::Type(wanted),
+                    bounds @ ..,
+                ],
             ) => {
-                let record = instance_under(types, scratch, *scheme, *wanted);
+                let scheme = match bounded {
+                    0 => *scheme,
+                    _ => rebuilt_with(types, scratch, *scheme, bounded, bounds)?,
+                };
+                let record = instance_under(types, scratch, scheme, *wanted);
                 let solved = record.solved.filter(|_| !record.reached.contains(&false))?;
                 return Some(scratch.alloc_slice_copy(solved.types));
             }
@@ -253,6 +279,25 @@ impl Rule {
             (Rule::Constructed, [DeclaredType::Type(head), DeclaredType::Type(payload)]) => {
                 construction(types, scratch, *head, *payload).ok()?
             }
+            (
+                Rule::Construction { upper, projected },
+                [
+                    DeclaredType::Type(head),
+                    DeclaredType::Type(payload),
+                    owner @ ..,
+                ],
+            ) => {
+                let built = construction(types, scratch, *head, *payload);
+                if !upper {
+                    return Some(scratch.alloc_slice_copy(&[built.unwrap_or(KType::NEVER)]));
+                }
+                let through = match (projected, owner) {
+                    (true, [DeclaredType::Type(owner)]) => tag_union(types, scratch, *owner),
+                    _ => None,
+                };
+                let built = built.map(Parametric::from);
+                types.concrete(constructed_upper(types, scratch, (*head, through), built))?
+            }
             (Rule::Member(name), [DeclaredType::Type(owner)]) => {
                 declared_member(types, scratch, *owner, name)?
             }
@@ -274,42 +319,17 @@ impl Rule {
                 let pins = fields(types, scratch, *pins)?;
                 types.concrete(pinned(types, scratch, *signature, pins)?)?
             }
-            (Rule::Needing, [DeclaredType::Type(kind), DeclaredType::Type(names)]) => {
-                let names = fields(types, scratch, *names)?;
-                let mut needed = BumpVec::with_capacity_in(names.len(), scratch);
-                needed.extend(names.iter().map(|(name, _)| *name));
-                needing(types, scratch, *kind, &needed)?
-            }
-            (Rule::Unbuilt, [DeclaredType::Type(kind)]) => unbuilt(types, *kind)?,
-            (
-                Rule::Construction { upper, projected },
-                [
-                    DeclaredType::Type(head),
-                    DeclaredType::Type(payload),
-                    owner @ ..,
-                ],
-            ) => {
-                let built = construction(types, scratch, *head, *payload);
-                if !upper {
-                    return Some(scratch.alloc_slice_copy(&[built.unwrap_or(KType::NEVER)]));
-                }
-                let through = match (projected, owner) {
-                    (true, [DeclaredType::Type(owner)]) => tag_union(types, scratch, *owner),
-                    _ => None,
-                };
-                let built = built.map(Parametric::from);
-                types.concrete(constructed_upper(types, scratch, (*head, through), built))?
-            }
             (Rule::Variant(label), [DeclaredType::Type(union)]) => {
-                variant_named(types, *union, label)?
+                closed_variant(types, *union, label)?
             }
             (Rule::Payload(label), [DeclaredType::Type(union)]) => {
-                let variant = variant_named(types, *union, label)?;
+                let variant = closed_variant(types, *union, label)?;
                 representation(types, scratch, variant).unwrap_or(KType::ANY)
             }
             (Rule::Uncovered, [DeclaredType::Type(union), named @ ..]) => {
                 let mut payloads = BumpVec::new_in(scratch);
                 for variant in variants(types, *union)? {
+                    let variant = types.concrete(variant)?;
                     if named.contains(&DeclaredType::Type(variant)) {
                         continue;
                     }
@@ -332,6 +352,11 @@ impl Rule {
             (Rule::SignatureValue(name), [DeclaredType::Type(signature)]) => {
                 signature_value(types, scratch, *signature, name)?
             }
+            (Rule::Lacks(name), [DeclaredType::Type(ty)]) => match types.node(*ty) {
+                TypeNode::Record { fields } if fields.get(name.symbol()).is_none() => *ty,
+                _ if signature_lacks(types, (*ty).into(), name) => *ty,
+                _ => return None,
+            },
             (Rule::Fielded, [DeclaredType::Type(ty)]) => match types.node(*ty) {
                 TypeNode::Record { .. }
                 | TypeNode::Signature { .. }
@@ -357,17 +382,39 @@ impl Rule {
                     lower: *lower,
                     upper: *upper,
                 };
-                let applied = match read_closed(types, scratch, *result, head, payload) {
-                    Some(read) => read?,
-                    None => match call_closed(types, scratch, head, payload) {
-                        Some(called) => called?,
-                        None => Interval {
-                            lower: KType::NEVER,
-                            upper: KType::ANY,
-                        },
-                    },
-                };
+                let applied = applied_closed(types, scratch, *result, head, payload)?;
                 return Some(scratch.alloc_slice_copy(&[applied.lower, applied.upper]));
+            }
+            (
+                Rule::MemberApplication(name),
+                [
+                    DeclaredType::Type(member_lower),
+                    DeclaredType::Type(carried),
+                    DeclaredType::Type(lower),
+                    DeclaredType::Type(upper),
+                    DeclaredType::Type(result),
+                ],
+            ) => {
+                let payload = Interval {
+                    lower: *lower,
+                    upper: *upper,
+                };
+                let member = (*member_lower, *carried, name);
+                let applied = member_applied_closed(types, scratch, *result, member, payload)?;
+                return Some(scratch.alloc_slice_copy(&[applied.lower, applied.upper]));
+            }
+            (Rule::MemberInstance { name, .. }, [DeclaredType::Type(carried), wanted @ ..]) => {
+                let wanted = match wanted {
+                    [] => None,
+                    [DeclaredType::Type(wanted)] => Some(*wanted),
+                    _ => return None,
+                };
+                match member_instance_closed(types, scratch, *carried, name, wanted) {
+                    MemberInstance::Plain(ktype) | MemberInstance::Instance { ktype, .. } => ktype,
+                    MemberInstance::Undeclared
+                    | MemberInstance::Unfixed { .. }
+                    | MemberInstance::NoInstance(_) => return None,
+                }
             }
             (
                 Rule::LaidOut { .. },
@@ -398,13 +445,6 @@ impl Rule {
             (Rule::View, [DeclaredType::Type(shown), _]) => shown_view(types, scratch, *shown)?,
             (Rule::SliceBounds, [DeclaredType::Type(lower)]) => {
                 (!bounds_refuse(types, scratch, *lower)).then_some(*lower)?
-            }
-            (Rule::Covered, [DeclaredType::Type(union), named @ ..]) => {
-                let mut left = variants(types, *union)?;
-                if left.any(|variant| !named.contains(&DeclaredType::Type(variant))) {
-                    return None;
-                }
-                *union
             }
             _ => return None,
         };
@@ -558,7 +598,7 @@ impl Rule {
                 shown(f, *declared)?;
                 f.write_str(")")
             }
-            (Rule::InstanceAt { .. }, [_, wanted]) => {
+            (Rule::InstanceAt { .. }, [_, wanted, ..]) => {
                 write!(f, "(INSTANCE #{output} AT ")?;
                 shown(f, *wanted)?;
                 f.write_str(")")
@@ -586,26 +626,14 @@ impl Rule {
                 f.write_str("(")?;
                 shown(f, *head)?;
                 f.write_str(" ")?;
-                written(f, (types, symbols), *arguments, true)?;
+                written(f, (types, symbols), *arguments)?;
                 f.write_str(")")
             }
             (Rule::Pinned, [signature, DeclaredType::Type(pins)]) => {
                 f.write_str("(")?;
                 shown(f, *signature)?;
                 f.write_str(" WITH ")?;
-                written(f, (types, symbols), *pins, true)?;
-                f.write_str(")")
-            }
-            (Rule::Needing, [kind, DeclaredType::Type(names)]) => {
-                f.write_str("(")?;
-                shown(f, *kind)?;
-                f.write_str(" NEEDING ")?;
-                written(f, (types, symbols), *names, false)?;
-                f.write_str(")")
-            }
-            (Rule::Unbuilt, [kind]) => {
-                f.write_str("(UNBUILT ")?;
-                shown(f, *kind)?;
+                written(f, (types, symbols), *pins)?;
                 f.write_str(")")
             }
             (Rule::Variant(label) | Rule::Payload(label), [union]) => {
@@ -617,11 +645,10 @@ impl Rule {
                 shown(f, *union)?;
                 f.write_str(")")
             }
-            (Rule::Uncovered | Rule::Covered, [union, named @ ..]) => {
-                let read = match (self, output) {
-                    (Rule::Uncovered, 0) => "(LOWER UNCOVERED BY",
-                    (Rule::Uncovered, _) => "(UPPER UNCOVERED BY",
-                    _ => "(COVERED BY",
+            (Rule::Uncovered, [union, named @ ..]) => {
+                let read = match output {
+                    0 => "(LOWER UNCOVERED BY",
+                    _ => "(UPPER UNCOVERED BY",
                 };
                 f.write_str(read)?;
                 for variant in named {
@@ -646,9 +673,39 @@ impl Rule {
                 shown(f, *ty)?;
                 f.write_str(")")
             }
+            (Rule::Lacks(name), [ty]) => {
+                write!(f, "(LACKS {} OF ", symbols.display(name.symbol()))?;
+                shown(f, *ty)?;
+                f.write_str(")")
+            }
             (Rule::SignatureValue(name), [signature]) => {
                 write!(f, "(VALUE {} OF ", symbols.display(name.symbol()))?;
                 shown(f, *signature)?;
+                f.write_str(")")
+            }
+            (Rule::MemberApplication(name), [_, carried, _, argument, _]) => {
+                f.write_str(match output {
+                    0 => "(LOWER ",
+                    _ => "(UPPER ",
+                })?;
+                write!(f, "(VALUE {} OF ", symbols.display(name.symbol()))?;
+                shown(f, *carried)?;
+                f.write_str(") APPLIED TO ")?;
+                shown(f, *argument)?;
+                f.write_str(")")
+            }
+            (Rule::MemberInstance { name, .. }, [carried, wanted @ ..]) => {
+                write!(
+                    f,
+                    "(INSTANCE OF (VALUE {} OF ",
+                    symbols.display(name.symbol())
+                )?;
+                shown(f, *carried)?;
+                f.write_str(")")?;
+                if let [wanted] = wanted {
+                    f.write_str(" UNDER ")?;
+                    shown(f, *wanted)?;
+                }
                 f.write_str(")")
             }
             (Rule::Application, [_, head, _, argument, _]) => {
@@ -773,29 +830,26 @@ fn field_above(
 }
 
 /// Write the record type `record` a spelling's rule reads as it is written: its fields as
-/// `{Name = Type, …}` where `typed`, else its names alone as `#[name …]`.
+/// `{Name = Type, …}`.
 fn written(
     f: &mut std::fmt::Formatter<'_>,
     (types, symbols): (&Chain<'_, '_, '_, '_>, &SymbolInterner),
     record: Parametric,
-    typed: bool,
 ) -> std::fmt::Result {
     let TypeNode::Record { fields } = types.node(record) else {
         return write!(f, "{}", display_name(record, types, symbols));
     };
-    f.write_str(if typed { "{" } else { "#[" })?;
+    f.write_str("{")?;
     for (at, (name, ty)) in fields.iter().enumerate() {
-        let between = match (at, typed) {
-            (0, _) => "",
-            (_, true) => ", ",
-            (_, false) => " ",
-        };
-        write!(f, "{between}{}", symbols.display(name.symbol()))?;
-        if typed {
-            write!(f, " = {}", display_name(ty, types, symbols))?;
-        }
+        let between = if at == 0 { "" } else { ", " };
+        write!(
+            f,
+            "{between}{} = {}",
+            symbols.display(name.symbol()),
+            display_name(ty, types, symbols)
+        )?;
     }
-    f.write_str(if typed { "}" } else { "]" })
+    f.write_str("}")
 }
 
 /// The fields of the record type `record`, a rule's arguments or names by name: `None` where it is
@@ -924,3 +978,21 @@ fn fill_spelled<'x>(
 
 #[cfg(test)]
 mod tests;
+
+/// The closed `scheme` with the bound of each group position `bounded` names (a bit each) replaced
+/// by the closed type beside it in `bounds`, in order ([`rebuilt_scheme`]): `None` where a bound
+/// is no type or the rebuilt scheme is not one.
+fn rebuilt_with(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    scheme: Scheme,
+    bounded: u64,
+    bounds: &[DeclaredType<KType>],
+) -> Option<Scheme> {
+    let positions = (0..64).filter(|at| bounded & (1 << at) != 0);
+    let mut written = BumpVec::with_capacity_in(bounds.len(), scratch);
+    for (at, bound) in positions.zip(bounds) {
+        written.push((at, bound.as_type()?));
+    }
+    rebuilt_scheme(types, scratch, scheme.into(), &written)?.as_scheme()
+}

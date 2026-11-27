@@ -13,7 +13,7 @@
 
 use std::fmt;
 
-use crate::memory::{Bump, BumpAllocator, BumpVec, Writer, collect, resident};
+use crate::memory::{Bump, BumpVec, Writer, collect, resident};
 use crate::parse::{KExpression, KeyElement, MAX_SYNTAX_DEPTH, copied as copied_node};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeySymbol, Symbol, SymbolInterner};
@@ -180,7 +180,7 @@ pub enum Fault<'cell, V = Value<'cell>> {
     Unconstructible(ConstructionRefused),
     /// A type expression that does not elaborate.
     Unelaborated(Elaboration),
-    /// A build refusal the run meets — composed code's, a settlement's or an activation's — laid
+    /// A build refusal the run meets — composed code's, or one a frame's instance answers — laid
     /// in the raising region.
     Refused {
         error: &'cell ShapeError<'cell>,
@@ -281,7 +281,7 @@ impl<'cell, V: Copy> Fault<'cell, V> {
     /// This fault laid again through `writer`, every slice, node and refusal it borrows copied, so
     /// it outlives what it was raised over; each value is carried over as it is, so it must already
     /// outlive the writer's region. What resolves its types is the caller's to adopt.
-    pub fn relaid<'to>(&self, writer: Writer<'to, '_>, scratch: BumpAllocator<'_>) -> Fault<'to, V>
+    pub fn relaid<'to>(&self, writer: Writer<'to, '_>) -> Fault<'to, V>
     where
         V: 'to,
     {
@@ -314,7 +314,7 @@ impl<'cell, V: Copy> Fault<'cell, V> {
             },
             Fault::Untied(error) => Fault::Untied(error.relaid(writer)),
             Fault::Refused { error } => Fault::Refused {
-                error: relaid_error(writer, scratch, error),
+                error: relaid_error(writer, error),
             },
             Fault::NoArm { scrutinee, union } => Fault::NoArm { scrutinee, union },
             Fault::AmbiguousArms { scrutinee, count } => Fault::AmbiguousArms { scrutinee, count },

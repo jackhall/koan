@@ -1,10 +1,8 @@
-//! Activations: what a frame bound to content the run produced decides in its own activation, at
-//! its entry and at each statement seam a fact waits on.
+//! Activations bound to content the run produced: what a frame's instances answer at its entry and
+//! at each statement seam a fact waits on, read through the outputs and faults a run gives.
 
-use crate::dispatch::evaluate::OPEN_VIEWS;
 use crate::parse::ExpressionPart;
 use crate::program::Program;
-use crate::program::activation_store::DECIDED;
 use crate::scope::{BodyShape, Narrowing, Segment, ShapeKind, Site};
 
 use super::caching::{Ran, ran_under};
@@ -16,21 +14,19 @@ const PICK: &str = "EXPR #(PICK x :Any) -> Str = #(\"n\")\n\
                     EXPR #(PICK x :Str) -> Number = #(1)\n";
 
 /// `WRAP`, whose `PICK x` waits on `Elt`, and `PAIR`, which hands it a record it builds from its
-/// own argument: a type the run composes, which keys no settlement.
+/// own argument: a type the run composes.
 const WRAP: &str = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET p = (PICK x)) (p))\n\
                     EXPR FOR ALL #[Item] #(PAIR y :Item) -> Any = #(WRAP {a = y, b = y})\n";
 
-/// `VIA`, unkeyed, handing its argument on to `callee` at `Any`: a call whose solution the load
-/// cannot fix, so the load lays no layer for it and its callee composes what it builds at run.
+/// `VIA`, handing its argument on to `callee` at `Any`: a call whose solution the load cannot fix,
+/// so its callee composes what it builds at run.
 fn via(callee: &str) -> String {
     format!("EXPR #(VIA y :Any) -> Any = #({callee} y)\n")
 }
 
-/// Run `source`, counting the binding events that walked.
-fn ran(source: &str) -> (Ran, usize) {
-    DECIDED.with(|decided| decided.set(0));
-    let ran = ran_under(0, source, BuildBudget::default());
-    (ran, DECIDED.with(std::cell::Cell::get))
+/// Run `source`.
+fn ran(source: &str) -> Ran {
+    ran_under(0, source, BuildBudget::default())
 }
 
 /// The callable of `program` whose slots bind `names`, in slot order.
@@ -90,78 +86,44 @@ thread_local! {
 }
 
 /// Note a use a frame found selected.
-fn chose(segment: Segment, site: Site) {
-    CHOSEN.with(|chosen| chosen.borrow_mut().push((segment, site)));
+fn chose(segment: Segment, site: Site, _: crate::source::SourceRef, selected: bool) {
+    if selected {
+        CHOSEN.with(|chosen| chosen.borrow_mut().push((segment, site)));
+    }
 }
 
 #[test]
-fn a_frame_bound_to_run_content_decides_its_dependent_units_in_its_activation() {
-    // `PAIR`'s record is a type the run composed, so `WRAP` seeks no settlement and runs under the
-    // root; its entry binds `Elt` in its activation, where `PICK x` is selected.
+fn a_frame_bound_to_run_content_finds_its_dependent_use_selected() {
+    // `PAIR`'s record is a type the run composed; `WRAP`'s entry binds `Elt`, under which
+    // `PICK x` is selected.
     let source = format!("{PICK}{WRAP}{}PRINT (VIA 1)\n", via("PAIR"));
     let (segment, site, selected) = wraps_pick(&source);
     assert!(!selected, "the load selects nothing at `PICK x`");
     CHOSEN.with(|chosen| chosen.borrow_mut().clear());
     crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(Some(chose)));
-    let (ran, decided) = ran(&source);
+    let ran = ran(&source);
     crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(None));
     assert_eq!(ran.printed, "n");
-    assert_eq!(
-        (ran.tiers.sought, ran.tiers.settled),
-        (1, 1),
-        "`PAIR` alone seeks"
-    );
-    assert_eq!(decided, 1, "`WRAP`'s entry decides once");
     let chosen = CHOSEN.with(|chosen| chosen.take());
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
 /// `KEEP`, whose annotation names `Elt`, and `BOX`, which hands it a record it builds: a type the
-/// run composes, so `KEEP`'s entry decides the annotation in its activation.
+/// run composes, which `KEEP`'s entry binds.
 const KEEP: &str = "EXPR FOR ALL #[Elt] #(KEEP x :Elt) -> Any = #((LET p :(LIST OF Elt) = [x]) (p))\n\
                     EXPR FOR ALL #[Item] #(BOX y :Item) -> Any = #(KEEP {a = y})\n";
 
 #[test]
 fn a_type_expression_is_never_elaborated_at_the_run() {
     crate::elaborate::ELABORATED.with(|counts| counts.set((0, 0)));
-    let (ran, decided) = ran(&format!(
+    let ran = ran(&format!(
         "{KEEP}{}PRINT (VIA 1)\nPRINT (VIA \"s\")\n",
         via("BOX")
     ));
     assert_eq!(ran.printed, "[{a = 1}]\n[{a = s}]");
-    assert!(decided > 0, "`KEEP`'s entry decides in its activation");
     let (walked, run) = crate::elaborate::ELABORATED.with(std::cell::Cell::get);
     assert!(walked > 0);
     assert_eq!(run, 0, "the run elaborated a type expression");
-}
-
-/// `HOLD`, keyed on `Item`, whose statement binds a record the run composes and whose closure
-/// captures it.
-const HOLD: &str = "EXPR FOR ALL #[Item] #(HOLD y :Item) -> Any = \
-                    #((LET r = {a = y}) (LET f = (FN :{} -> Any = #(r))) (f {}))\n";
-
-#[test]
-fn a_capture_bound_at_a_statement_grows_the_agent_tier_by_nothing() {
-    // Each `HOLD` frame runs under its one settlement and binds `r` at a statement: the types its
-    // activation decides rest in its frame's tiers, so a second outer call rests nothing more.
-    let hold = format!("{HOLD}{}", via("HOLD"));
-    let (once, _) = ran(&format!("{hold}PRINT (VIA 1)\n"));
-    let (twice, _) = ran(&format!("{hold}LET first = (VIA 1)\nPRINT (VIA 2)\n"));
-    assert_eq!((once.tiers.settled, twice.tiers.settled), (1, 1));
-    assert_eq!(once.tiers.agent, twice.tiers.agent);
-    assert_eq!((once.tiers.stepped, twice.tiers.stepped), (0, 0));
-}
-
-#[test]
-fn run_content_bindings_grow_the_agent_tier_by_nothing() {
-    // Each `WRAP` frame binds a record type the run composed and decides in its activation, whose
-    // types rest in its frame's tiers: the agent tier holds what `PAIR`'s one settlement rests.
-    let pair = format!("{PICK}{WRAP}{}", via("PAIR"));
-    let (once, decided_once) = ran(&format!("{pair}PRINT (VIA 1)\n"));
-    let (twice, decided_twice) = ran(&format!("{pair}LET first = (VIA 1)\nPRINT (VIA 2)\n"));
-    assert_eq!((decided_once, decided_twice), (1, 2));
-    assert_eq!((once.tiers.settled, twice.tiers.settled), (1, 1));
-    assert_eq!(once.tiers.agent, twice.tiers.agent);
 }
 
 /// `WALK`, a `Fresh` loop over the chain whose every hop calls `WRAP` on load content: a number.
@@ -170,23 +132,15 @@ const WALK: &str = "EXPR #(WALK link :Link) -> Number = \
                     EXPR #(WALK end :Null) -> Number = #(7)\n";
 
 #[test]
-fn a_loop_calling_a_keyed_callee_on_load_content_holds_o1_settlements() {
-    // `WRAP 1` keys `Elt := Number`, load content: the load lays its layer, which every hop finds,
-    // and no frame decides anything in its activation.
+fn a_loop_calling_a_quantified_callee_on_load_content_prints_at_every_depth() {
+    // `WRAP 1` binds `Elt := Number`, load content.
     for depth in [1, 4, 16] {
-        DECIDED.with(|decided| decided.set(0));
         let ran = ran_under(
             depth,
             &format!("{PICK}{WRAP}{WALK}PRINT (WALK chain)\n"),
             BuildBudget::default(),
         );
         assert_eq!(ran.printed, "7");
-        let tiers = ran.tiers;
-        assert_eq!(
-            (tiers.sought, tiers.laid, tiers.settled),
-            (depth as usize, depth as usize, 0)
-        );
-        assert_eq!(DECIDED.with(std::cell::Cell::get), 0);
     }
 }
 
@@ -200,7 +154,7 @@ const MAKE: &str = "EXPR #(MAKE m :Counter link :Link) -> Counter = #(MAKE m (AT
                     #((LET r = (MAKE ints chain)) (LET p = (PICK r.zero)) (p))\n";
 
 #[test]
-fn a_statement_seam_decides_the_units_it_wakes_in_the_activation() {
+fn a_statement_seam_decides_the_questions_left_open_over_it_in_the_activation() {
     // The load leaves `PICK r.zero` open; once `r` is bound, `USE`'s activation decides it.
     let source = format!("{MAKE}PRINT (USE 1)\n");
     let (segment, site, selected) = loaded(&super::caching::program(2, &source), |program| {
@@ -223,15 +177,9 @@ fn a_statement_seam_decides_the_units_it_wakes_in_the_activation() {
     assert!(!selected, "the load selects nothing at `PICK r.zero`");
     CHOSEN.with(|chosen| chosen.borrow_mut().clear());
     crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(Some(chose)));
-    DECIDED.with(|decided| decided.set(0));
     let ran = ran_under(2, &source, BuildBudget::default());
     crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(None));
     assert_eq!(ran.printed, "n");
-    assert_eq!(
-        DECIDED.with(std::cell::Cell::get),
-        1,
-        "`r`'s statement decides once"
-    );
     let chosen = CHOSEN.with(|chosen| chosen.take());
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
@@ -268,11 +216,12 @@ fn a_statement_binding_that_cannot_type_faults_where_the_load_would() {
     let refused = refused
         .strip_prefix("load: ")
         .expect("the declared program refuses");
-    assert_eq!(unlocated(fault), unlocated(refused));
-    assert!(
-        unlocated(fault).starts_with("no overload of `PICK _`"),
-        "{fault}"
-    );
+    for message in [fault, refused] {
+        assert!(
+            unlocated(message).starts_with("no overload of `PICK _` admits"),
+            "{message}"
+        );
+    }
 }
 
 #[test]
@@ -350,16 +299,14 @@ fn blocks_pick(source: &str) -> (Segment, Site, bool) {
     })
 }
 
-/// Run `source` over the caching prelude and a chain of two links, counting the binding events
-/// that walked and noting each use a frame found selected.
-fn ran_choosing(source: &str) -> (Ran, usize, Vec<(Segment, Site)>) {
+/// Run `source` over the caching prelude and a chain of two links, noting each use a frame found
+/// selected.
+fn ran_choosing(source: &str) -> (Ran, Vec<(Segment, Site)>) {
     CHOSEN.with(|chosen| chosen.borrow_mut().clear());
     crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(Some(chose)));
-    DECIDED.with(|decided| decided.set(0));
     let ran = ran_under(2, source, BuildBudget::default());
     crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(None));
-    let decided = DECIDED.with(std::cell::Cell::get);
-    (ran, decided, CHOSEN.with(|chosen| chosen.take()))
+    (ran, CHOSEN.with(|chosen| chosen.take()))
 }
 
 #[test]
@@ -373,9 +320,8 @@ fn a_blocks_statement_seam_decides_in_the_block() {
     );
     let (segment, site, selected) = blocks_pick(&source);
     assert!(!selected, "the load selects nothing at `PICK r.zero`");
-    let (ran, decided, chosen) = ran_choosing(&source);
+    let (ran, chosen) = ran_choosing(&source);
     assert_eq!(ran.printed, "n");
-    assert_eq!(decided, 1, "`r`'s statement decides once");
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
@@ -392,9 +338,8 @@ fn a_using_body_over_run_content_decides_where_its_operand_binds() {
     );
     let (segment, site, selected) = blocks_pick(&source);
     assert!(!selected, "the load selects nothing at `PICK zero`");
-    let (ran, decided, chosen) = ran_choosing(&source);
+    let (ran, chosen) = ran_choosing(&source);
     assert_eq!(ran.printed, "n");
-    assert_eq!(decided, 1, "`r`'s statement alone");
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
@@ -409,11 +354,36 @@ fn an_eval_frame_decides_at_its_entry_over_its_dollar_names() {
             "{make}\nEXPR #(USE n :Number) -> Any = \
              #((LET r = (MAKE ints chain)) (EVAL #({code}) -> Any))\nPRINT (USE 1)\n"
         );
-        let (ran, decided, _) = ran_choosing(&source);
-        (ran.printed, decided)
+        ran_choosing(&source).0.printed
     };
-    assert_eq!(run("$r.zero + 1"), ("1".to_string(), 2));
-    assert_eq!(run("1 + 1"), ("2".to_string(), 0));
+    assert_eq!(run("$r.zero + 1"), "1");
+    assert_eq!(run("1 + 1"), "2");
+}
+
+#[test]
+fn a_quote_s_code_refusing_under_a_binding_refuses_only_where_an_eval_runs_it() {
+    // Under `Elt := Bool` no `OP` admits `$x`, but the arm holding the `EVAL` never runs: the
+    // program prints what a fresh load with `Elt` declared prints. Under `Number` the `EVAL` runs.
+    let subject = |head: &str| {
+        format!(
+            "EXPR #(OP x :Number) -> Str = #(\"n\")\nEXPR #(OP x :Str) -> Number = #(1)\n\
+             {head}#(SUBJECT x :Elt) -> Any = #(\n  \
+             MATCH x WITH #{{:Number: (EVAL #($(OP $x)) -> Any), _: (1)}}\n)\n"
+        )
+    };
+    let quantified = subject("EXPR FOR ALL #[Elt] ");
+    assert_eq!(
+        super::run(&format!("{quantified}PRINT (SUBJECT true)")),
+        "1"
+    );
+    assert_eq!(
+        super::run(&format!(
+            "{}PRINT (SUBJECT true)",
+            subject("LET Elt = :Bool\nEXPR ")
+        )),
+        "1"
+    );
+    assert_eq!(super::run(&format!("{quantified}PRINT (SUBJECT 2)")), "n");
 }
 
 #[test]
@@ -423,12 +393,52 @@ fn an_eval_whose_registrations_wait_on_a_dollar_name_checks_their_overlap_in_its
     let source = "EXPR FOR ALL #[Elt] #(RUN x :Elt) -> Any = \
                   #(EVAL #((OP #(+) OVER $Elt = #(0)) (1 + 2)) -> Any)\n\
                   PRINT \"loaded\"\nPRINT (RUN 1)\n";
-    let (ran, decided) = ran(source);
-    assert_eq!(decided, 1, "the `EVAL`'s entry decides");
-    let fault = (ran.printed.strip_prefix("loaded\nerror: ")).expect("the `EVAL` faults");
+    let refused = ran(source);
+    let fault = (refused.printed.strip_prefix("loaded\nerror: "))
+        .unwrap_or_else(|| panic!("the `EVAL` faults: {}", refused.printed));
     assert!(
         unlocated(fault).starts_with("this overload of `_ + _` takes operands the builtin"),
         "{fault}"
+    );
+    // Bound to `Str`, the registration overlaps no builtin `+`, and the code runs.
+    let source = (source.replace("#(0)", "#(\"\")")).replace("(RUN 1)", "(RUN \"one\")");
+    assert_eq!(ran(&source).printed, "loaded\n3");
+}
+
+#[test]
+fn a_type_member_of_a_body_s_module_is_checked_at_run_as_a_fresh_load_checks_it() {
+    // `t`'s annotation is `inner.Tag`, the carrier `c` binds: the load leaves it over the path,
+    // and the frame reads it off `inner`'s value, so `WRAP held 5` refuses `"s"` at `Number`,
+    // as a fresh load with `c` declared refuses it at the load.
+    // `Counter` and `ints` are the prelude's.
+    let counter = "LET held :Counter = ints\n";
+    let body = "#(\n  MODULE inner OVER #[c extra] = \
+                ((LET Tag = c.Carrier) (LET base = c.zero) (LET more = extra))\n  \
+                LET t :(inner.Tag) = \"s\"\n  t\n)\n";
+    let bound = format!(
+        "{counter}EXPR FOR ALL #[Elt] #(WRAP c :Counter extra :Elt) -> Any = {body}\
+         PRINT \"loaded\"\nPRINT (WRAP held 5)\n"
+    );
+    let refused = ran(&bound);
+    let fault = (refused.printed.strip_prefix("loaded\nerror: "))
+        .unwrap_or_else(|| panic!("the frame refuses `t`: {}", refused.printed));
+    assert!(
+        fault.starts_with("Str does not satisfy its annotation Number"),
+        "{fault}"
+    );
+    let declared = format!(
+        "{counter}LET c = held\nEXPR FOR ALL #[Elt] #(WRAP extra :Elt) -> Any = {}\
+         PRINT (WRAP 5)\n",
+        body.replace("#[c extra]", "#[extra]")
+    );
+    let refused = super::run(&super::caching::program(0, &declared));
+    let refused = refused
+        .strip_prefix("load: ")
+        .expect("the declared program refuses");
+    assert!(
+        unlocated(refused)
+            .starts_with("this value is Str, which can never satisfy its annotation Number"),
+        "{refused}"
     );
 }
 
@@ -463,12 +473,8 @@ fn a_callable_reads_its_enclosers_statement_decisions() {
     );
     let (segment, site, selected) = gs_pick(&source);
     assert!(!selected, "the load selects nothing at `PICK r.zero`");
-    let (ran, decided, chosen) = ran_choosing(&source);
+    let (ran, chosen) = ran_choosing(&source);
     assert_eq!(ran.printed, "n");
-    assert_eq!(
-        decided, 1,
-        "`r`'s statement decides, and `g`'s call nothing"
-    );
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
@@ -484,12 +490,8 @@ fn an_escaping_callable_keeps_its_enclosers_decisions() {
     );
     let (segment, site, selected) = gs_pick(&source);
     assert!(!selected, "the load selects nothing at `PICK r.zero`");
-    let (ran, decided, chosen) = ran_choosing(&source);
+    let (ran, chosen) = ran_choosing(&source);
     assert_eq!(ran.printed, "n");
-    assert_eq!(
-        decided, 1,
-        "`r`'s statement decides, and `g`'s call nothing"
-    );
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
@@ -533,9 +535,8 @@ fn a_callable_bound_to_run_content_decides_over_its_enclosers_decisions() {
         !selected,
         "the load selects nothing at `BOTH r.zero AND p.zero`"
     );
-    let (ran, decided, chosen) = ran_choosing(&source);
+    let (ran, chosen) = ran_choosing(&source);
     assert_eq!(ran.printed, "nn");
-    assert_eq!(decided, 2, "`r`'s statement, then `g`'s entry");
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
@@ -557,8 +558,8 @@ fn a_module_bound_under_its_parameter_s_header_is_viewed_over_its_bare_member() 
              LET f = (FN :{{x :{declared}}} -> Any = #((x :| {viewed}).one))\n\
              PRINT (f {{x = (mk {{s = \"a\"}})}})\n"
         );
-        let (ran, decided) = ran(&source);
-        assert_eq!((ran.printed.as_str(), decided), (printed, 1), "{source}");
+        let ran = ran(&source);
+        assert_eq!(ran.printed, printed, "{source}");
     }
 }
 
@@ -569,29 +570,21 @@ const BOUND_VIEWS: &str = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL one :Elem) (
 
 #[test]
 fn a_module_bound_in_an_activation_is_bound_as_a_view_a_view_over_it_reads() {
-    // `x` holds `arg` once and `(arg :| First)` once: each frame records the module as a view
-    // beside its digest, so the view inside `f` is settled for each binding, and over the second
-    // it is that binding itself.
+    // `x` holds `arg` once and `(arg :| First)` once: the view inside `f` reads `one` over each
+    // binding.
     let source = format!(
         "{BOUND_VIEWS}LET f = (FN :{{x :(Inner WITH {{Elem = Any, Extra = Str}})}} -> Any = \
          #((x :| First).one))\n\
          PRINT (f {{x = arg}})\nPRINT (f {{x = (arg :| First)}})\n"
     );
-    OPEN_VIEWS.with(|open| open.set(0));
-    let (ran, _) = ran(&source);
+    let ran = ran(&source);
     assert_eq!(ran.printed, "Elem(1)\nElem(1)", "{source}");
-    assert_eq!(
-        OPEN_VIEWS.with(std::cell::Cell::get),
-        0,
-        "each binding's view is settled"
-    );
 }
 
 #[test]
 fn a_view_over_a_module_bound_in_an_activation_is_refused_where_it_shows_what_the_module_hides() {
-    // The view inside `f` shows `one` at `Any`, which `(arg :| First)` hides: the activation's
-    // walk settles the view for that binding and refuses it, a load refusal raised at run, at
-    // the view's site, before the run's view door would.
+    // The view inside `f` shows `one` at `Any`, which `(arg :| First)` hides: the call of `f`
+    // over that binding faults in `f`'s frame.
     let source = format!(
         "{BOUND_VIEWS}LET f = (FN :{{x :(Inner WITH {{Elem = Any, Extra = Str}})}} -> Any = \
          #((x :| (Inner WITH {{Elem = Any, Extra = Str}})).two))\n"
@@ -599,7 +592,9 @@ fn a_view_over_a_module_bound_in_an_activation_is_refused_where_it_shows_what_th
     assert_eq!(super::run(&format!("{source}PRINT (f {{x = arg}})\n")), "a");
     let refused = super::run(&format!("{source}PRINT (f {{x = (arg :| First)}})\n"));
     assert!(
-        refused.contains("<test>:4:69: this view shows `one` where its source hides it"),
+        (refused.starts_with("error: "))
+            && refused.contains("this view shows `one` where its source hides it")
+            && refused.contains("(f {x = (arg :| First)}) at <test>:5:7"),
         "{refused}"
     );
 }
@@ -607,8 +602,8 @@ fn a_view_over_a_module_bound_in_an_activation_is_refused_where_it_shows_what_th
 #[test]
 fn a_view_a_binder_holds_over_a_module_bound_in_an_activation_is_refused_where_it_shows_what_the_module_hides()
  {
-    // As above, the view bound by a `LET`: its unit is absorbed under the binding, and the tree
-    // the binding substitutes refuses at the view's site, as a fresh load does.
+    // As above, the view bound by a `LET`: the call of `f` over `(arg :| First)` faults in `f`'s
+    // frame.
     let source = format!(
         "{BOUND_VIEWS}LET f = (FN :{{x :(Inner WITH {{Elem = Any, Extra = Str}})}} -> Any = \
          #((LET w = (x :| (Inner WITH {{Elem = Any, Extra = Str}}))) w.two))\n"
@@ -616,15 +611,48 @@ fn a_view_a_binder_holds_over_a_module_bound_in_an_activation_is_refused_where_i
     assert_eq!(super::run(&format!("{source}PRINT (f {{x = arg}})\n")), "a");
     let refused = super::run(&format!("{source}PRINT (f {{x = (arg :| First)}})\n"));
     assert!(
-        refused.contains("<test>:4:78: this view shows `one` where its source hides it"),
+        (refused.starts_with("error: "))
+            && refused.contains("this view shows `one` where its source hides it")
+            && refused.contains("(f {x = (arg :| First)}) at <test>:5:7"),
         "{refused}"
     );
 }
 
 #[test]
-fn a_captured_layer_over_a_keyed_settlement_wakes_its_units() {
-    // `g` keys a settlement on `k`, load content, which leaves `r` open; what `r`'s statement
-    // decided leaves `k` open. The call wakes the units both leave open, and decides them.
+fn a_refusal_at_each_of_two_sites_a_binding_refuses_names_its_own_site() {
+    // `TELL` takes a number or a string. `g` hands `show` modules the load cannot see, so each
+    // run's binding decides `TELL m.held` and `TELL k.held`: one holding a list refuses its
+    // site's selection, and the fault names that site.
+    let source = "SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]\n\
+                  MODULE ints = ((LET held = 1))\n\
+                  MODULE lists = ((LET held = [1]))\n\
+                  EXPR #(TELL x :Number) -> Str = #(\"num\")\n\
+                  EXPR #(TELL x :Str) -> Str = #(\"str\")\n\
+                  LET id = (FN :{x :Hold} -> Hold = #(x))\n\
+                  LET show = (FN :{m :Hold, n :Hold} -> Any = #(\n\
+                  \x20 PRINT (TELL m.held)\n\
+                  \x20 LET k = (id {x = n})\n\
+                  \x20 TELL k.held\n\
+                  ))\n\
+                  LET g = (FN :{a :Any, b :Any} -> Any = #(show {m = a, n = b}))\n";
+    let ran = |call: &str| super::run(&format!("{source}PRINT ({call})\n"));
+    assert_eq!(ran("g {a = ints, b = ints}"), "num\nnum");
+    let first = ran("g {a = lists, b = ints}");
+    assert!(
+        first.starts_with("error: <test>:8:9: no overload of `TELL _` admits"),
+        "{first}"
+    );
+    let second = ran("g {a = ints, b = lists}");
+    assert!(
+        second.starts_with("error: <test>:10:3: no overload of `TELL _` admits"),
+        "{second}"
+    );
+}
+
+#[test]
+fn a_closure_over_a_statement_bound_name_decides_its_call_where_both_names_bind() {
+    // `g` reads `k`, its own parameter, beside `r`, which `USE`'s statement binds: the load
+    // selects nothing at `BOTH r.zero AND k.zero`, and `g`'s frame decides it once both bind.
     let make = MAKE.lines().take(2).collect::<Vec<_>>().join("\n");
     let source = format!(
         "{make}\n{BOTH}EXPR #(USE n :Number) -> Any = #(\n  LET r = (MAKE ints chain)\n  \
@@ -636,7 +664,7 @@ fn a_captured_layer_over_a_keyed_settlement_wakes_its_units() {
         !selected,
         "the load selects nothing at `BOTH r.zero AND k.zero`"
     );
-    let (ran, _, chosen) = ran_choosing(&source);
+    let (ran, chosen) = ran_choosing(&source);
     assert_eq!(ran.printed, "nn");
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }

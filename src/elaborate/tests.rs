@@ -37,6 +37,8 @@ use crate::values::KnottedFamily;
 /// The suites' reader: an activation's type names, read where a test bound them by hand, standing in
 /// for the load's reader. The run reads no type through an activation, so this lives here.
 impl<'step, 'graph, XF: KnottedFamily<'graph>> Reads<'step> for Reading<'step, 'graph, '_, XF> {
+    type Unwalked = crate::scope::Unwalked;
+
     fn shape(&self) -> &'step BodyShape<'step> {
         Reading::shape(self)
     }
@@ -52,6 +54,35 @@ impl<'step, 'graph, XF: KnottedFamily<'graph>> Reads<'step> for Reading<'step, '
         &self,
         at: Coordinate,
         _site: Site,
+        chain: &[ValueSymbol],
+        name: TypeSymbol,
+        types: &Chain<'_, '_, '_, '_>,
+    ) -> Result<Option<(TypeAt, KType)>, crate::scope::Unresolved> {
+        Ok(self.module_member(at, chain, name, types))
+    }
+
+    /// No walk reads here, so no derived name is named.
+    fn marks(&self) -> &dyn super::judge::Derives<Unwalked = crate::scope::Unwalked> {
+        &super::judge::NoMarks
+    }
+
+    /// A path through an expression written in place, which a hand-bound activation never types.
+    fn inline_member(
+        &self,
+        _site: Site,
+        _root: Site,
+        _chain: &[ValueSymbol],
+        _name: TypeSymbol,
+    ) -> Result<TypeAt, crate::scope::Unresolved> {
+        Ok(TypeAt::Unknown(crate::scope::Unwalked::outside_a_walk()))
+    }
+}
+
+impl<'step, 'graph, XF: KnottedFamily<'graph>> Reading<'step, 'graph, '_, XF> {
+    /// The type member `name` of the module `at` holds, through `chain`, beside its signature.
+    fn module_member(
+        &self,
+        at: Coordinate,
         chain: &[ValueSymbol],
         name: TypeSymbol,
         types: &Chain<'_, '_, '_, '_>,
@@ -173,7 +204,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
                 self.reading.facts(),
                 ClosureBindings::empty(),
                 self.activation.builtins(),
-                None,
+                (&[], None),
             ),
         )
     }
@@ -272,7 +303,7 @@ pub(super) fn with_program<R>(
     let load = resident(writer, LoadFacts::unwalked(writer, shapes));
     let activation: &Activation = resident(
         writer,
-        Activation::of_program(writer, shape, &Facts::of(load), builtins),
+        Activation::of_program(writer, shape, &Facts::under(load), builtins),
     );
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
@@ -291,7 +322,7 @@ pub(super) fn with_program<R>(
         activation,
         reading: activation
             .view()
-            .reading(&Code::of(shapes), Facts::of(load)),
+            .reading(&Code::of(shapes), Facts::under(load)),
         writer,
     })
 }

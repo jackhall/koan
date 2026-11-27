@@ -15,8 +15,8 @@ fn assert_copy<T: Copy>() {}
 fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
     assert_copy::<Activation<'static, 'static>>();
     assert_copy::<ActivationView<'static, 'static>>();
-    assert_eq!(size_of::<Activation<'static, 'static>>(), 88);
-    assert_eq!(size_of::<ActivationView<'static, 'static>>(), 72);
+    assert_eq!(size_of::<Activation<'static, 'static>>(), 112);
+    assert_eq!(size_of::<ActivationView<'static, 'static>>(), 96);
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, _| {
@@ -32,7 +32,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
             .unwrap();
             let shape = shapes.root();
             let activation: Activation =
-                Activation::of_program(writer, shape, &Facts::of(fixture.load(shapes)), table);
+                Activation::of_program(writer, shape, &Facts::under(fixture.load(shapes)), table);
             let view = activation.view();
             let b_reads_a = shape.mentions()[0];
             let (a, _) = shape
@@ -68,7 +68,7 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
             .unwrap();
             let shape = shapes.root();
             let activation: Activation =
-                Activation::of_program(writer, shape, &Facts::of(fixture.load(shapes)), table);
+                Activation::of_program(writer, shape, &Facts::under(fixture.load(shapes)), table);
             activation.read(shape.mentions()[0].coordinate);
         });
     });

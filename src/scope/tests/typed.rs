@@ -5,8 +5,8 @@
 
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binding, BodyShape, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, SiteDeps,
-    StaticType, Tree, Typed, UnitFacts, source_of,
+    Binding, BodyShape, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, StaticType,
+    Tree, Typed, UnitFacts, source_of,
 };
 
 use super::{builtins, with_fixture};
@@ -64,11 +64,6 @@ fn a_closing_shortens<'short, 'long: 'short>(x: Closing<'long>) -> Closing<'shor
 
 #[allow(dead_code)]
 fn folds_shorten<'short, 'long: 'short>(x: Folds<'long>) -> Folds<'short> {
-    x
-}
-
-#[allow(dead_code)]
-fn site_deps_shorten<'short, 'long: 'short>(x: SiteDeps<'long>) -> SiteDeps<'short> {
     x
 }
 

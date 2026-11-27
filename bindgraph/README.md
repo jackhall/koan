@@ -28,10 +28,15 @@ answer are for its static types — is
   - the arms each question's answer can take;
   - the `PassesName` edges, or **calls**, into a callee's entry: each on an
     arm, or on a site where the text selects the callee outright;
+  - the **onward calls**, each on a statement's site into that statement's
+    own `BindingNode`, giving its site names terms over names bound before
+    it: the content an answer gives a value landing there;
   - the `AnswersName` edges, each giving one answered name its content: on an
     arm, through a call from one of the callee's names, or on a site, by a
     term over other names with no question;
-  - the bodies whose callers the text cannot list (`OpenCaller`).
+  - the bodies whose callers the text cannot list (`OpenCaller`);
+  - the **staged** bodies, which a frame enters only where the program runs
+    them later, such as a quote's code.
 - **Graph.** Laying the text gives an immutable graph. It computes each name's
   base and orders the sites. It binds each answered name, picks each
   question's and call's owner, checks the description, refuses a recursion
@@ -65,7 +70,12 @@ reads. Every base a question reads, or a term on a site mentions, is bound on
 its body's lexical chain, so those sites form a chain.
 - A question's **owner** is the latest of them.
 - A call's owner is the latest site in its inputs' bases, or the root's entry
-  where it has none.
+  where it has none. An onward call's inputs are the names its mapping
+  mentions and every name its target's evaluation reads that is bound before
+  the target. It is owned strictly before its target, and dropped where its
+  target is no `BindingNode`.
+- Inside a staged body, a question or a call is owned no earlier than the
+  body's entry, whatever its reads.
 - An answered name is bound at the latest site in its base: the `BindingNode`
   whose answer gives it its content, wherever the statement that names it
   sits. A `LET` is transparent.
@@ -75,7 +85,7 @@ Owners and placements depend on the text alone.
 Every body's entry is a `BindingNode`. A statement is one only where its site
 name is in the base of a name some question reads, some call takes as input,
 some edge takes through a call, or some term on a site mentions. That is a name
-whose content the run gives. Each node but the root has exactly one
+whose content the run gives, or an onward call gives where its terms arrive. Each node but the root has exactly one
 `BindsAfter` edge, to the node that binds just before it, so the nodes form
 a tree.
 
@@ -99,6 +109,9 @@ alternative counts as bare here. The arcs:
   name;
 - an `AnswersName` edge on an arm or on a site draws one from each name its
   content mentions to the answered name;
+- an onward call's mapping draws one from each mentioned name to the site
+  name it maps, and those arcs count among a callee's own when a summary is
+  drawn;
 - an `AnswersName` edge through a call draws a **summary arc** to the answered
   name, from each caller name that reaches the taken name through the callee's
   own arcs. The arc is built if any step on the way builds. Summaries over
@@ -130,13 +143,18 @@ A domain says:
   a binding, and which names it mentions;
 - the **union** of a list of contents, the union of none being the **empty
   union**;
-- the **rigid** of an answered name: its content where no answer gives it one.
+- the **rigid** of an answered name: its content where no answer gives it one;
+- whether a content **arrives**: whether a run binding a site name at its
+  site would bind exactly it, never a rigid nor a content standing for
+  several.
 
-The domain comes in two parts. `Facts` names what the graph and its
+The domain comes in three parts. `Kept` names what the graph and its
 instances keep: a term, a `NameQuestion`, a `NameAnswer` and a `SiteAnswer`,
-each `Copy` and naming no content, with each `NameQuestion`'s answer count
-and each answer's index. `Domain` names the content and the judgements over
-it. A content carries the lifetime of the call that reads it, and a `Domain`
+each `Copy`, `'static` and naming no content, so a graph is keyed by its
+`Kept` alone and an embedder may hold one in a covariant cell. `Facts` names
+the facts a graph is laid over: what each kept term mentions, each
+`NameQuestion`'s answer count and each answer's index. `Domain` names the
+content and the judgements over it. A content carries the lifetime of the call that reads it, and a `Domain`
 is handed to each call, so nothing the crate keeps can hold one.
 
 Its obligations:
@@ -195,12 +213,30 @@ answered name's content.
 - **Calls.** Each taken call is followed, and the callee's evaluation is found
   or made under the binding the call passes. That binding holds the mapped
   names and the names the callee reads from its chain.
+- **Onward calls.** Each onward call the node owns is followed where every
+  name its target binds and reads is given a content that arrives. The
+  target's evaluation is found or made under the owner's binding and those
+  names, as a callee's is.
 - **The handle.** A finished evaluation's handle is read off the asks its
   answers made.
 - **Content.** An answered name's content lives for one `instance` call. A
   caller that takes a name from a callee whose view is filed derives it
   again: from the arm its deciding question's answer takes, or from its term
   on a site, the term applied to the binding the call passes.
+
+**Reading an instance.** Two doors read what an instance holds after its
+`instance` call returns, each through the same rest-or-replay path:
+- `Bound::answer` gives one question's `SiteAnswer` through a handle of the
+  node that owns it, from where the answers rest, or by replaying the answer
+  function with the doors serving the handle's fields. `Bound::answers`
+  gives every answer of the node at once.
+- `Bound::content` gives the content of an answered name a node binds, under
+  a binding of that node. It derives the content as a caller derives a name
+  it takes: from the node's filed evaluation, found or made, through the arm
+  the name's deciding question takes, its term on a site, or the callee's
+  filed evaluation it is taken from. So an embedder that holds a handle and
+  the binding behind it reads any answer or answered name again, and keeps
+  neither.
 
 **Knots.** Demands that need each other around a cycle form a **knot**,
 typically an evaluation reaching itself again through calls.
@@ -220,13 +256,15 @@ typically an evaluation reaching itself again through calls.
   order of starts or of mentions.
 
 A name whose deciding question takes no arm, or whose taken name waits on the
-run, is its own rigid too.
+run, is its own rigid too. A name bound at a callee's statement waits on the
+run unless onward calls reach that statement's node from the callee's entry
+or from before it; where they do, it is taken from that node's evaluation.
 
 **Where a knot can form.** Each need a demand can read is an arc between two
 answered names or questions of the text, whatever the view. An evaluation
 waits only on the answered names its own `BindingNode` binds, and on a
-callee's name only where the callee's entry binds it; everything else comes
-with its view. So the arcs run:
+callee's name only where the callee's entry binds it or onward calls reach
+the node that does; everything else comes with its view. So the arcs run:
 - from a question to each answered name it reads that its owner binds;
 - from an answered name to its deciding question;
 - from a name typed on an arm to each answered name its deciding question
@@ -234,8 +272,9 @@ with its view. So the arcs run:
 - from a name typed on a site to each answered name its term mentions that
   the name's node binds;
 - from a name typed through a call to each answered name the call passes that
-  the name's node binds, and to the callee name it takes where the callee's
-  entry binds it.
+  the name's node binds, to the callee name it takes where the callee's entry
+  binds it or onward calls reach its node, and then to each answered name an
+  onward call on the way passes that its owner binds.
 
 Laying draws these arcs from every arm the text lays and takes their strongly
 connected components. A **text component** is one that holds a cycle: more
@@ -293,6 +332,13 @@ answers rest again where the budget has room. Everything `Bound` keeps is `Copy`
 carries no drop glue, and is laid through `bumpstorage`, in tables that hash
 by a content word.
 
+**What the embedder is told.** The answer function's doors say which
+evaluation of the `instance` call is answering (`Doors::own_evaluation`) and
+which call first entered it (`Doors::entered`), and `Answers::entering` hears
+of each evaluation the call enters, beside the call that entered it and the
+evaluation that made that call. They place an answer among those one call
+makes, for the embedder's report, and change no answer.
+
 **Measured.** Under the `perf` feature, off by default, `Bound` counts the
 domain's asks and the answer function's runs, the demands it puts in the
 search for knots, and the knots it closes, those that carry one type apart
@@ -313,13 +359,21 @@ components, over and over, of what is still unknown.
   under bindings that may type answered names as well as site names.
 - **Order does not matter.** Binding a chain's sites one at a time, or all at
   once, reaches the same answers.
-- **A passed name binds alike.** An instance made through a `PassesName` or an
-  `AnswersName` edge equals its node's own under the binding the edge gives.
+- **A passed name binds alike.** An instance made through a `PassesName`
+  edge, an onward call among them, or an `AnswersName` edge equals its node's
+  own under the binding the edge gives.
 - **Reuse is exact.** Two bindings of a `BindingNode` get equal handles
   exactly where their admissions are equal, and the answers a handle reads
   equal those made from scratch for either.
 - **Rebuilt is exact.** Every read through a handle equals the read with
   nothing dropped, under any budget and any view-table size, zero among them.
+- **One answer is the node's.** `Bound::answer` for a question equals that
+  question's element of `Bound::answers`, under any budget.
+- **Content read again is the evaluation's.** `Bound::content` for an
+  answered name equals the content the oracle gives it under the same
+  binding. For a filed view whose answers all rest, the read runs the answer
+  function only for the questions an earlier node owns, which rest nowhere,
+  and rests nothing.
 - **Finite.** A text whose every name is bound through the text has finitely
   many instances, or is refused. A brute-force composition of terms, matching
   each result to its call, refuses exactly the same texts.
@@ -338,7 +392,5 @@ components, over and over, of what is still unknown.
 The crate's own open work is on [its roadmap](roadmap/README.md). Koan's work
 over it:
 
-- [The build over the binding graph](../roadmap/one-build/build-over-the-binding-graph.md)
-  — koan's load laying the graph, and its build and run cells executing it.
 - [The build image](../roadmap/one-build/build-image.md) — the graph written
   out and read back without laying.

@@ -1,59 +1,34 @@
 //! The load's **folds**: what the load decides per body once its walk has run, read off the
 //! shapes and the walk's records alone ([the folds](README.md#the-folds)).
-//! A resumption reads them and never recomputes them.
 //!
-//! - **Caching.** Each minting and composite site a body that may cache records is classed by what
-//!   its content depends on: closed, invariant where it reads only parameters every tail edge into
-//!   its frame passes on bare and that digest at a constant cost, else varying. The invariance and
-//!   escape are the text's ([`Shapes::invariant`], [`Shapes::escapes`]); a site's pending paths are
-//!   read through their classes' content trees. Each body's record says whether its frame caches,
-//!   beside its classed sites and, on a callable's own, the parameters that may key it.
-//! - **Keys.** A callable keys on each of its own keyable names that lies in the frontier of some
-//!   unit beneath it, its entry aside, whose seam — the latest bind site among its frontier's
-//!   unknowns — is a callable's entry, and on the parameters its invariant sites read. Each
-//!   frontier's sites and keyable names are read once, through a memo shared by every frontier that
-//!   reads it. The parameters such frontiers hold, keyable or not, are what a frame's or a block's
-//!   entry binds in its activation where nothing settled them, a block's entry counting as a
-//!   seam here, and the slots any body binds at a statement that any frontier holds are where the
-//!   cell running it decides again.
+//! - **Caching.** Each body's record says whether its frame caches, as its closing class has it.
+//! - **Entry and seams.** The parameters a callable's, a block's or a quote's code's entry binds
+//!   are those some unit beneath it holds in its frontier, its entry aside, whose seam — the latest
+//!   bind site among its frontier's unknowns — is that entry; and the slots any body binds at a
+//!   statement that any frontier holds are its statement seams. Each frontier's sites and names are
+//!   read once, through a memo shared by every frontier that reads it.
 //! - **Contract.** Each lexical variable a contribution or a solution names is composed by every
 //!   callable, `MODULE` body or quote's code between the body reading it and its home. The walk
 //!   refuses a `MODULE` body composing a type its `OVER` list does not name. A quote's code also
 //!   composes each variable some unit inside it holds in its frontier: its frame reads through no
 //!   activation around it, so its entry binds what its value carries.
-//!
-//! These are the frontier keys. The [trace](trace.rs) then widens each callable's keys to its
-//! traced slots and fills each body's call-site traces over them.
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
 use crate::scope::{
-    Address, BindSite, BodyClass, Caching, Cut, Deps, DepsGathering, Flattened, Folds, Frontier,
-    Keyed, LoadFacts, Mint, Position, Resolved, Root, Segment, ShapeKind, Shapes, SiteDeps, Slot,
-    UnitIndex, tree_deps,
+    Address, BindSite, Binder, BinderAt, BodyClass, Caching, Cut, Flattened, Folds, Frontier,
+    LoadFacts, Position, Resolved, Root, Segment, ShapeKind, Shapes, Site, Slot, UnitIndex,
+    Unknown,
 };
-use crate::values::Chain;
 
 /// The folds of every body `load` holds records for, by segment, laid through `lay`.
 pub fn fold<'o>(
-    (load, types): (&LoadFacts<'o>, &Chain<'_, '_, '_, '_>),
+    load: &LoadFacts<'o>,
     lay: impl Lays<'o>,
     scratch: BumpAllocator<'_>,
 ) -> &'o [Folds<'o>] {
-    collect(lay, staged((load, types), lay, scratch).iter().copied())
-}
-
-/// [`fold`], each body's folds laid through `lay` but their run staged in `scratch`, for the trace
-/// to lay once with its traces.
-pub(super) fn staged<'o, 'x>(
-    (load, types): (&LoadFacts<'o>, &Chain<'_, '_, '_, '_>),
-    lay: impl Lays<'o>,
-    scratch: BumpAllocator<'x>,
-) -> BumpVec<'x, Folds<'o>> {
     let shapes = load.shapes();
     let count = shapes.bodies().len();
     // What the walk recorded, gathered from every unit's record.
-    let mut sites: BumpVec<'_, SiteDeps<'o>> = BumpVec::new_in(scratch);
-    let mut digestible: BumpVec<'_, (Segment, &'o [Slot])> = BumpVec::new_in(scratch);
     let mut rooting: BumpVec<'_, (Segment, Slot)> = BumpVec::new_in(scratch);
     let mut frontiers: BumpVec<'_, (Segment, UnitIndex, Frontier<'o>)> = BumpVec::new_in(scratch);
     let mut contract = BumpVec::with_capacity_in(count, scratch);
@@ -62,97 +37,61 @@ pub(super) fn staged<'o, 'x>(
         each.resize(shapes.layout(shape.segment()).len(), false);
         contract.push(each);
     }
+    let mut binders: BumpVec<'_, BumpVec<'_, Unknown>> = BumpVec::with_capacity_in(count, scratch);
+    binders.resize_with(count, || BumpVec::new_in(scratch));
+    let mut held: BumpVec<'_, (Segment, Site)> = BumpVec::new_in(scratch);
     let mut flat = Flattened::new(scratch);
     for (unit, (facts, frontier)) in load.own_units() {
         for noted in flat.of(frontier) {
             let home = noted.unknown;
-            if let Some(level) = shapes.level(home.segment, home.at) {
-                compose_code(shapes, unit.segment, level, &mut contract);
+            match shapes.level(home.segment, home.at) {
+                Some(level) => compose_code(shapes, unit.segment, level, &mut contract),
+                None => capture_binder(shapes, unit.segment, home, &mut binders),
             }
         }
-        sites.extend(facts.sites.iter().copied());
-        digestible.extend((facts.born.iter()).map(|(body, born)| (*body, born.digestible)));
+        // A part held in place is no seam: the run binds its held slot whatever its content.
         rooting.extend((facts.paths.iter()).filter_map(|(_, (entry, resolution))| {
             match (entry.root, resolution.resolved) {
-                (Root::Binder(binder), Resolved::Class(_)) => Some((binder.body, binder.slot)),
+                (
+                    Root::Binder(Binder {
+                        body,
+                        at: BinderAt::Slot(slot),
+                    }),
+                    Resolved::Class(_),
+                ) => Some((body, slot)),
                 _ => None,
             }
         }));
         frontiers.push((unit.segment, unit.unit, frontier));
+        for (segment, typed) in facts.typed.entries() {
+            held.extend(
+                (typed.held.iter())
+                    .filter(|(site, _)| binds_held(shapes, *segment, *site))
+                    .map(|(site, _)| (*segment, *site)),
+            );
+        }
         for named in facts.named_variables {
             compose(shapes, named.reading, named.level, &mut contract);
         }
     }
-    digestible.sort_unstable_by_key(|(body, _)| *body);
+    for each in binders.iter_mut() {
+        each.sort_unstable();
+        each.dedup();
+    }
+    held.sort_unstable();
+    held.dedup();
+    let held_in = |segment: Segment| {
+        let from = held.partition_point(|(each, _)| *each < segment);
+        let to = held.partition_point(|(each, _)| *each <= segment);
+        collect(lay, held[from..to].iter().map(|(_, site)| *site))
+    };
     rooting.sort_unstable();
     rooting.dedup();
-    let digestible = |body: Segment, slot: Slot| {
-        (digestible.binary_search_by_key(&body, |(held, _)| *held))
-            .is_ok_and(|at| digestible[at].1.binary_search(&slot).is_ok())
-    };
-    let keyable = |body: Segment, slot: Slot| {
-        shapes.shape_at(body).position_of(slot) == Position::PARAMETER
-            && digestible(body, slot)
-            && shapes.rebound(body).binary_search(&slot).is_err()
-    };
-    let invariant_body = |frame: Segment| {
-        shapes.shape_at(frame).kind() == ShapeKind::Callable && !shapes.escapes(frame)
-    };
-    // A site's class, beside the frame parameters an invariant one reads.
-    let class_of = |site: &SiteDeps<'o>| -> (Mint, &'o [Slot]) {
-        let mut deps = DepsGathering::new(scratch);
-        deps.add(site.deps);
-        for tree in site.pending {
-            tree_deps(
-                (shapes, types),
-                (site.holder, site.frame),
-                tree,
-                &mut deps,
-                scratch,
-            );
-        }
-        match deps.laid(lay) {
-            Deps::Closed => (Mint::Closed, &[]),
-            Deps::Varying => (Mint::Varying, &[]),
-            Deps::On(slots) => {
-                let held = slots.iter().all(|slot| {
-                    invariant_body(site.frame)
-                        && shapes.invariant(site.frame).binary_search(slot).is_ok()
-                        && digestible(site.frame, *slot)
-                });
-                match held {
-                    true => (Mint::Invariant, slots),
-                    false => (Mint::Varying, &[]),
-                }
-            }
-        }
-    };
-    // Per frame body, the parameters its invariant sites read, across every body it runs.
-    let mut keyed = BumpVec::new_in(scratch);
-    let mut classed = BumpVec::with_capacity_in(sites.len(), scratch);
-    for site in sites.iter() {
-        let (class, slots) = class_of(site);
-        if class == Mint::Invariant {
-            keyed.push((site.frame, None));
-            keyed.extend(slots.iter().map(|slot| (site.frame, Some(*slot))));
-        }
-        classed.push((site.holder, site.site, site.minting, class));
-    }
-    keyed.sort_unstable();
-    keyed.dedup();
-    classed.sort_unstable_by_key(|(holder, ..)| *holder);
-    let keyable = |body, at| matches!(at, Address::Slot(slot) if keyable(body, slot));
-    let named = keyed_names(
-        shapes,
-        &frontiers,
-        scratch,
-        &keyable,
-        &[ShapeKind::Callable],
-    );
     // A quote's code's capture binds at its entry, as a callable's or a block's parameter does.
     let entry_bound = |body, at| match at {
         Address::Slot(slot) => shapes.shape_at(body).position_of(slot) == Position::PARAMETER,
         Address::Capture(_) => true,
+        Address::Held(_) => false,
     };
     let entered = [ShapeKind::Callable, ShapeKind::Block, ShapeKind::Code];
     let waiting = keyed_names(shapes, &frontiers, scratch, &entry_bound, &entered);
@@ -169,55 +108,18 @@ pub(super) fn staged<'o, 'x>(
         let Some((closing, _)) = closing else {
             folds.push(Folds {
                 caching: None,
-                keys: None,
                 waits: &[],
                 seams: &[],
                 rooting: &[],
                 contract,
-                traces: Keyed::EMPTY,
-                slot_maps: &[],
+                binders: collect(lay, binders[segment.index() as usize].iter().copied()),
+                held: held_in(segment),
             });
             continue;
         };
         let caches = matches!(closing.class, Some(BodyClass::Sealed { caches: true, .. }));
-        let mut mints = BumpVec::new_in(scratch);
-        let from = classed.partition_point(|(holder, ..)| *holder < segment);
-        let to = classed.partition_point(|(holder, ..)| *holder <= segment);
-        for (_, site, minting, class) in classed[from..to].iter() {
-            if *minting {
-                mints.push((*site, *class));
-            }
-        }
-        let own = segment == frame;
-        // The frame's run of `keyed`: its marker, then the parameters its invariant sites read.
-        let start = keyed.partition_point(|(each, _)| *each < frame);
-        let end = keyed.partition_point(|(each, _)| *each <= frame);
-        let frame_keyed = keyed.get(start) == Some(&(frame, None));
-        let invariant = (caches && own && frame_keyed).then(|| {
-            let slots = keyed[start + 1..end]
-                .iter()
-                .map(|(_, slot)| slot.expect("sorted after the marker"));
-            collect(lay, slots)
-        });
-        let callable = own && shape.kind() == ShapeKind::Callable;
-        let caching = Caching {
-            caches,
-            mints: Keyed::sorted(lay, &mut mints),
-            invariant,
-        };
-        let keys = callable.then(|| {
-            let from = named.partition_point(|(each, _)| *each < segment);
-            let to = named.partition_point(|(each, _)| *each <= segment);
-            let mut slots = BumpVec::new_in(scratch);
-            slots.extend(named[from..to].iter().filter_map(|(_, at)| match at {
-                Address::Slot(slot) => Some(*slot),
-                Address::Capture(_) => None,
-            }));
-            slots.extend_from_slice(invariant.unwrap_or(&[]));
-            slots.sort_unstable();
-            slots.dedup();
-            (invariant.is_some() || !slots.is_empty()).then(|| collect(lay, slots.iter().copied()))
-        });
+        let callable = segment == frame && shape.kind() == ShapeKind::Callable;
+        let caching = Caching { caches };
         let waits = match callable || matches!(shape.kind(), ShapeKind::Block | ShapeKind::Code) {
             true => {
                 let from = waiting.partition_point(|(each, _)| *each < segment);
@@ -230,7 +132,6 @@ pub(super) fn staged<'o, 'x>(
         let to = seaming.partition_point(|(each, _)| *each <= segment);
         folds.push(Folds {
             caching: Some(resident(lay, caching)),
-            keys: keys.flatten(),
             waits,
             seams: collect(lay, seaming[from..to].iter().map(|(_, slot)| *slot)),
             rooting: {
@@ -243,17 +144,31 @@ pub(super) fn staged<'o, 'x>(
                 collect(lay, slots.iter().copied())
             },
             contract,
-            traces: Keyed::EMPTY,
-            slot_maps: &[],
+            binders: collect(lay, binders[segment.index() as usize].iter().copied()),
+            held: held_in(segment),
         });
     }
-    folds
+    collect(lay, folds.iter().copied())
 }
 
-/// Each `(body, address)` a body of a kind in `entered` keys on through its frontiers: a `keyable`
-/// name of it in the frontier of a unit beneath it, its entry aside, whose seam is the entry of a
-/// body of such a kind. Sorted. Each frontier's sites and names are read once, through a memo
-/// every frontier reading it shares.
+/// Whether the part held in place at `site` of `segment` binds at a statement of its own: one in
+/// a unit that runs in its owning body after the entry, a block's or a `MODULE` body's in the unit
+/// of its encloser that runs it. A part in an entry's unit binds nowhere of its own.
+fn binds_held(shapes: &Shapes<'_>, segment: Segment, site: Site) -> bool {
+    let (mut owner, mut unit) = (segment, shapes.shape_at(segment).unit_of_site(site));
+    while let ShapeKind::Block | ShapeKind::Module = shapes.shape_at(owner).kind() {
+        let Some(running) = shapes.birth_unit(owner) else {
+            break;
+        };
+        (owner, unit) = (running.segment, running.unit);
+    }
+    unit.run_index().is_some()
+}
+
+/// Each `(body, address)` of a body of a kind in `entered` that its entry binds: a `keyable` name
+/// of it in the frontier of a unit beneath it, its entry aside, whose seam is the entry of a body
+/// of such a kind. Sorted. Each frontier's sites and names are read once, through a memo every
+/// frontier reading it shares.
 pub(super) fn keyed_names<'x>(
     shapes: &Shapes<'_>,
     frontiers: &[(Segment, UnitIndex, Frontier<'_>)],
@@ -264,8 +179,8 @@ pub(super) fn keyed_names<'x>(
     let mut summaries = bump_table(scratch);
     let mut named = BumpVec::new_in(scratch);
     for (segment, unit, frontier) in frontiers {
-        // An entry holds its parameters' own types, which key nothing: whatever reads a parameter
-        // waits on its names too.
+        // An entry holds its parameters' own types, which it binds nothing past: whatever reads a
+        // parameter waits on its names too.
         if *unit == UnitIndex::ENTRY && entered.contains(&shapes.shape_at(*segment).kind()) {
             continue;
         }
@@ -300,7 +215,7 @@ pub(super) fn keyed_names<'x>(
 }
 
 /// Each `(body, slot)` bound at a statement of `body` that some unit's frontier holds: where the
-/// cell running `body` decides again once the statement binds it. Sorted. Each frontier's
+/// cell running `body` binds again once the statement binds it. Sorted. Each frontier's
 /// unknowns are laid flat once, through a memo every frontier reading it shares.
 fn seam_names<'x>(
     shapes: &Shapes<'_>,
@@ -353,7 +268,7 @@ fn seam_names<'x>(
     named
 }
 
-/// What the keys fold reads off one frontier's unknowns: per body declaring some of them, by
+/// What the entry fold reads off one frontier's unknowns: per body declaring some of them, by
 /// segment ascending, the two latest distinct bind sites among them; and the keyable parameters of
 /// callables among them, sorted. A cut at `from` keeps the entries at segments `>= from`, a suffix
 /// of each, since every list here is sorted by segment first.
@@ -453,6 +368,34 @@ fn compose_code(
             return;
         };
         at = parent;
+    }
+}
+
+/// Capture `binder`, a binder of a body around `reading` that `reading`'s records read through no
+/// type capture, in each callable or `MODULE` body between them, so a frame of each can bind it.
+/// None where a quote's code lies between, whose entry binds what its value carries, or where
+/// `binder` lies on no body around `reading`.
+fn capture_binder(
+    shapes: &Shapes<'_>,
+    reading: Segment,
+    binder: Unknown,
+    binders: &mut BumpVec<'_, BumpVec<'_, Unknown>>,
+) {
+    let mut between = smallvec::SmallVec::<[Segment; 4]>::new();
+    let mut at = reading;
+    while at != binder.segment {
+        match shapes.shape_at(at).kind() {
+            ShapeKind::Callable | ShapeKind::Module => between.push(at),
+            ShapeKind::Code => return,
+            ShapeKind::Block | ShapeKind::Program => {}
+        }
+        let Some((parent, _)) = shapes.parent(at) else {
+            return;
+        };
+        at = parent;
+    }
+    for body in between {
+        binders[body.index() as usize].push(binder);
     }
 }
 

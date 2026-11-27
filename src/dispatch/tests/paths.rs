@@ -45,6 +45,68 @@ fn member_reads_through_one_path_share_a_type() {
     );
 }
 
+/// A path through a module parameter is the load's own variable, which no layer's table of closed
+/// types closes where the run's instance selects `SAME`: the frame's binding closes it, writing in
+/// the module each call passes, so the selected candidate's points close at the run.
+#[test]
+fn a_path_through_a_module_parameter_closes_under_the_frames_binding() {
+    let step = "LET step = (FN :{m :Counter} -> Any = \
+                #(LET s = (SAME m.zero AND (m.succ {x = m.zero}))))\n";
+    crate::scope::REBOUND.with(|count| count.set(0));
+    crate::scope::RIGID_AT_RUN.with(|count| count.set(0));
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}{step}PRINT (step {{m = (ints :| Counter)}})\nPRINT (step {{m = ints}})"
+        )),
+        "Carrier(0)\n0"
+    );
+    assert!(crate::scope::REBOUND.with(std::cell::Cell::get) > 0);
+    assert_eq!(crate::scope::RIGID_AT_RUN.with(std::cell::Cell::get), 0);
+}
+
+/// A path through a member of a module parameter closes under the frame's binding: the module the
+/// call passes is read through its body's laid member, which pins `ECHO`'s carrier, so no rigid
+/// contribution reaches the run.
+#[test]
+fn a_path_through_a_parameters_member_closes_under_the_frames_binding() {
+    let source = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                  EXPR FOR ALL #[Cr] #(ECHO elem :(Counter WITH {Carrier = Cr})) -> Cr = \
+                  #(elem.zero)\n\
+                  MODULE ints = ((LET zero = 0))\n\
+                  SIG Outer = #[(VAL inner :Counter)]\n\
+                  MODULE outer = ((LET inner = ints))\n\
+                  EXPR #(INNER o :Outer) -> Any = #(ECHO o.inner)\n\
+                  PRINT (INNER outer)";
+    crate::scope::REBOUND.with(|count| count.set(0));
+    crate::scope::RIGID_AT_RUN.with(|count| count.set(0));
+    assert_eq!(run(source), "0");
+    assert!(crate::scope::REBOUND.with(std::cell::Cell::get) > 0);
+    assert_eq!(crate::scope::RIGID_AT_RUN.with(std::cell::Cell::get), 0);
+}
+
+/// The frame's binding closes every type a layer's table closes, as the table closes it: a view
+/// read at the top level over a module a statement seam binds, a view over a module whose tree
+/// another bound binder holds, and a view over a module capturing a parameter the frame binds
+/// retyped to its declared signature.
+#[test]
+fn a_frames_binding_closes_what_the_layers_close() {
+    let calls = "LET one = (asc :| Ordered)\nLET two = (desc :| Ordered)\n\
+                 LET a = (BUILD one)\nLET b = (BUILD one)\nLET c = (BUILD two)\n\
+                 PRINT (SAME a.zero AND b.zero)";
+    let holders = "SIG Holder FOR ALL #[Elt] = #[(VAL held :Elt)]\n\
+                   EXPR #(PAIR xs :(LIST OF Number)) -> Number = \
+                   #((MODULE a OVER #[xs] = (LET held = xs)) (MODULE b OVER #[xs] = (LET held = xs)) \
+                   (LET u = (a :| Holder)) (USING a SCOPE ((LET w = (b :| Holder)))) (1))\n\
+                   PRINT (PAIR [1, 2])";
+    let sets = "LET x :((MAKESET asc).Set) = (MAKESET asc).empty\nPRINT x";
+    let printed = [
+        run(&format!("{ORDERED}{calls}")),
+        run(holders),
+        run(&format!("{ORDERED}{sets}")),
+    ];
+    assert_eq!(printed, ["Carrier(1)", "1", "Set([1])"]);
+}
+
 /// The load reads two paths by their content trees: opaque views of bodies of different code are
 /// *never* one type, two views of one module *always*, a member a body binds or `:!` solves is the
 /// type it is, and a parameter's path against any other is *maybe*.
@@ -248,10 +310,9 @@ const MAPPER: &str = "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier) \
                       EXPR #(LOOSE m :Mapper) -> Mapper = #(m)\n";
 
 /// A quantified member read through any module-valued expression is instanced at load where the
-/// load can name every head parameter it is over, and refused where it cannot: through a call's
-/// result over a module it does not know, and through a name the load reads across a quote's code,
-/// whose refusal `EVAL` raises. A call's head reads the member as it is, and the run solves the
-/// call.
+/// load can name every head parameter it is over: through a call's result over a module it does
+/// not know, by the name the call's holder gives the type the module carries, written in place
+/// as through a `LET`. A call's head reads the member as it is, and the run solves the call.
 #[test]
 fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_parameters() {
     let wanted = "LET go :(FN :{x :Number, y :Number} -> Number)";
@@ -261,8 +322,6 @@ fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_pa
         )),
         "2"
     );
-    let unpinned = "is quantified over `Carrier`, which the load cannot name here; call it, or \
-                    ascribe its module with `Carrier` pinned";
     // The load computes what `nums` fits `Mapper` at, as the run does, so `LOOSE`'s header pins
     // `Carrier`; over a parameter, whose module the load does not know, it does not.
     assert_eq!(
@@ -271,27 +330,58 @@ fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_pa
         )),
         "2"
     );
-    assert_eq!(
-        run(&format!(
-            "{MAPPER}EXPR #(VIA m :Mapper) -> Any = #({wanted} = (LOOSE m).apply)"
-        )),
-        format!("load: <test>:5:83: `apply` {unpinned}")
-    );
-    // Under a call, the binding names the module, so a quote's code over it types as a load
-    // declaring that module does: `USEIT nums` pins `Carrier` where the code reads `$m`.
-    assert_eq!(
-        run(&format!(
-            "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = \
-             #(EVAL #({wanted} = $m.apply) -> Any)\nPRINT (USEIT nums)"
-        )),
-        ":(FN :{x :Number y :Number} -> Number)"
-    );
+    // Over a parameter, `LOOSE m` is held where it is written, as a `LET` holds it.
+    for held in [
+        format!("{wanted} = (LOOSE m).apply"),
+        format!("LET held = (LOOSE m)\n  {wanted} = held.apply"),
+    ] {
+        let via =
+            format!("EXPR #(VIA m :Mapper) -> Any = #(\n  {held}\n  go {{x = 1, y = 2}}\n)\n");
+        assert_eq!(
+            run(&format!("{MAPPER}{via}PRINT (VIA nums)")),
+            "2",
+            "{held}"
+        );
+    }
     assert_eq!(
         run(&format!(
             "{MAPPER}PRINT ((PASS nums).apply {{x = 1, y = \"s\"}})\n\
              PRINT ((LOOSE nums).apply {{x = 1, y = \"t\"}})"
         )),
         "s\nt"
+    );
+}
+
+/// A quantified member read through a module parameter is over the parameter's path for each
+/// head parameter it names, so whether it has an instance under the type it is wanted at is a
+/// question the call's module answers: `nums` takes a `Number` where `strs` cannot.
+#[test]
+fn a_quantified_member_over_a_parameter_s_path_is_instanced_where_the_module_binds() {
+    let direct = "EXPR #(DIRECT m :Mapper) -> Any = \
+                  #(LET go :(FN :{x :Number, y :Number} -> Number) = m.apply)\n";
+    assert_eq!(
+        run(&format!("{MAPPER}{direct}PRINT (DIRECT nums)")),
+        ":(FN :{x :Number y :Number} -> Number)"
+    );
+    let strs = "MODULE strs = ((LET seed = \"a\") \
+                (LET apply = (FN FOR ALL #[Elt] :{x :Str, y :Elt} -> Elt = #(y))))\n";
+    assert!(
+        run(&format!("{MAPPER}{strs}{direct}PRINT (DIRECT strs)")).starts_with("load: "),
+        "`strs` takes no `Number`"
+    );
+}
+
+/// Under a call, the binding names the module, so a quote's code over it types as a load
+/// declaring that module does: `USEIT nums` pins `Carrier` where the code reads `$m`.
+#[test]
+fn a_quantified_member_through_a_spliced_module_parameter_is_instanced_under_the_call() {
+    let wanted = "LET go :(FN :{x :Number, y :Number} -> Number)";
+    assert_eq!(
+        run(&format!(
+            "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = \
+             #(EVAL #({wanted} = $m.apply) -> Any)\nPRINT (USEIT nums)"
+        )),
+        ":(FN :{x :Number y :Number} -> Number)"
     );
 }
 
@@ -324,7 +414,14 @@ fn each_open_path_reads_back_its_tree() {
         };
         assert!(chain.is_empty());
         let declaring = program.shapes().shape_at(binder.body);
-        assert_eq!(label(declaring.slot_name(binder.slot).symbol()), "p");
+        assert_eq!(
+            label(
+                declaring
+                    .slot_name(binder.slot().expect("a slot binder"))
+                    .symbol()
+            ),
+            "p"
+        );
         // `a`'s `Carrier` reads the view `BUILD` builds, and each functor's `:|` over a body
         // capturing its parameter writes a view in place whose head parameter is read through
         // that site: `MAKESET`'s and `PICK`'s `Set`, and `BUILD`'s own `Carrier`.
@@ -606,4 +703,34 @@ fn a_class_is_reachable_through_a_nested_member_chain() {
         z,
         "[(ONE OF (RETYPED TO Carrier), Never), (ONE OF Carrier, Never)]"
     );
+}
+
+/// A quote's code that reads a type name it leaves open and a path past its chain in one type
+/// leaves that type for its `EVAL`, marking nothing: the composed code decides it in its own graph.
+#[test]
+fn a_type_over_an_open_name_and_a_path_past_the_chain_is_left_for_its_eval() {
+    assert_eq!(
+        run("LET q = #(LET y :(Elem & m.Carrier) = 1)\nPRINT \"loaded\""),
+        "loaded"
+    );
+}
+
+/// A path spelled inside a root written in place resolves before the root is typed, whether it
+/// reads through a module parameter or a closed module: the view written in place is then refused
+/// alike, as a call in a type is.
+#[test]
+fn a_path_inside_a_root_written_in_place_resolves_before_the_root() {
+    let refused = |pin: &str| {
+        run(&format!(
+            "{COUNTER}EXPR #(SUBJECT m :Module) -> Any = #(\n  \
+             LET Typed = :((ints :| (Counter WITH {{Carrier = {pin}}})).Carrier)\n  Typed\n)\n\
+             PRINT \"loaded\""
+        ))
+    };
+    let over_a_parameter = refused("m.Carrier");
+    assert!(
+        over_a_parameter.contains("a call in a type is never made"),
+        "{over_a_parameter}"
+    );
+    assert_eq!(over_a_parameter, refused("ints.Carrier"));
 }

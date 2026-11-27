@@ -18,7 +18,13 @@
 //! A **demand** is a question's answer or an answered name's content within one evaluation. A
 //! name's content comes from its deciding question's arm, from its term on a site (`Term`), or
 //! through a call from a name of the callee's evaluation (`Take`), which may enter a callee before
-//! the caller finishes. A question an earlier node owns that this evaluation needs is answered
+//! the caller finishes. A callee name bound at a statement's node is taken from that node's
+//! evaluation, reached by following the chain of onward calls into it from the callee's entry
+//! (`Onward`); it is the taker's rigid where a holder on the way does not arrive.
+//!
+//! An **onward call** the node owns is followed, like a call, where every name its target binds
+//! and reads arrives ([`Domain::arrives`]): the evaluation that types a holder also makes the
+//! holder's own node's evaluation. A question an earlier node owns that this evaluation needs is answered
 //! here under its binding and written in no field ("borrowed"); no demand enters an earlier node's
 //! evaluation.
 //!
@@ -48,14 +54,14 @@ use std::collections::HashMap;
 
 use super::Bound;
 use super::store::{Resting, ViewKey, view_word};
-use crate::domain::{Answers, Binding, Domain, Doors, Facts, NameAnswer, Nesting};
+use crate::domain::{Answering, Answers, Binding, Domain, Doors, Facts, Kept, NameAnswer, Nesting};
 use crate::graph::{On, Source};
 use crate::id::{AnswersId, EdgeId, NameId, NodeId, QuestionId, Site};
 
 /// The evaluations of one `instance` call, and the demands under way.
 pub(super) struct Session<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> {
     bound: &'s mut Bound<'g, 'f, 'a, F>,
-    resting: &'s Resting<'b, F>,
+    resting: &'s Resting<'b, F::Kept>,
     domain: &'s D,
     answers: &'s mut dyn Answers<F>,
     evaluations: Vec<Evaluation<D>>,
@@ -94,10 +100,12 @@ struct Evaluation<D: Domain> {
     borrowed: Vec<Option<SiteAnswer<D>>>,
     /// The handle, written as owned questions are answered.
     words: Vec<u64>,
+    /// The call whose edge first entered it, where one did.
+    entered: Option<EdgeId>,
 }
 
 /// A domain's `SiteAnswer`.
-type SiteAnswer<D> = <<D as Domain>::Facts as Facts>::SiteAnswer;
+type SiteAnswer<D> = <<<D as Domain>::Facts as Facts>::Kept as Kept>::SiteAnswer;
 
 /// One step of an evaluation: a name's content or a question's answer.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -125,6 +133,16 @@ enum Phase {
     },
     /// A name taking `takes` from the callee's evaluation `callee`.
     Take { callee: usize, takes: NameId },
+    /// A name typed through `call`, taking `takes` from a statement node of the
+    /// callee: about to follow onward call `step` of the chain that reaches it, whose owner's
+    /// evaluation is `from` past the first, reading what that call passes from `next` on.
+    Onward {
+        call: EdgeId,
+        takes: NameId,
+        step: usize,
+        from: Option<usize>,
+        next: usize,
+    },
     /// A name typed on a site by `edge`'s term, reading the names it mentions from `next` on, to
     /// apply the term to them.
     Term { edge: AnswersId, next: usize },
@@ -178,7 +196,7 @@ enum Lookup {
 impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a, 'b, F, D> {
     pub(super) fn new(
         bound: &'s mut Bound<'g, 'f, 'a, F>,
-        resting: &'s Resting<'b, F>,
+        resting: &'s Resting<'b, F::Kept>,
         domain: &'s D,
         answers: &'s mut dyn Answers<F>,
     ) -> Self {
@@ -208,16 +226,33 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
         word: u64,
     ) -> Vec<u64> {
         let words = vec![0; self.bound.graph.node(node).handle_width()];
-        let entered = self.entered(node, binding, key, word, words, false);
+        let entered = self.entered(node, binding, (key, word), words, false, None);
         while let Some(next) = self.to_finish.pop() {
             self.finish(next);
         }
         std::mem::take(&mut self.evaluations[entered].words)
     }
 
-    /// The evaluation of `binding`'s view of `node`: found in this session, entered filed where the
+    /// The content of answered `name` of `binding`'s view of `node`: its evaluation entered, filed
+    /// or made, the name settled, and every evaluation that reaches finished.
+    pub(super) fn content(
+        mut self,
+        node: NodeId,
+        binding: &Binding<D>,
+        name: NameId,
+    ) -> D::Content {
+        let at = self.enter(node, binding, None);
+        self.settle(Demand::Name(at, name));
+        while let Some(next) = self.to_finish.pop() {
+            self.finish(next);
+        }
+        self.evaluations[at].names[self.position(at, name)].expect("a settled name is final")
+    }
+
+    /// The evaluation of `binding`'s view of `node`, entered by the call `by` made from the
+    /// evaluation beside it, where one enters it: found in this session, entered filed where the
     /// `Bound` files the view, and otherwise made and queued to finish.
-    fn enter(&mut self, node: NodeId, binding: &Binding<D>) -> usize {
+    fn enter(&mut self, node: NodeId, binding: &Binding<D>, by: Option<(EdgeId, usize)>) -> usize {
         let probe = (node, self.bound.view_key(node, binding, self.domain));
         if let Some(&at) = self.index.get(&probe) {
             return at;
@@ -226,20 +261,20 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
         let word = view_word(node, &key);
         let mut words = vec![0; self.bound.graph.node(node).handle_width()];
         let filed = self.bound.filed(node, &key, word, &mut words);
-        self.entered(node, binding, key, word, words, filed)
+        self.entered(node, binding, (key, word), words, filed, by)
     }
 
     /// Adds the evaluation of `binding`'s view of `node`, keyed `key` and homed at `word`,
-    /// holding `words`: filed, or queued to finish. Each answered name the view types is final at
-    /// once.
+    /// holding `words` and entered by the call `by` made from the evaluation beside it: filed, or
+    /// queued to finish. Each answered name the view types is final at once.
     fn entered(
         &mut self,
         node: NodeId,
         binding: &Binding<D>,
-        key: ViewKey,
-        word: u64,
+        (key, word): (ViewKey, u64),
         words: Vec<u64>,
         filed: bool,
+        by: Option<(EdgeId, usize)>,
     ) -> usize {
         let graph = self.bound.graph;
         let relevant = graph.relevant(node);
@@ -261,8 +296,10 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
             answers: vec![None; binding_node.owns().len()],
             borrowed: vec![None; graph.borrows(node).len()],
             words,
+            entered: by.map(|(call, _)| call),
         });
         self.index.insert((node, key), at);
+        (self.answers).entering(at as u32, by.map(|(call, from)| (call, from as u32)));
         if !filed {
             self.to_finish.push(at);
         }
@@ -315,8 +352,21 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
             };
             if taken {
                 let passed = graph.passed(self.domain, call, &binding);
+                // An onward call is followed where every name its target binds and
+                // reads arrives.
+                if let Some(target) = graph.edge(call).onward() {
+                    let node = graph
+                        .node_at(target)
+                        .expect("an onward call's target is a node");
+                    if self.arrive(node, &passed) {
+                        self.bound.walked += 1;
+                        self.enter(node, &passed, Some((call, at)));
+                    }
+                    continue;
+                }
                 self.bound.walked += 1;
-                self.enter(graph.entry(graph.edge(call).callee()), &passed);
+                let entry = graph.entry(graph.edge(call).callee());
+                self.enter(entry, &passed, Some((call, at)));
             }
         }
     }
@@ -341,6 +391,17 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
     fn position(&self, at: usize, name: NameId) -> usize {
         let node = self.bound.graph.node(self.evaluations[at].node);
         (node.answered().binary_search(&name)).expect("an answered name of the evaluation's node")
+    }
+
+    /// Whether every name statement node `node` binds and reads is given, in `given`, a content
+    /// that arrives: so an onward call into it is followed.
+    fn arrive(&self, node: NodeId, given: &Binding<D>) -> bool {
+        let graph = self.bound.graph;
+        let relevant = graph.relevant(node);
+        graph.node(node).names().iter().all(|&name| {
+            relevant.binary_search(&name).is_err()
+                || (given.get(name)).is_some_and(|content| self.domain.arrives(name, content))
+        })
     }
 
     /// The view of evaluation `at` with every final answered name of its node.
@@ -544,7 +605,7 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
         #[cfg(feature = "perf")]
         let mut asked = 0;
         let domain = self.domain;
-        let words = &self.evaluations[at].words;
+        let (words, entered) = (&self.evaluations[at].words, self.evaluations[at].entered);
         let mut serve = |declared: usize| {
             if let Some(answer) = taken[declared] {
                 return answer;
@@ -578,7 +639,11 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
             taken[declared] = Some(answer);
             answer
         };
-        let mut doors = Doors::new(question, text.reads(), text.asks(), &mut serve);
+        let answering = Answering {
+            entered,
+            own: owned.then_some(at as u32),
+        };
+        let mut doors = Doors::new(question, text.reads(), text.asks(), &mut serve, answering);
         let answer = self.answers.answer(question, &mut doors);
         #[cfg(feature = "perf")]
         {
@@ -764,9 +829,20 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
                 let entry = graph.entry(callee);
                 if graph.answered_at(takes) == Some(entry) {
                     self.bound.walked += 1;
-                    let callee = self.enter(entry, &passed);
+                    let callee = self.enter(entry, &passed, Some((call, at)));
                     let top = self.waiting.last_mut().expect("under way");
                     top.phase = Phase::Take { callee, takes };
+                    return;
+                }
+                if graph.reach(callee, takes).is_some() {
+                    let top = self.waiting.last_mut().expect("under way");
+                    top.phase = Phase::Onward {
+                        call,
+                        takes,
+                        step: 0,
+                        from: None,
+                        next: 0,
+                    };
                     return;
                 }
                 let given =
@@ -777,6 +853,84 @@ impl<'s, 'g, 'f, 'a, 'b, F: Facts, D: Domain<Facts = F>> Session<'s, 'g, 'f, 'a,
                     _ => self.domain.rigid(name),
                 };
                 self.complete(Value::Name(content));
+            }
+            (
+                Demand::Name(at, name),
+                Phase::Onward {
+                    call,
+                    takes,
+                    step,
+                    from,
+                    next,
+                },
+            ) => {
+                let callee = graph.edge(call).callee();
+                let (_, chain) = graph.reach(callee, takes).expect("a reached node");
+                if step == chain.len() {
+                    let callee = from.expect("the chain's last target");
+                    let top = self.waiting.last_mut().expect("under way");
+                    top.phase = Phase::Take { callee, takes };
+                    return;
+                }
+                let onward = chain[step];
+                // The owner's evaluation: the callee's entry's or an earlier target's; an owner
+                // before the callee's entry is read off what the call passes.
+                let passed = |this: &Self| graph.passed(this.domain, call, &this.binding_of(at));
+                let owner = match (step, graph.owned_inside(onward)) {
+                    (0, true) => {
+                        let passed = passed(self);
+                        self.bound.walked += 1;
+                        Some(self.enter(graph.entry(callee), &passed, Some((call, at))))
+                    }
+                    (0, false) => None,
+                    _ => from,
+                };
+                let binding = match owner {
+                    Some(owner) => {
+                        let needs = graph.edge(onward).passes();
+                        if let Some(position) = self.read_needs(owner, needs, next) {
+                            let phase = Phase::Onward {
+                                call,
+                                takes,
+                                step,
+                                from,
+                                next: position,
+                            };
+                            set_phase(self, phase);
+                            return;
+                        }
+                        let node = self.evaluations[owner].node;
+                        if needs.iter().any(|&need| {
+                            graph.answered_at(need) == Some(node)
+                                && !self.is_final(Demand::Name(owner, need))
+                        }) {
+                            self.complete(Value::Name(self.domain.rigid(name)));
+                            return;
+                        }
+                        self.binding_of(owner)
+                    }
+                    None => passed(self),
+                };
+                let target = graph.edge(onward).onward().expect("an onward call");
+                let node = graph
+                    .node_at(target)
+                    .expect("an onward call's target is a node");
+                let given = graph.passed(self.domain, onward, &binding);
+                if !self.arrive(node, &given) {
+                    self.complete(Value::Name(self.domain.rigid(name)));
+                    return;
+                }
+                self.bound.walked += 1;
+                let by = (onward, owner.unwrap_or(at));
+                let entered = self.enter(node, &given, Some(by));
+                let top = self.waiting.last_mut().expect("under way");
+                top.phase = Phase::Onward {
+                    call,
+                    takes,
+                    step: step + 1,
+                    from: Some(entered),
+                    next: 0,
+                };
             }
             (Demand::Name(..), Phase::Take { callee, takes }) => {
                 let demand = Demand::Name(callee, takes);

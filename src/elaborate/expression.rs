@@ -19,15 +19,25 @@ use crate::parse::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::scope::{
-    Coordinate, Elaboration, PathSpelling, Rule, Site, Slot, SpelledRoot, Target, applied,
-    declared_member, head_params, pair_label, path_spelling, unbuilt,
+    Coordinate, Elaboration, PathSpelling, Rule, Site, Slot, SpelledRoot, Spelling, Target, WIDEST,
+    Width, applied, declared_member, declared_variant, head_params, pair_label, path_spelling,
+    unbuilt, variant_named,
 };
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, SigOrigin, TypeNode,
+    DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, SigOrigin, Step, TypeNode,
     dense_classes, member, tied_members,
 };
 use crate::values::Chain;
+
+/// The head of a spelling over a head: closed, or a type declared over run-bound names.
+enum Head {
+    Closed(KType),
+    Declared,
+}
+
+/// Why a type whose names are all closed is concrete.
+const CLOSED: &str = "a type holding no variable is concrete";
 
 /// The connector keywords of the formless composites.
 struct Connectors {
@@ -84,10 +94,14 @@ pub(super) struct Groups<'q> {
 }
 
 /// A `FOR ALL` group as written: its names in written order, each with its elaborated bound —
-/// `Any` for a name written without one.
+/// `Any` for a name written without one — beside each name whose bound a callable's own group
+/// writes over an encloser's names, with that bound as written: its laid bound is the bound's
+/// upper end at every binding, and the run writes the binding's content in where the callable is
+/// born.
 pub(super) struct QuantifierGroup<'x> {
     pub(super) names: BumpVec<'x, TypeSymbol>,
     pub(super) bounds: BumpVec<'x, KType>,
+    pub(super) related: BumpVec<'x, (TypeSymbol, Parametric)>,
 }
 
 impl<'x> QuantifierGroup<'x> {
@@ -96,6 +110,7 @@ impl<'x> QuantifierGroup<'x> {
         QuantifierGroup {
             names: BumpVec::new_in(scratch),
             bounds: BumpVec::new_in(scratch),
+            related: BumpVec::new_in(scratch),
         }
     }
 }
@@ -131,14 +146,14 @@ impl Groups<'_> {
 #[derive(Clone, Copy)]
 pub(super) struct Fellow<'f> {
     pub(super) slot: Slot,
-    pub(super) handle: KType,
+    pub(super) handle: Parametric,
     pub(super) params: &'f [TypeSymbol],
 }
 
 /// A component's signature or alias fellow not yet read, by its slot: `Some` with its relative
 /// type, read on first mention, or the refusal of a cycle through signatures and aliases alone;
 /// `None` for a slot that names no such fellow.
-pub(super) type Unread<'e> = &'e dyn Fn(Slot) -> Option<Result<KType, Elaboration>>;
+pub(super) type Unread<'e> = &'e dyn Fn(Slot) -> Option<Result<Parametric, Elaboration>>;
 
 /// The fellow members of the component being declared, as a type expression in it reads them.
 #[derive(Clone, Copy)]
@@ -267,17 +282,17 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         } = mention.coordinate
         {
             if let Some(fellow) = self.fellows.read.iter().find(|fellow| fellow.slot == slot) {
-                return Ok(fellow.handle.into());
+                return Ok(fellow.handle);
             }
             if let Some(answer) = self.fellows.unread.and_then(|unread| unread(slot)) {
-                return answer.map(Into::into);
+                return answer;
             }
         }
         match self.reader.type_at(mention.coordinate) {
             TypeAt::Type(handle) => Ok(handle.into()),
             TypeAt::Rigid(handle) => Ok(handle),
             TypeAt::NotAType => Err(Elaboration::NotAType { name, site }),
-            TypeAt::Unknown => Err(Elaboration::Unknown { site }),
+            TypeAt::Unknown(unwalked) => Err(Elaboration::Unknown { site, unwalked }),
         }
     }
 
@@ -297,75 +312,157 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 let read =
                     self.reader
                         .inline_member(site, self.reader.shape().site(root), &chain, label);
-                Some(path_type(site, label, read, KType::EMPTY_SIGNATURE))
+                Some(match read {
+                    Ok(read) => path_type(site, label, read, KType::EMPTY_SIGNATURE),
+                    Err(path) => Err(Elaboration::Unresolved { site, path }),
+                })
             }
             SpelledRoot::Name(root) => {
                 let mention = self
                     .reader
                     .shape()
                     .mention(self.reader.shape().site(root))?;
-                let (read, owner) =
+                let read =
                     self.reader
-                        .member_type(mention.coordinate, site, &chain, label, self.types)?;
-                Some(path_type(site, label, read, owner))
+                        .member_type(mention.coordinate, site, &chain, label, self.types);
+                Some(match read {
+                    Ok(read) => {
+                        let (read, owner) = read?;
+                        path_type(site, label, read, owner)
+                    }
+                    Err(path) => Err(Elaboration::Unresolved { site, path }),
+                })
             }
         }
     }
 
-    /// `operands` elaborated, and refused `Unknown` at `site` when one read a lexical variable: a
-    /// bound's, which holds no variable.
-    fn closed_operands<T>(
-        &self,
-        site: Site,
-        operands: impl FnOnce() -> Result<T, Elaboration>,
-    ) -> Result<T, Elaboration> {
-        let before = self.reader.rigid_reads();
-        let elaborated = operands()?;
-        if self.reader.rigid_reads() > before {
-            return Err(Elaboration::Unknown { site });
-        }
-        Ok(elaborated)
-    }
-
-    /// The head `head` of a spelling over a head, at `site`: closed where it is, `None` over
-    /// run-bound names, whose spelling is the rule's ([`spelled`](Self::spelled)). Refused `refused`
-    /// where it names a `FOR ALL` variable or a head parameter, which no head spelling takes, and
-    /// left `Unknown` over a path's variable, for the run.
+    /// The head `head` of a spelling over a head, at `site`: closed, or a type declared over
+    /// run-bound names, whose declaration licenses the spelling. A run-bound name, a path's
+    /// variable among them, is no head at any binding, since the type a value carries is always
+    /// applied ([`Spelling::Head`]); `refused` where it names a `FOR ALL` variable or a head
+    /// parameter, which no head spelling takes.
     fn head(
         &self,
         site: Site,
         head: Parametric,
         refused: Elaboration,
-    ) -> Result<Option<KType>, Elaboration> {
+    ) -> Result<Head, Elaboration> {
         match judge::names_held(self.types, self.scratch, head) {
-            judge::Names::Closed => Ok(judge::static_of(self.types, head)),
-            judge::Names::RunBound => Ok(None),
-            judge::Names::Path => Err(Elaboration::Unknown { site }),
+            judge::Names::Closed => Ok(Head::Closed(
+                judge::static_of(self.types, head).expect(CLOSED),
+            )),
+            judge::Names::RunBound | judge::Names::Path => {
+                match judge::declared(self.reader.marks(), self.types, head) {
+                    Some(_) => Ok(Head::Declared),
+                    None => Err(self.unlicensed(site, head, Spelling::Head)),
+                }
+            }
             judge::Names::Unbound => Err(refused),
         }
     }
 
-    /// The spelling `rule` over `operands`, at `site`, its head over run-bound names
-    /// ([`judge::spelled`]): refused `refused` where no binding spells it, `Unknown` outside a
-    /// walk, where no binding is written in.
-    fn spelled(
+    /// The closed head `head`, refused `refused` where it is a declaration over names: a spelling
+    /// no declaration over names takes, a code kind's.
+    fn closed_head(
+        &self,
+        site: Site,
+        head: Parametric,
+        refused: Elaboration,
+    ) -> Result<KType, Elaboration> {
+        match self.head(site, head, refused)? {
+            Head::Closed(closed) => Ok(closed),
+            Head::Declared => Err(refused),
+        }
+    }
+
+    /// `rule`'s output over `operands`, a type declared over run-bound names among them whose
+    /// declaration licenses the spelling: the derived name a binding reads it through. `refused`
+    /// where it has none; `Unknown` outside a walk, where no binding is written in.
+    fn ruled(
         &self,
         site: Site,
         rule: Rule,
         operands: &[DeclaredType<Parametric>],
         refused: Elaboration,
     ) -> Result<Parametric, Elaboration> {
-        let marks = self.reader.marks();
-        match judge::spelled(marks, self.types, self.scratch, rule, operands) {
-            None => Err(refused),
-            Some(None) => Err(Elaboration::Unknown { site }),
-            Some(Some(spelled)) => Ok(spelled),
+        match judge::ruled_one(
+            self.reader.marks(),
+            self.types,
+            self.scratch,
+            rule,
+            operands,
+        ) {
+            Ok(Some(ruled)) => Ok(ruled),
+            Ok(None) => Err(refused),
+            Err(unwalked) => Err(Elaboration::Unknown {
+                site,
+                unwalked: unwalked.into(),
+            }),
         }
     }
 
-    /// The record type over `named`, by name: the arguments or names a spelling's rule reads.
+    /// The record type over `named`, by name: the arguments or pins a spelling's rule reads.
     fn named(&self, named: &[(BinderSymbol, Parametric)]) -> DeclaredType<Parametric> {
         DeclaredType::Type(self.types.record(self.scratch, named))
+    }
+
+    /// The refusal of `spelling` over the run-bound `name` at `site`, which its bound does not
+    /// license at every binding.
+    fn unlicensed(&self, site: Site, name: Parametric, spelling: Spelling) -> Elaboration {
+        Elaboration::Unlicensed {
+            name,
+            written: self.reader.written_bound(name, self.types),
+            spelling,
+            site,
+        }
+    }
+
+    /// The member `name` of `owner`, written `Owner.name`, at `site`. A closed owner's is a variant
+    /// of the union under it, else a field of the record under it, else, over a union of record
+    /// types, the union of their fields. An owner over run-bound names reads a variant its text
+    /// shows — a family applied at a name, or a union declared over one, whose declaration
+    /// licenses the read — else it is the lattice's projection, where the owner's bound
+    /// guarantees the field; elsewhere it is refused, as a variant read off a run-bound name always
+    /// is, since a binding under a union may be a lone variant. `refused` where `owner` names a
+    /// `FOR ALL` variable or a head parameter, which declares no member.
+    fn member(
+        &self,
+        site: Site,
+        owner: Parametric,
+        name: BinderSymbol,
+        refused: Elaboration,
+    ) -> Result<Parametric, Elaboration> {
+        let (types, scratch) = (self.types, self.scratch);
+        let field = Step::Field(name);
+        match judge::names_held(types, scratch, owner) {
+            judge::Names::Closed => {
+                let closed = judge::static_of(types, owner).expect(CLOSED);
+                (declared_member(types, scratch, closed, name.symbol()).map(Parametric::from))
+                    .or_else(|| types.projection(scratch, owner, field))
+                    .ok_or(refused)
+            }
+            judge::Names::RunBound | judge::Names::Path => {
+                if let Some(variant) = variant_named(types, owner, name.symbol()) {
+                    return Ok(variant);
+                }
+                if let Some(declared) = judge::declared(self.reader.marks(), types, owner) {
+                    if !declared.shows_member(types, scratch, name) {
+                        return Err(refused);
+                    }
+                    let operands = [DeclaredType::Type(owner)];
+                    return self.ruled(site, Rule::Member(name.symbol()), &operands, refused);
+                }
+                types.projection(scratch, owner, field).ok_or_else(|| {
+                    let bound = judge::named_bound(types, scratch, owner);
+                    let spelling = match declared_variant(types, scratch, bound, name.symbol()) {
+                        Some(_) => Spelling::Variant(name.symbol()),
+                        None => Spelling::Field(name.symbol()),
+                    };
+                    self.unlicensed(site, owner, spelling)
+                })
+            }
+            judge::Names::Unbound => Err(refused),
+        }
     }
 
     /// A parenthesized or sigiled type expression, refusing a scheme as [`part`](Self::part) does.
@@ -409,11 +506,23 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 arguments_typed.push((*name, self.part(argument, groups)?));
             }
             let applied = match constructor {
-                Some(constructor) => self.apply(site, constructor, &arguments_typed)?,
-                None => {
+                Head::Closed(constructor) => self.apply(site, constructor, &arguments_typed)?,
+                Head::Declared => {
+                    // The declaration names its parameters, each once.
+                    let declared = judge::declared(self.reader.marks(), self.types, head);
+                    let params = declared.as_ref().and_then(judge::Declared::params);
+                    let params = params.ok_or(unsupported)?;
+                    let each_once = arguments_typed.len() == params.len()
+                        && (arguments_typed.iter()).all(|(name, _)| {
+                            params
+                                .iter()
+                                .any(|param| BinderSymbol::Type(*param) == *name)
+                        });
+                    if !each_once {
+                        return Err(unsupported);
+                    }
                     let operands = [head.into(), self.named(&arguments_typed)];
-                    let rule = Rule::Applied { sole: false };
-                    self.spelled(site, rule, &operands, unsupported)?
+                    self.ruled(site, Rule::Applied { sole: false }, &operands, unsupported)?
                 }
             };
             return Ok(DeclaredType::Type(applied));
@@ -428,7 +537,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 BuiltinShapeId::QuantifiedLambdaType if !binder => Err(quantified),
                 BuiltinShapeId::QuantifiedExpressionHead if !binder => Err(quantified),
                 BuiltinShapeId::QuantifiedLambdaType => {
-                    let group = self.group(part(3), groups)?;
+                    let group = self.group(part(3), groups, false)?;
                     Ok(self.function(&group, part(4), part(6), groups)?.handle)
                 }
                 BuiltinShapeId::ExpressionHead => {
@@ -436,7 +545,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                     self.shape(&group, part(1), part(3), groups)
                 }
                 BuiltinShapeId::QuantifiedExpressionHead => {
-                    let group = self.group(part(3), groups)?;
+                    let group = self.group(part(3), groups, false)?;
                     self.shape(&group, part(4), part(6), groups)
                 }
                 BuiltinShapeId::Attribute => {
@@ -445,22 +554,16 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                     }
                     let owner = self.part(part(1), groups)?;
                     let name = match part(2) {
-                        ExpressionPart::Type(name) => name.symbol(),
-                        ExpressionPart::Identifier(name) => name.symbol(),
+                        ExpressionPart::Type(name) => BinderSymbol::Type(*name),
+                        ExpressionPart::Identifier(name) => BinderSymbol::Value(*name),
                         _ => return Err(unsupported),
                     };
-                    // An owner naming a `FOR ALL` variable declares no member.
-                    let refused = Elaboration::NoSuchMember { owner, name, site };
-                    let member = match self.head(site, owner, refused)? {
-                        Some(owner) => declared_member(self.types, self.scratch, owner, name)
-                            .map(Parametric::from)
-                            .ok_or(refused)?,
-                        None => {
-                            let operands = [DeclaredType::Type(owner)];
-                            self.spelled(site, Rule::Member(name), &operands, refused)?
-                        }
+                    let refused = Elaboration::NoSuchMember {
+                        owner,
+                        name: name.symbol(),
+                        site,
                     };
-                    Ok(DeclaredType::Type(member))
+                    Ok(DeclaredType::Type(self.member(site, owner, name, refused)?))
                 }
                 _ => Err(unsupported),
             };
@@ -487,15 +590,19 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             // starts with `FN`, so a bare `->` here is always an application.
             3 if keyword(1, &KEYWORDS.arrow) => {
                 let head = self.part(&parts[2].value, groups)?;
-                let Some(constructor) = self.head(site, head, unsupported)? else {
-                    let argument = self.part(&parts[0].value, groups)?;
-                    let operands = [head.into(), argument.into()];
-                    return self.spelled(
-                        site,
-                        Rule::Applied { sole: true },
-                        &operands,
-                        unsupported,
-                    );
+                let constructor = match self.head(site, head, unsupported)? {
+                    Head::Closed(constructor) => constructor,
+                    Head::Declared => {
+                        let declared = judge::declared(self.reader.marks(), self.types, head);
+                        let params = declared.as_ref().and_then(judge::Declared::params);
+                        let [_] = params.ok_or(unsupported)? else {
+                            return Err(unsupported);
+                        };
+                        let argument = self.part(&parts[0].value, groups)?;
+                        let operands = [head.into(), argument.into()];
+                        let rule = Rule::Applied { sole: true };
+                        return self.ruled(site, rule, &operands, unsupported);
+                    }
                 };
                 let [param] = self.param_names(constructor).ok_or(unsupported)? else {
                     return Err(unsupported);
@@ -507,8 +614,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             // name or of a bucket key.
             3 if let Some((kind, quotes)) = needing(node) => {
                 let head = self.part(kind, groups)?;
-                let kind = self.head(site, head, unsupported)?;
-                if kind.is_some_and(|kind| kind.code_parent().is_none()) {
+                let kind = self.closed_head(site, head, unsupported)?;
+                if kind.code_parent().is_none() {
                     return Err(unsupported);
                 }
                 let mut names = BumpVec::with_capacity_in(quotes.len(), self.scratch);
@@ -517,17 +624,6 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                         needed_entry(quote.as_part().ok_or(unsupported)?).ok_or(unsupported)?,
                     );
                 }
-                let Some(kind) = kind else {
-                    // The names as a record's fields: their set, each once.
-                    let mut fields = BumpVec::with_capacity_in(names.len(), self.scratch);
-                    for name in names.iter() {
-                        if !fields.iter().any(|(seen, _)| seen == name) {
-                            fields.push((*name, Parametric::from(KType::ANY)));
-                        }
-                    }
-                    let operands = [head.into(), self.named(&fields)];
-                    return self.spelled(site, Rule::Needing, &operands, unsupported);
-                };
                 Ok(
                     crate::scope::needing(self.types, self.scratch, kind, &names)
                         .ok_or(unsupported)?
@@ -537,9 +633,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             // `UNBUILT Kind` — `Code` or a code kind below it, whatever its code needs.
             2 if keyword(0, &KEYWORDS.unbuilt) => {
                 let head = self.part(&parts[1].value, groups)?;
-                let Some(kind) = self.head(site, head, unsupported)? else {
-                    return self.spelled(site, Rule::Unbuilt, &[head.into()], unsupported);
-                };
+                let kind = self.closed_head(site, head, unsupported)?;
                 Ok(unbuilt(self.types, kind).ok_or(unsupported)?.into())
             }
             // `Sig WITH {Param = Type, …}` — a declared signature with some head parameters pinned.
@@ -547,13 +641,26 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 && let ExpressionPart::RecordLiteral(pins) = &parts[2].value =>
             {
                 let head = self.part(&parts[0].value, groups)?;
-                let Some(signature) = self.head(site, head, unsupported)? else {
-                    let mut pinned = BumpVec::with_capacity_in(pins.len(), self.scratch);
-                    for (name, pin) in pins.iter() {
-                        pinned.push((*name, self.part(pin, groups)?));
+                let signature = match self.head(site, head, unsupported)? {
+                    Head::Closed(signature) => signature,
+                    Head::Declared => {
+                        let declared = judge::declared(self.reader.marks(), self.types, head);
+                        let Some(judge::Declared::Signature(signed)) = declared else {
+                            return Err(unsupported);
+                        };
+                        let mut pinned = BumpVec::with_capacity_in(pins.len(), self.scratch);
+                        for (name, pin) in pins.iter() {
+                            let BinderSymbol::Type(parameter) = name else {
+                                return Err(unsupported);
+                            };
+                            if !signed.declares_parameter(*parameter) {
+                                return Err(unsupported);
+                            }
+                            pinned.push((*name, self.part(pin, groups)?));
+                        }
+                        let operands = [head.into(), self.named(&pinned)];
+                        return self.ruled(site, Rule::Pinned, &operands, unsupported);
                     }
-                    let operands = [head.into(), self.named(&pinned)];
-                    return self.spelled(site, Rule::Pinned, &operands, unsupported);
                 };
                 self.pin(site, signature, pins, groups)
             }
@@ -612,20 +719,22 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     /// a head parameter: the meet relates concrete types only, and each call solves the variable.
     /// Each operand past the first is met through the rule ([`Rule::Meet`](crate::scope::Rule::Meet)):
     /// closed operands meet, and over a run-bound name the meet is a derived name whose term meets
-    /// what the binding gives each: `Elt & Number` is `Number` where `Elt` is `Number`. One naming
-    /// a path's variable is left for the run, as is one over names outside a walk, where no
-    /// binding is written in.
+    /// what the binding gives each: `Elt & Number` is `Number` where `Elt` is `Number`, and a path's
+    /// variable is met so, a binding closing it by module substitution. One over names outside a
+    /// walk, where no binding is written in, is left for the run.
     fn meet(&self, site: Site, operands: &[Parametric]) -> Result<Parametric, Elaboration> {
         use judge::Names;
         let mut met: Parametric = KType::ANY.into();
         for operand in operands {
             match judge::names_held(self.types, self.scratch, *operand) {
                 Names::Unbound => return Err(Elaboration::MeetOverVariable { site }),
-                Names::Path => return Err(Elaboration::Unknown { site }),
-                Names::Closed | Names::RunBound => {}
+                Names::Closed | Names::RunBound | Names::Path => {}
             }
             met = judge::met(self.reader.marks(), self.types, self.scratch, met, *operand)
-                .ok_or(Elaboration::Unknown { site })?;
+                .map_err(|unwalked| Elaboration::Unknown {
+                    site,
+                    unwalked: unwalked.into(),
+                })?;
         }
         Ok(met)
     }
@@ -633,11 +742,13 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
     /// name quotes to bound quotes; an entry naming no lone type is unsupported. Every bound is
     /// read under the group with no bounds of its own, so a bound naming one of the group's names
-    /// is refused.
+    /// is refused. A callable's own group (`own`) may bound a name over an encloser's names
+    /// ([`bound`](Self::bound)); a type's may not.
     pub(super) fn group(
         &self,
         part: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
+        own: bool,
     ) -> Result<QuantifierGroup<'x>, Elaboration> {
         let mut group = QuantifierGroup::empty(self.scratch);
         let mut written = BumpVec::new_in(self.scratch);
@@ -653,32 +764,57 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             bounds: &[],
             outer: Some(groups),
         };
-        for bound in written {
+        for (name, bound) in group.names.iter().zip(written) {
             group.bounds.push(match bound {
-                Some(part) => self.bound(part, &unbounded)?,
+                Some(part) => {
+                    let (laid, over_names) = self.bound(part, &unbounded, own)?;
+                    if let Some(written) = over_names {
+                        group.related.push((*name, written));
+                    }
+                    laid
+                }
                 None => KType::ANY,
             });
         }
         Ok(group)
     }
 
-    /// A bound: a closed, inhabited type. One naming a run-bound name is left for the run; one
-    /// naming any other type variable — a `FOR ALL` name or a signature's head parameter — or
-    /// that is `Never` is refused at its site.
+    /// A bound: a closed, inhabited type, beside the bound as written where it reads an encloser's
+    /// run-bound names. A callable's own group (`own`) lays such a bound at its upper end at every
+    /// binding (`bound_above`, never read as the names' bounds, which a contravariant position
+    /// would put below an instance), and the run writes the binding's content in where the
+    /// callable is born; inside a type it is refused
+    /// ([`BoundOverRunBound`](Elaboration::BoundOverRunBound)), since no type written over names
+    /// holds a scheme whose bound a binding decides. One naming any other type variable — a `FOR
+    /// ALL` name or a signature's head parameter — or that is `Never` is refused at its site.
     pub(super) fn bound(
         &self,
         part: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
-    ) -> Result<KType, Elaboration> {
-        let refused = Elaboration::Bound {
-            site: self.reader.shape().site(part),
+        own: bool,
+    ) -> Result<(KType, Option<Parametric>), Elaboration> {
+        let site = self.reader.shape().site(part);
+        let refused = Elaboration::Bound { site };
+        let before = self.reader.rigid_reads();
+        let written = self.part(part, groups)?;
+        let over_names = self.reader.rigid_reads() > before;
+        if over_names && !own {
+            return Err(Elaboration::BoundOverRunBound { site });
+        }
+        let laid = match over_names {
+            true if judge::names_held(self.types, self.scratch, written)
+                == judge::Names::Unbound =>
+            {
+                return Err(refused);
+            }
+            true => judge::upper_end(self.types, self.scratch, written).into(),
+            false => written,
         };
-        let bound =
-            self.closed_operands(self.reader.shape().site(part), || self.part(part, groups))?;
-        // An opaque carrier is concrete, but a variable's bound holds none. A bound over names no
-        // binding gives at load is refused, so reading it closed judges nothing.
-        match judge::static_of(self.types, bound) {
-            Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => Ok(bound),
+        // An opaque carrier is concrete, but a variable's bound holds none.
+        match judge::static_of(self.types, laid) {
+            Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => {
+                Ok((bound, over_names.then_some(written)))
+            }
             _ => Err(refused),
         }
     }
@@ -691,7 +827,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             .fellows
             .read
             .iter()
-            .find(|fellow| fellow.handle == constructor && !fellow.params.is_empty())
+            .find(|fellow| fellow.handle == constructor.into() && !fellow.params.is_empty())
         {
             return Some(fellow.params);
         }
@@ -776,12 +912,10 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             },
         )?;
         if !group.names.is_empty() {
+            let site = self.reader.shape().site(schema);
+            storable(site, group.names.len(), (Width::Parameters, params.len()))?;
             let params = params.iter().map(|(_, param)| *param);
-            self.untied(
-                self.reader.shape().site(schema),
-                (&group.names, &group.bounds),
-                params,
-            )?;
+            self.untied(site, (&group.names, &group.bounds), params)?;
         }
         let ret = self.part(ret, groups)?;
         Ok(self
@@ -823,12 +957,11 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             Ok(())
         })?;
         if !group.names.is_empty() {
+            let site = self.reader.shape().site(head);
+            // Counted as the head's slots, as its author wrote them.
+            storable(site, group.names.len(), (Width::Slots, params.len()))?;
             let params = params.iter().map(|(_, param)| *param);
-            self.untied(
-                self.reader.shape().site(head),
-                (&group.names, &group.bounds),
-                params,
-            )?;
+            self.untied(site, (&group.names, &group.bounds), params)?;
         }
         let ret = self.part(ret, groups)?;
         Ok(self
@@ -872,15 +1005,13 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         })?;
         let classes = dense_classes(self.scratch, &ranks);
         if !group.names.is_empty() {
+            let site = self.reader.shape().site(head);
+            storable(site, group.names.len(), (Width::Slots, ranks.len()))?;
             let slots = elements.iter().filter_map(|element| match element {
                 DispatchTokenElement::Slot(slot) => Some(*slot),
                 DispatchTokenElement::Keyword(_) => None,
             });
-            self.untied(
-                self.reader.shape().site(head),
-                (&group.names, &group.bounds),
-                slots,
-            )?;
+            self.untied(site, (&group.names, &group.bounds), slots)?;
         }
         let ret = self.part(ret, own)?;
         Ok(self
@@ -977,11 +1108,30 @@ fn path_type(
     match read {
         TypeAt::Type(held) => Ok(held.into()),
         TypeAt::Rigid(held) => Ok(held),
-        TypeAt::Unknown => Err(Elaboration::Unknown { site }),
+        TypeAt::Unknown(unwalked) => Err(Elaboration::Unknown { site, unwalked }),
         TypeAt::NotAType => Err(Elaboration::NoSuchMember {
             owner: owner.into(),
             name: name.symbol(),
             site,
         }),
+    }
+}
+
+/// Refuse a quantified function type or expression shape at `site` over `names` `FOR ALL` names
+/// and `positions` parameters or slots where either is past [`WIDEST`]: a stored solve names each
+/// by a bit, and a call by name reaches the same stored solve as a keyworded use. The limit is the
+/// representation's, not the language's.
+fn storable(
+    site: Site,
+    names: usize,
+    (width, positions): (Width, usize),
+) -> Result<(), Elaboration> {
+    let (width, count) = match names > WIDEST {
+        true => (Width::Names, names),
+        false => (width, positions),
+    };
+    match count > WIDEST {
+        true => Err(Elaboration::TooWide { width, count, site }),
+        false => Ok(()),
     }
 }

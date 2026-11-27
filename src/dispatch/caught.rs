@@ -116,7 +116,7 @@ fn chosen(
 ) -> Option<u16> {
     let (types, scratch) = (&at.types, Bump::new());
     let (shape, facts) = (at.view.shape(), at.view.facts());
-    let arms = facts.arms(shape, shape.site_of_node(node))?;
+    let arms = facts.arms(&scratch, shape, shape.site_of_node(node))?;
     let error = at.program.error_type();
     let (_, guards) = arm_guards(types, &scratch, shape, node, Some(error), |_| None);
     let variant = at.program.error_variant(kind);

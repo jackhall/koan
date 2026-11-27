@@ -14,14 +14,16 @@
 //! node is its bottom and goes to the cell's home. A part, a block or a tie's eager parts are
 //! pushed above the node that asks for them and run in the same step; the cell parks only on a
 //! frame a node spawned.
+//!
+//! A part held in place is evaluated and bound by the body's runner before the unit holding it
+//! runs, as a `LET` holding it would be; a node asking for it is handed the bound value
+//! ([`held_value`](super::body::held_value)).
 
 use std::cell::Cell;
 
 use crate::knot::{KActivationView, KInner, KValue};
 use crate::memory::{Bump, BumpVec, resident};
-use crate::scheduler::{
-    Action, Held, Received, Seek, Slot as Asked, Step, StepError, Taken, Use, Work,
-};
+use crate::scheduler::{Action, Held, Received, Slot as Asked, Step, StepError, Taken, Use, Work};
 use crate::scope::{Link, Segment, Site};
 use crate::values::{Chain, DepotRef, KeptCell, Value};
 
@@ -93,22 +95,13 @@ pub enum Next<'graph, 'here> {
     Value(Held<'graph, 'here>),
     /// The fault the node ends with: what lies inside it.
     Raised(KInner<'graph, 'here>),
-    /// The node is in tail position and its call keeps the contract: the cell hops.
-    Tail(Tailed<'graph, 'here>),
+    /// The node is in tail position and its call keeps the contract: the cell hops into the
+    /// call's frame, which runs under the depot slot beside it.
+    Tail(Work<'graph, 'here, KBundle>, DepotRef),
     /// A `TRY` or `CATCH` reads the kept cell beside, and the node resumes beside it.
     Beside(KeptCell),
     /// The machinery's own failure.
     Failed(StepError),
-}
-
-/// How a tail hops into a call's frame: sought, or under the frame's own settlement.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a seek carries what a miss settles; boxing it would allocate per tail call"
-)]
-pub enum Tailed<'graph, 'here> {
-    Seeking(Work<'graph, 'here, KBundle>, Seek<'graph>),
-    Under(Work<'graph, 'here, KBundle>, DepotRef),
 }
 
 /// A block a node runs: its segment, the view it sits in, how its parameters are bound, what it
@@ -396,6 +389,20 @@ fn ran<'graph, 'here, 'scratch>(
                 stack.top = Some(Task::Node(node));
                 match next {
                     Next::Part { site, use_ } => {
+                        let (code, facts) = step.door();
+                        let reading = node.view.reading(&code, facts);
+                        if let Some(value) = super::body::held_value(&reading, site) {
+                            let check = caches.then_some(types);
+                            let use_ = use_.within(node.use_);
+                            let held = Held::bare(value);
+                            let Some(held) =
+                                step.crossed_as(use_, held, check.map(|types| types as _))
+                            else {
+                                return step.failed(StepError::Stale);
+                            };
+                            outcome = Some(Outcome::Value(held));
+                            continue;
+                        }
                         let part = Node::born(
                             node.program,
                             Evaluated::Part(site),
@@ -438,10 +445,7 @@ fn ran<'graph, 'here, 'scratch>(
                     }
                     // A node in tail position: everything below it only hands its value on, so it
                     // dies with the cell.
-                    Next::Tail(Tailed::Seeking(work, seek)) => {
-                        return step.tail_seeking(work, seek);
-                    }
-                    Next::Tail(Tailed::Under(work, build)) => return step.tail_under(work, build),
+                    Next::Tail(work, under) => return step.tail_under(work, under),
                     Next::Beside(kept) => {
                         let (state, scratch) = stack.parked(&step);
                         return step.read_beside(kept, run, state, scratch);

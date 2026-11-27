@@ -7,19 +7,20 @@ something catches it, and the parts of an expression after the one that failed
 never run. An uncaught error stops the program and prints its message to
 standard error, and beneath it the **trace**: one line per call the error came
 out of, innermost first, each naming the function's type, the call as you wrote
-it, and where the call is:
+it, and where the call is. Here `box.p`, a record field declared `Any`, may
+hold anything, so reading `z` off it is checked as the program runs:
 
 ```koan
-EXPR #(BOOM p :Any) -> Number = #(p.z + 1)
+EXPR #(BOOM box :{p :Any}) -> Number = #(box.p.z + 1)
 PRINT "before"
-PRINT (BOOM {x = 1})
+PRINT (BOOM {p = {x = 1}})
 PRINT "after"
 ```
 
 ```text
 before
 error: :{x :Number} has no field z
-  in :(FN :{p :Any} -> Number) (BOOM {x = 1}) at <input>:3:7
+  in :(FN :{box :{p :Any}} -> Number) (BOOM {p = {x = 1}}) at <input>:3:7
 ```
 
 An error raised outside any call prints no trace line. A call that runs many
@@ -42,6 +43,26 @@ error: <input>:2:7: no overload of `_ + _` admits these arguments:
   Str, which can never satisfy Number
 ```
 
+A parameter declared `Any` is checked the same way, once for each call, against
+the argument the call hands it. Where the program's text fixes that argument, a
+body that can never run on it is refused when the program loads, located in the
+body, with the call beneath it:
+
+```koan
+EXPR #(BOOM p :Any) -> Number = #(p.z + 1)
+PRINT "before"
+PRINT (BOOM {x = 1})
+PRINT "after"
+```
+
+```text
+error: <input>:1:35: :{x :Number} has no field z
+  in (BOOM {x = 1}) at <input>:3:7
+```
+
+So the errors this chapter catches come from values whose type the program does
+not follow, such as a record field declared `Any`.
+
 ## Catching errors with `TRY`
 
 `TRY <body> WITH #{<arms>}` runs its body, a parenthesized block. If the body
@@ -55,9 +76,9 @@ head is:
 - `_` — the arm for every kind no other head names.
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-PRINT (TRY (GRAB {x = 1}) WITH #{NoField: ("no z here")})
-PRINT (TRY (GRAB {z = 2}) WITH #{NoField: ("no z here")})
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+PRINT (TRY (GRAB {p = {x = 1}}) WITH #{NoField: ("no z here")})
+PRINT (TRY (GRAB {p = {z = 2}}) WITH #{NoField: ("no z here")})
 ```
 
 ```text
@@ -77,19 +98,19 @@ those, each kind has fields of its own: a `NoField` holds `of`, the value that
 lacked the field, and `field`, the field's name.
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-TRY (GRAB {x = 1}) WITH #{NoField: (PRINT it)}
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+TRY (GRAB {p = {x = 1}}) WITH #{NoField: (PRINT it)}
 ```
 
 ```text
-{field = z, frames = [{at = <input>:2:5, call = GRAB {x = 1}, callee = :(FN :{p :Any} -> Any), count = 1}], message = :{x :Number} has no field z, of = {x = 1}}
+{field = z, frames = [{at = <input>:2:5, call = GRAB {p = {x = 1}}, callee = :(FN :{box :{p :Any}} -> Any), count = 1}], message = :{x :Number} has no field z, of = {x = 1}}
 ```
 
 Read one field off it as off any record value:
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-TRY (GRAB {x = 1}) WITH #{NoField: ((PRINT it.message) (PRINT it.of))}
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+TRY (GRAB {p = {x = 1}}) WITH #{NoField: ((PRINT it.message) (PRINT it.of))}
 ```
 
 ```text
@@ -102,13 +123,13 @@ above is the record value itself, not its type. `frames` lists every call betwee
 the error and the `TRY`:
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-EXPR #(OUTER p :Any) -> Any = #((LET got = (GRAB p)) (got))
-TRY (OUTER {x = 1}) WITH #{NoField: (PRINT it.frames)}
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+EXPR #(OUTER box :{p :Any}) -> Any = #((LET got = (GRAB box)) (got))
+TRY (OUTER {p = {x = 1}}) WITH #{NoField: (PRINT it.frames)}
 ```
 
 ```text
-[{at = <input>:2:44, call = GRAB p, callee = :(FN :{p :Any} -> Any), count = 1}, {at = <input>:3:5, call = OUTER {x = 1}, callee = :(FN :{p :Any} -> Any), count = 1}]
+[{at = <input>:2:51, call = GRAB box, callee = :(FN :{box :{p :Any}} -> Any), count = 1}, {at = <input>:3:5, call = OUTER {p = {x = 1}}, callee = :(FN :{box :{p :Any}} -> Any), count = 1}]
 ```
 
 [The error kinds a running program meets](#the-error-kinds-a-running-program-meets)
@@ -120,13 +141,13 @@ A named arm always wins over `_`, whatever their order, so you can handle the
 kinds you expect and let `_` take the rest:
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-EXPR #(SIZE p :Any) -> Any = #(MATCH p WITH #{Number: (it), Str: (LENGTH it)})
-PRINT (TRY (SIZE true) WITH #{
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+EXPR #(SIZE box :{p :Any}) -> Any = #(MATCH box.p WITH #{Number: (it), Str: (LENGTH it)})
+PRINT (TRY (SIZE {p = true}) WITH #{
   NoField: ("a field")
   _: ("something else")
 })
-PRINT (TRY (GRAB 1) WITH #{
+PRINT (TRY (GRAB {p = 1}) WITH #{
   _: ("something else")
   NoField: ("a field")
 })
@@ -142,14 +163,14 @@ not caught: it leaves the `TRY` as it came, trace and all, as if the `TRY` were
 not there:
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-PRINT (TRY (GRAB {x = 1}) WITH #{NoArm: ("no arm")})
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+PRINT (TRY (GRAB {p = {x = 1}}) WITH #{NoArm: ("no arm")})
 PRINT "after"
 ```
 
 ```text
 error: :{x :Number} has no field z
-  in :(FN :{p :Any} -> Any) (GRAB {x = 1}) at <input>:2:12
+  in :(FN :{box :{p :Any}} -> Any) (GRAB {p = {x = 1}}) at <input>:2:12
 ```
 
 An error raised inside an arm is not caught by that arm's `TRY`; it leaves the
@@ -159,8 +180,8 @@ Because the `TRY` produces whichever value its body or its arm does, it is a
 clean way to supply a fallback:
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-LET safe = (TRY (GRAB {x = 1}) WITH #{_: ("default")})
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+LET safe = (TRY (GRAB {p = {x = 1}}) WITH #{_: ("default")})
 PRINT safe
 ```
 
@@ -183,17 +204,18 @@ hold it to one type, ascribe it: `(TRY … WITH …) :! :Str`.
 | `Unascribable` | a value does not satisfy its `:!` ascription       | `value`, `ascribed`                  |
 
 Most of these the load already refuses wherever it can see the types; at run
-time they come from values whose type is `Any`, or a union, until they arrive:
+time they come from values whose type the program does not follow, such as a
+record field declared `Any`, or from a union, until they arrive:
 
 ```koan
-EXPR #(HALF n :Any) -> Number = #(n)
-PRINT (TRY (HALF "two") WITH #{Returned: (it.message)})
+EXPR #(HALF box :{n :Any}) -> Number = #(box.n)
+PRINT (TRY (HALF {n = "two"}) WITH #{Returned: (it.message)})
 LET pair = ({k = 1} :! :{k :Any})
 PRINT (TRY (MATCH pair.k WITH #{Str: (it)}) WITH #{NoArm: (it.scrutinee)})
 ```
 
 ```text
-:(FN :{n :Any} -> Number) returned Str, which does not satisfy Number
+:(FN :{box :{n :Any}} -> Number) returned Str, which does not satisfy Number
 1
 ```
 
@@ -208,14 +230,14 @@ and decide later. `CATCH <body>` runs its body and produces a
 over the same record value a `TRY`'s `it` holds:
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-PRINT (CATCH (GRAB {z = 2}))
-PRINT (CATCH (GRAB {x = 1}))
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+PRINT (CATCH (GRAB {p = {z = 2}}))
+PRINT (CATCH (GRAB {p = {x = 1}}))
 ```
 
 ```text
 :(Ok {Error = Never, Ok = Number})(2)
-:(Error {Error = NoField, Ok = Never})(NoField({field = z, frames = [{at = <input>:3:14, call = GRAB {x = 1}, callee = :(FN :{p :Any} -> Any), count = 1}], message = :{x :Number} has no field z, of = {x = 1}}))
+:(Error {Error = NoField, Ok = Never})(NoField({field = z, frames = [{at = <input>:3:14, call = GRAB {p = {x = 1}}, callee = :(FN :{box :{p :Any}} -> Any), count = 1}], message = :{x :Number} has no field z, of = {x = 1}}))
 ```
 
 `CATCH` takes every kind. Use it when you want to hold the outcome and hand it
@@ -241,8 +263,8 @@ And like any union, you take one apart with `MATCH … UNDER`. A `CATCH`'s error
 is a value of `Error`, which you take apart the same way:
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-LET outcome = (CATCH (GRAB {x = 1}))
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+LET outcome = (CATCH (GRAB {p = {x = 1}}))
 PRINT (MATCH outcome UNDER Result WITH #{
   Ok: ("worked")
   Error: (MATCH it UNDER Error WITH #{NoField: (it.message), _: ("other")})
@@ -259,8 +281,8 @@ A `TRY` or `CATCH` body is a block, and so is each arm: a name bound inside one
 is local to it and gone afterward.
 
 ```koan
-EXPR #(GRAB p :Any) -> Any = #(p.z)
-TRY ((LET inside = 1) (GRAB {x = inside})) WITH #{_: ((LET note = "local") (PRINT note))}
+EXPR #(GRAB box :{p :Any}) -> Any = #(box.p.z)
+TRY ((LET inside = 1) (GRAB {p = {x = inside}})) WITH #{_: ((LET note = "local") (PRINT note))}
 PRINT note
 ```
 

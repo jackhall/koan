@@ -3,8 +3,8 @@
 
 mod boundary;
 mod evaluator;
+pub(crate) mod frame_bound;
 mod programs;
-pub(crate) mod stores;
 mod substrate;
 
 use std::cell::RefCell;

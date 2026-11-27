@@ -49,15 +49,15 @@ straight into `PRINT`. When the arms produce different types, the `MATCH` may
 be any of them. To check a `MATCH`'s value yourself, ascribe it with `:!`:
 
 ```koan
-LET twice = (FN :{x :Any} -> Any = #((MATCH x WITH #{Number: (x + x), Str: (it)}) :! Number))
-PRINT (twice {x = 4})
-PRINT (twice {x = "four"})
+LET twice = (FN :{box :{x :Any}} -> Any = #((MATCH box.x WITH #{Number: (it + it), Str: (it)}) :! Number))
+PRINT (twice {box = {x = 4}})
+PRINT (twice {box = {x = "four"}})
 ```
 
 ```text
 8
 error: Str does not satisfy its ascription Number
-  in :(FN :{x :Any} -> Any) (twice {x = "four"}) at <input>:3:7
+  in :(FN :{box :{x :Any}} -> Any) (twice {box = {x = "four"}}) at <input>:3:7
 ```
 
 ## Matching on a type or a value

@@ -21,13 +21,11 @@
 //!
 //! See [program/README.md](program/README.md).
 
-pub(crate) mod activation_store;
 mod body;
 mod bundle;
+mod compose;
 mod exit;
 mod record;
-pub(crate) mod resume;
-mod settle;
 mod stack;
 mod substrate;
 
@@ -35,23 +33,20 @@ mod substrate;
 pub(crate) mod tests;
 
 #[cfg(test)]
-pub(crate) use body::DECIDING;
+pub(crate) use body::ADMITTED_BY_NAME;
+#[cfg(test)]
+pub(crate) use body::{INSTANCED, bound_of};
 pub use body::{Runner, call, eval, run, under_composition};
 pub use bundle::{
     ArmKept, Catching, Entered, FrameKept, FrameLink, Handed, KBirth, KBirthFamily, KBundle,
     KScratch, KScratchFamily, KState, KStateFamily, Keeps, Passing, Within,
 };
+pub use compose::{born_under, called_function};
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Output, Owed, Program, kept};
-#[cfg(test)]
-pub(crate) use settle::{CROSS_CHECK, LEVELS, REQUESTING, SEEKING, UNSOUGHT};
-pub use settle::{called_function, seek};
-pub use stack::{BlockEntry, Delivered, Evaluator, Next, Node, Tailed};
+pub use stack::{BlockEntry, Delivered, Evaluator, Next, Node};
 #[cfg(test)]
 pub(crate) use substrate::Ran;
-/// The cap on a body's bindings the load's trace names.
-#[cfg(test)]
-pub(crate) const TRACE_CAP: usize = crate::build::trace::CAP;
 #[cfg(test)]
 pub(crate) use substrate::walked;
 pub use substrate::{CellSubstrate, Outcome, Running, STACK_BYTES, Uncaught};

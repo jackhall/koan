@@ -30,12 +30,25 @@ is pinned, through `view::pinned_view`, which takes `from*` from the pins as
 written ([`walk/views.rs`](../../src/dispatch/walk/views.rs) `nested_view`).
 Which of the 11 types the load misses, and why, is not yet known.
 
+The load reads nothing through a view's tree either. A type path through a
+view's nested module member, `v.inner.Extra`, resolves by class over a leaf on
+`v` whose chain `[inner]` nothing binds, so a rigid reaches the run, where
+`LET i = v.inner` then `i.Extra` names the member. `inner`'s declared type
+leaves `Extra` hidden; only the nested view carries it.
+
 **Acceptance criteria.**
 
 - The program above interns no type at run, and neither does its list form.
   Tests in `dispatch/tests/views.rs` pin both counts at 0.
 - The nested view's `from*` and `hidden` that the load lays are those the run's
   exposure builds over `o`'s underlying.
+- A type path through a view's nested module member names the member the
+  nested view hides: over the `NESTED` prelude of
+  [`dispatch/tests/modules.rs`](../../src/dispatch/tests/modules.rs),
+  `PRINT v.inner.Extra` prints `Extra`, and `LET t :(v.inner.Extra) =
+  v.inner.two` then `PRINT t` prints `Extra(s)`, as they do through
+  `LET i = v.inner`. The test
+  `a_path_through_a_nested_view_names_its_hidden_member` passes un-ignored.
 
 **Directions.**
 
@@ -44,6 +57,12 @@ Which of the 11 types the load misses, and why, is not yet known.
   the coerced members. Then either read the pins back through the nested
   tree's sealing before `pinned_view` takes them, or have the tree's exposure
   answer for an opaque cell.
+- *A path through a nested view — decided.* The load reads a member through a
+  view's tree: a step through a `Tree::View` yields the nested member's view
+  tree — the underlying's member viewed at its declared application with the
+  outer view's hidden sides, as `nested_view` builds it — its digest the run's
+  nested view's ([`graph/trees.rs`](../../src/dispatch/graph/trees.rs)
+  `read_step`).
 
 ## Dependencies
 

@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 1fa666a321ed7f97318453806eda1c200bacc4bf1fb8d648e0396b96dc7b5197 # shrinks to program = Dispatched { ranked: false, registrations: [Registration { quantified: 0, slots: [Str] }], parameters: [(Number, "1")], arguments: [None] }
+cc 232c38b50f29c74d34b70c2e902231637072fceb5c26f123f0cda2292351be27 # shrinks to program = Dispatched { ranked: false, registrations: [Registration { quantified: 1, slots: [Str, Variable(0)] }], parameters: [(Union(Any, Record([(0, Any), (2, Str)])), "{x = \"s\", z = \"t\"}"), (Union(Union(Any, Null), Union(Union(Null, Record([])), Null)), "null")], arguments: [Some("\"t\""), None] }
+cc 5e09c77b1390efb7e13ed025ccafa3c4738f8d41030a38d54a5076878f9a2e52 # shrinks to program = Dispatched { ranked: false, registrations: [Registration { quantified: 2, slots: [Union(Variable(0), List(Variable(1))), List(Never)] }], parameters: [(Record([(2, List(Union(Record([]), Any))), (2, Number)]), "{z = []}"), (Union(Union(Never, Any), Str), "2")], arguments: [Some("null"), None] }

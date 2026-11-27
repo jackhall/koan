@@ -44,12 +44,10 @@ A loaded program's graph is stood up instead by the **load door**,
 `Graph::load` ([load.rs](load.rs)): it runs the caller's load closure first,
 outside any cell, and only then stands the graph over one slab root, the
 **run root**, where every root work is born. The closure is handed nothing,
-and returns the type tiers, the load's facts — the layers the load laid
-among them, which a seek tries before the depot
-([below](#the-build-depot)) — and the door a miss settles through
-([`Settles`](seek.rs)); a refusal it returns stands no graph. The load door
-also takes the depot's budget. A graph `Graph::new` makes runs no program:
-its facts are empty, and every settlement it builds holds none.
+and returns the type tiers, the load's facts and the door a composition's
+miss composes through (`Composes`, [below](#the-build-depot)); a refusal it
+returns stands no graph. The load door also takes the depot's budget. A graph
+`Graph::new` makes runs no program: its facts are empty.
 
 `Scheduler` owns no graph. It is a view made per call: `Scheduler::over` borrows
 a `Graph` mutably and keeps the ready stack and a buffer of requests beside it.
@@ -153,11 +151,12 @@ previous step parked, and exposes:
   lent half, and none writes the
   agent tier's types. `results_with` and
   `finish_with` run a pinned value's debug check against such a chain;
-- its **door**, the code and the facts of the base its chain rests on beneath
-  the settlement it runs under, borrowed from the depot for the step alone,
-  so what a cell parks names a segment, a site or a digest instead; and the
-  decision memo's doors, `memo_entry` and `memo_lay`, over the home its
-  result is built in ([the build module](../build/README.md#activations));
+- its **door**, the code and the facts of the base it runs over — the load,
+  or the composition it runs under — borrowed from the depot for the step
+  alone, so what a cell parks names a segment, a site or a digest instead;
+  and `instances`, the instances of that base's binding graph, a synchronous
+  door a frame finds or makes the instance of a bind site through
+  ([the build module](../build/README.md#instances-at-run));
 - `state` and `scratch`, which take the cell's state and its parked scratch
   state, each once. A state is a projection of the step bundle, which a
   higher-ranked function pointer cannot take as a parameter (rustc #100013), so
@@ -172,13 +171,11 @@ previous step parked, and exposes:
 - `beside`, at a step the drain entered beside a kept cell, that cell's link
   and a chain in which every type it names resolves, at a brand of its own
   ([faults](#faults));
-- `spawn`, to ask for a child; `spawn_seeking`, to ask for one born under the
-  depot slot a `Seek` finds or builds; and `spawn_composing`, to ask for one
-  born under the composition of code composed at run time
+- `spawn`, to ask for a child; `spawn_under`, to ask for a call's frame born
+  under the depot slot its callee was born under; and `spawn_composing`, to
+  ask for one born under the composition of code composed at run time
   ([below](#the-build-depot));
 - `depot_ref`, the depot slot the cell runs under;
-- `sought`, at a call's first step, the request the drain hands back for the
-  frame to lay its level from ([below](#the-build-depot)), taken once;
 - `kept_here`, which keeps a value the cell holds at the cell itself
   ([below](#kept-and-held-values));
 - `built_as` and `crossed_as`, which place a value where a child the step
@@ -190,8 +187,8 @@ previous step parked, and exposes:
   back free. A step evaluating a node in place uses them to put each value
   where a tenant asked with that `Use` would have put it, and to hold a value
   back to check it before it ends;
-- the ends — `park`, `tail`, `tail_seeking`, `tail_under`,
-  `bounce`, `rebuild`, `replay`, `read_beside`, `finish_fresh`,
+- the ends — `park`, `tail`, `tail_under`, `bounce`, `read_beside`,
+  `finish_fresh`,
   `finish_in_home`, `finish`, `fault`, `done`, `leave` and `failed`.
 
 **No step names a place that is not its own.** There is no handle among those
@@ -199,8 +196,8 @@ doors — not the cell's own, not its consumer's, not its result's home — and 
 carrier door: no `alloc_into`, `lift`, `keep`, `redeem` or `receipt`. A step
 holds values at its own brands and nothing else. A depot slot travels above
 the scheduler as a `DepotRef`, an opaque handle only the scheduler and
-`values` open: a step is handed one by `depot_ref` and hands one back in a
-`Seek` or to `tail_under`, so it can name to the drain only a depot slot the
+`values` open: a step is handed one by `depot_ref` and hands one back to
+`spawn_under` or `tail_under`, so it can name to the drain only a depot slot the
 scheduler named to it, and a handle gone stale names nothing. Each crossing a computation needs is the veneer's to
 perform, from the provenance the drain filled:
 
@@ -303,7 +300,7 @@ delayed reclaim, and soundness rests on the substrate's brands either way.
 
 A tail takes no placement. A hop is always a `Fresh` tree cell, a sibling of
 its predecessor under its loop cell or its parent, and only a rebirth
-(`bounce`, `rebuild`, `replay`) keeps the placement its cell was born at
+(`bounce`) keeps the placement its cell was born at
 ([tail hops](#tail-hops)). Sibling
 tree cells are `Apart`, so a hop's state homed in its predecessor crosses by a
 forced copy, while state homed in the loop cell, the caller's frame or above is
@@ -500,10 +497,10 @@ its predecessor's provenance, and the predecessor is released once the
 successor holds everything that was homed in it. Two kinds of end tail, each
 deciding where the successor is born:
 
-- **A hop** (`tail`, `tail_seeking`, `tail_under`): a call's frame born
+- **A hop** (`tail`, `tail_under`): a call's frame born
   `Fresh` beside its predecessor, under the provenance's loop cell, else its
   parent.
-- **A rebirth** (`bounce`, `rebuild`, `replay`): the same work born again
+- **A rebirth** (`bounce`): the same work born again
   beside the cell, at the placement the cell was born at.
 
 The steps:
@@ -579,87 +576,39 @@ upward or copying out of it. The drain then releases the loop cell.
 
 ## The build depot
 
-The [build's](../build/README.md#where-facts-are-decided) books live in a
-**build depot** the graph owns beside the cell graph ([depot.rs](depot.rs)),
+The [build's](../build/README.md#where-facts-are-decided) compositions live in
+a **build depot** the graph owns beside the cell graph ([depot.rs](depot.rs)),
 so the cell graph holds run cells alone and the drain reads no cellgraph door
-between steps. A **depot slot** holds a **settlement**, one body's facts
-decided under one binding and found by its parent and key, or a
-**composition**, the facts of code composed at run time, a child of the root
-found by syntax digest. The root is the frozen load itself and no slot. Each
-slot carries a generation, bumped at its eviction, so a `DepotRef` held past
-it names nothing rather than the slot's next occupant. A settlement's facts
-are a `self_cell` over its own bump and an `Rc` of each depot slot its unit
-and closing records read — its parent, the composition its chain rests on, and each
-composition it pins — and a step reads them borrowed from the depot for the
-step alone.
+between steps. A **depot slot** holds a **composition**: the facts of code
+composed at run time, its binding graph and the instances frames under it make
+of that graph, a child of the root found by syntax digest. The root is the
+frozen load itself and no slot. Each slot carries a generation, bumped at its
+eviction, so a `DepotRef` held past it names nothing rather than the slot's
+next occupant. A step reads a slot's facts borrowed from the depot for the step
+alone.
 
-A layer the load laid
-([where facts are decided](../build/README.md#where-facts-are-decided)) is
-no slot: it rests in program storage, found in the load's table by its parent
-— the root or another layer the load laid — and its key, which a seek under
-either tries before the depot's, and a `DepotRef` names one by its ordinal
-there, generation-free, since nothing evicts it. A frame under one borrows
-nothing, and a settlement built beneath one holds a reference into program
-storage in place of a parent slot's `Rc`.
-
-A cell is born under a depot slot, which the drain resolves at its creation
-from how it was asked for ([seek.rs](seek.rs)), and borrows it for its life,
-tenants included:
+A cell is born under what the drain resolves at its creation from how it was
+asked for (`Lending`), and borrows it for its life, tenants included:
 
 - `spawn` and `tail` ask for a cell born under what its asker runs under: a
-  top-level statement's evaluation, or the frame of a written quote's
-  `EVAL`.
-- `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a `Seek`:
-  the depot slot the callee was born under and, where its body keys a
-  settlement on content the load names, the request by value (`Sought`) — the
-  key, what a miss settles and the types the binding carries — beside the
-  binding's image. A request the asker read off its layer carries an empty
-  image, since every type it names rests in a tier already; one it computed
-  from the values images the types no tier holds. A live hit is stamped. A
-  miss settles the body there
-  and then, through the program's `Settles` door, relaying the image into the
-  agent tier under the root, and the frame is born under the new settlement.
-  A `Seek` that `hands_back` — a frame's whose callee's body can birth a
-  callable — has the drain keep the request, beside its binding's image, in
-  the frame's continuation where the frame is born under that settlement, by
-  a hit, a miss, a replay's last level or a pinning seek, and its first step
-  takes it (`sought`, a `Requested`) to relay the image into its own region
-  and lay the frame's level there
-  ([the program](../program/README.md#settlements-and-activations)), so the
-  level's types resolve for a callable born under it wherever its asker was;
-  it is the scheduler's runtime state, never written into a region. A seek with no
-  key runs the frame under the callee's depot slot; one whose
-  parent is gone runs it under the root, handed back the request it carries,
-  if any, where its first step replays its callee's stamp (`replay`): each
-  level found or settled under the one before, from the root or the load
-  layer the chain rests on, borrowed until the frame borrows its own, the
-  last sought with that request, so the frame is born warm and its call
-  computes no key.
-- `tail_under` hands the `DepotRef` its frame ran under, for a hop of the same
-  callee that rebinds none of its keys: the successor borrows that settlement
-  with no lookup, stamping it,
-  or runs under the root where it is no longer live.
+  top-level statement's evaluation, or the frame of a written quote's `EVAL`.
+- `spawn_under` and `tail_under` ask for a call's frame, handing the
+  `DepotRef` its callee was born under: the frame runs under that
+  composition where it is live, and under the root otherwise.
 - `spawn_composing` asks for a cell running code composed at run time, under
   its composition, found by syntax digest. The books hold digests alone, so
   on a miss the cell is born under the root and its first step copies the
   code's syntax and asks again (`bounce`), and the drain builds the
-  composition over the copy. A miss under a composition binding a module of
-  other composed code pins that code's composition; where it is gone, the
-  frame's first step copies the module's syntax and asks again (`rebuild`).
+  composition over the copy through the program's `Composes` door.
 
 So no cell parks for its depot slot. A hop's successor borrows before its
 predecessor's release, and every retire releases its cell's borrow.
 
-**Held and evicted.** A depot slot is **held** while a run cell borrows it,
-while a held depot slot lies below it, or while a held settlement pins it; the
-held total moves only where a count turns, so a borrow costs the depth of its
-chain. One **budget** bounds the bytes of the depot slots no frame holds
+**Held and evicted.** A depot slot is **held** while a run cell borrows it.
+One **budget** bounds the bytes of the depot slots no frame holds
 (`BuildBudget`, 4 MiB by default): after a miss, while the unheld bytes exceed
-it, the unheld depot slot with no child, no pinner and the oldest use is
-evicted, so eviction takes leaves first, and an evicted settlement releases
-its pin before the composition it pinned is a candidate. What frames hold is
-linear in the frame stack's distinct depot slots and the compositions they
-pin, whatever the nesting depth.
+it, the unheld depot slot with the oldest use is evicted. What frames hold is
+linear in the frame stack's distinct depot slots.
 
 ## Memory
 
@@ -685,17 +634,17 @@ the crate — its tests included, which may name the crate's test scaffolding
 besides. It does not name `parse`, `elaborate`, `symbols` or `program`. It
 names the lattice for the frozen load, the agent tier and a branch alone, the
 tiers a graph holds and hands every step and crossing; `scope` for the header a graph keeps
-per habitat half (`RegionHeader`), the facts a step's door reads and a depot
-slot holds, and the decision memo; and `values` for the type chain those doors
-build and the depot's key, image, budget and handle (`LayerKey`,
-`BindingImage`, `BuildBudget`, `DepotRef`). `scope`
+per habitat half (`RegionHeader`) and the facts a step's door reads and a
+depot slot holds; `values` for the type chain those doors build and the
+depot's budget and handle (`BuildBudget`, `DepotRef`); and `build` for the
+binding graph a depot slot keeps and the instances door a step is handed. `scope`
 names `values` and is named by `knot`, so the edge forms no cycle, and neither
 names this module. `cellgraph` is reached
 only through `memory`, and `cellgraph` itself depends on neither this module
 nor koan. `tests/boundary.rs` reads the source to hold the rule there; the
 ready stack and the request buffer are the owning heap types it blanks,
 because each is the scheduler's own runtime state and never a value in a
-region, beside the replay's request list. It also holds `Step`'s public
+region. It also holds `Step`'s public
 signatures free of every handle, every module but this one and `values` from
 opening a `DepotRef`, and the drain from opening a cellgraph door between
 steps.
@@ -742,22 +691,6 @@ no layer of koan's above present. They hold, each with a workload of its own:
   through the raw slot doors a step never reaches;
 - the load door standing one slab root after the load, and handing a
   refusal back ([tests/load.rs](tests/load.rs));
-- the depot alone: a stale handle naming nothing once its slot is reused,
-  eviction taking the least recently used unheld leaf first, a borrowed
-  settlement and every ancestor of it staying through eviction, unheld bytes
-  within the budget after every miss, a parent evicted only after its last
-  child, and a child settlement and a pinned composition each releasing what
-  it holds last ([tests/depot.rs](tests/depot.rs));
-- a missed settlement built once and found warm by the next birth, two
-  bindings giving two under one parent, a settlement nesting under the frame
-  that seeks beneath it, a miss past the budget evicting the least recently
-  used unheld settlement, a parent going after its child, a loop of hops
-  holding its settlement through every miss, a call keying nothing running
-  under its callee's depot slot, a tenant's count running from its
-  creation to its release, every run cell born under a settlement carrying
-  its reference, and a missed settlement relaying the image of a binding its
-  asker minted, read by a frame after the asker is gone
-  ([tests/seek.rs](tests/seek.rs));
 - faults: a tree cell that faults kept live after its consumer finishes, its
   link read back through `read_kept`, a fault in a park's first child leaving
   the second unborn, a kept chain released parent first and child first, and
@@ -770,9 +703,4 @@ observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
-- [Setting the build budget](../../roadmap/features/bound-settings.md)
-  — the budget as a setting a user names.
 - [Agents](../../roadmap/features/agents.md) — a depot per agent.
-- [The build over the binding graph](../../roadmap/one-build/build-over-the-binding-graph.md)
-  — the depot holding compositions alone, with no key computed from a value
-  and no pin.

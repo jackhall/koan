@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 33af8b5a33aedbb2537dfd66e366c38dff446a8dfcc8898c4901ef8d6da13a2a # shrinks to a = List(List(Number)), b = Union(Number, List(Level(0))), first = List(Any), second = Number, kind = 5

@@ -2,11 +2,12 @@
 //! over.
 //!
 //! The graph holds the run cells and, beside them, the [build depot](super::depot) of the
-//! settlements frames run under; no settlement is a cell. Before a cell is born the drain resolves
-//! the depot slot it runs under: for a call's frame, what its asker's [`Seek`] finds or builds,
-//! and for any other cell, what its asker runs under. The drain borrows that depot slot for the
-//! cell's life, from its birth to its release, so a held settlement is never evicted, and a tail
-//! hop's successor borrows its frame's before the frame is released. Between steps it opens no
+//! compositions frames run under; no composition is a cell. Before a cell is born the drain
+//! resolves the depot slot it runs under: for a call's frame, the one its callee was born under,
+//! where it is live; for a cell running composed code, its composition, found or built; and for
+//! any other cell, what its asker runs under. The drain borrows that depot slot for the cell's
+//! life, from its birth to its release, so a held composition is never evicted, and a tail hop's
+//! successor borrows its frame's before the frame is released. Between steps it opens no
 //! cell but to run a step: a `Fresh` cell borrows its parent's scratch and a `Shares` one is its
 //! host's tenant.
 //!
@@ -23,10 +24,10 @@
 //! is born under and so pins free. A hop compacts it into a fresh one once it holds twice its live
 //! bytes, and the loop's last cell releases it when it delivers.
 //!
-//! A miss relays its binding's image into the agent tier, settles the body through the door the
-//! program handed the graph at load ([`Settles`]), and, once the frame borrows the settlement,
-//! evicts unheld settlements to the budget; nothing else evicts in a run. A step's door reads the
-//! settlement its cell runs under over the load.
+//! A miss builds the composition through the door the program handed the graph at load
+//! ([`Composes`]), and, once the cell borrows it, evicts unheld compositions to the budget;
+//! nothing else evicts in a run. A step's door reads the composition its cell runs under, or the
+//! load.
 //!
 //! Every field here is one scheduler's own. There is no static, no thread-local and no lazily
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
@@ -34,6 +35,7 @@
 
 use smallvec::SmallVec;
 
+use crate::build::lay::{BaseInstances, Instances};
 use crate::knot::{KLink, KRegionHeader, KValueFamily};
 use crate::memory::{
     Active, Bump, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, FIRST_CHUNK,
@@ -45,18 +47,17 @@ use crate::scheduler::action::{
 };
 use crate::scheduler::beside::{KeptHeader, ReadsBeside};
 use crate::scheduler::continuation::{
-    Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
-    Rested, StateAt, StepBundle, Work,
+    BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested,
+    StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::depot::{BuildDepot, Composed, Settled};
+use crate::scheduler::depot::{BuildDepot, Compose, Composed, Composes, Lending, Uncomposed};
 use crate::scheduler::kept::Kept;
-use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek, Settles, Unsettled};
 use crate::scope::{Facts, HalfHeader, LoadFacts, Named};
 #[cfg(test)]
 use crate::type_lattice::Branch;
 use crate::type_lattice::Halves;
-use crate::values::{BuildBudget, Chain, ContentDigest, DepotRef, Half, KeptCell, TypeTiers};
+use crate::values::{BuildBudget, Chain, DepotRef, Half, KeptCell, TypeTiers};
 
 /// What a loop cell may hold past twice its live bytes before a hop compacts it: a region's first
 /// chunk, within which growth is noise.
@@ -71,29 +72,32 @@ const COMPACTION_FLOOR: usize = FIRST_CHUNK;
 ///
 /// It holds the type tiers every step's chain reads first, so a step and a crossing take it
 /// from the graph they run over rather than from a program or a static, the load's facts every
-/// step's door reads beneath its cell's layers, and the build depot its frames run under.
+/// step's door reads, and the build depot its frames run under.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, KRegionHeader>,
     tiers: TypeTiers<'graph>,
     facts: &'graph LoadFacts<'graph>,
     depot: BuildDepot<'graph>,
-    /// The door a miss settles through.
-    settles: &'graph dyn Settles<'graph>,
+    /// The door a miss composes through.
+    composes: &'graph dyn Composes<'graph>,
+    /// The instances the agent's run cells make of the program's binding graph: none over a load
+    /// of no bodies.
+    instances: Option<&'graph Instances<'graph>>,
 }
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
-    /// over `tiers`, its unheld settlements within `budget`, over a load of no bodies.
+    /// over `tiers`, its unheld compositions within `budget`, over a load of no bodies.
     pub fn new(cap: u32, tiers: TypeTiers<'graph>, budget: BuildBudget) -> Self {
-        Graph::over(cap, tiers, (&LoadFacts::EMPTY, &Unsettled), budget)
+        Graph::over(cap, tiers, (&LoadFacts::EMPTY, &Uncomposed), budget)
     }
 
     /// A graph as [`new`](Self::new) stands one, its steps' facts read over `facts`, its misses
-    /// settled through `settles`.
+    /// composed through `composes`.
     pub(super) fn over(
         cap: u32,
         tiers: TypeTiers<'graph>,
-        (facts, settles): (&'graph LoadFacts<'graph>, &'graph dyn Settles<'graph>),
+        (facts, composes): (&'graph LoadFacts<'graph>, &'graph dyn Composes<'graph>),
         budget: BuildBudget,
     ) -> Self {
         Graph {
@@ -101,8 +105,14 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
             tiers,
             facts,
             depot: BuildDepot::new(budget),
-            settles,
+            composes,
+            instances: None,
         }
+    }
+
+    /// Lend every step `instances`, the agent's instances of the program's binding graph.
+    pub fn lend_instances(&mut self, instances: &'graph Instances<'graph>) {
+        self.instances = Some(instances);
     }
 
     /// A storage-only slab cell no drain enters or releases: the region a root work is born under
@@ -159,51 +169,19 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         self.cells.is_live(cell)
     }
 
-    /// How many settlements are live.
-    #[cfg(test)]
-    pub(crate) fn live_settlements(&self) -> usize {
-        self.depot.len()
-    }
-
     /// How many compositions are live.
     #[cfg(test)]
     pub(crate) fn live_compositions(&self) -> usize {
         self.depot.compositions()
     }
 
-    /// How many live settlements lie directly under a composition, and how many live compositions
-    /// some settlement pins.
+    /// How many times the answer function ran for an instance of a live composition's graph.
     #[cfg(test)]
-    pub(crate) fn under_compositions(&self) -> (usize, usize) {
-        self.depot.under_compositions()
+    pub(crate) fn composed_runs(&self) -> u64 {
+        self.depot.composed_runs()
     }
 
-    /// How many live settlements lie directly under `parent`.
-    #[cfg(test)]
-    pub(crate) fn children_of(&self, parent: DepotRef) -> usize {
-        self.depot.children_of(parent)
-    }
-
-    /// Whether `at` names a live settlement.
-    #[cfg(test)]
-    pub(crate) fn is_settled(&self, at: DepotRef) -> bool {
-        at != DepotRef::ROOT && self.depot.is_live(at)
-    }
-
-    /// What the live settlement `at` weighs against the budget: what a test that forces eviction
-    /// sizes its budget by.
-    #[cfg(test)]
-    pub(crate) fn settlement_bytes(&self, at: DepotRef) -> Option<usize> {
-        self.depot.bytes_of(at)
-    }
-
-    /// How many run cells borrow the live settlement `at`.
-    #[cfg(test)]
-    pub(crate) fn borrowers(&self, at: DepotRef) -> Option<usize> {
-        self.depot.borrowers(at)
-    }
-
-    /// The bytes of live settlements no run cell holds.
+    /// The bytes of live compositions no run cell holds.
     #[cfg(test)]
     pub(crate) fn unheld_bytes(&self) -> usize {
         self.depot.unheld_bytes()
@@ -224,9 +202,8 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     }
 }
 
-/// The most any step has left in each of its cell's type tiers, and how many frames sought and
-/// built a settlement: what a test reads to see a loop's tiers hold flat across hops and its
-/// settlement found once.
+/// The most any step has left in each of its cell's type tiers, and how many compositions the
+/// drain built and evicted: what a test reads to see a loop's tiers hold flat across hops.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Tiers {
@@ -240,34 +217,20 @@ pub(crate) struct Tiers {
     pub agent_verdicts: usize,
     /// Bytes the scratch bump has handed out.
     pub scratch_bytes: usize,
-    /// How many frames sought a settlement: a count, not a high-water mark.
-    pub sought: usize,
-    /// How many seeks a layer the load laid answered: a count.
-    pub laid: usize,
-    /// How many of those built one on a miss: a count.
-    pub settled: usize,
-    /// How many settlements a miss evicted: a count.
+    /// How many compositions a miss evicted: a count.
     pub evicted: usize,
-    /// How many frames were born cold because the depot slot their seek or hop named is dead: a
-    /// count.
-    pub cold_births: usize,
-    /// Nodes the drain laid into the agent tier from new settlements' askers' branches: a count.
-    pub relayed: usize,
-    /// Nodes new settlements' records named that their walks laid into the agent tier: a count.
-    pub rested: usize,
-    /// Nodes run steps laid into the agent tier, waking their state included: a count, which a
-    /// settlement's resting leaves at nothing.
+    /// Nodes run steps laid into the agent tier, waking their state included: a count.
     pub stepped: usize,
     /// How many compositions a miss built: a count.
     pub composed: usize,
+    /// How many of those hold a binding graph, their code admitted: a count.
+    pub graphs: usize,
     /// How many cells running composed code bounced with its syntax, their composition not live
     /// at their birth: a count.
     pub bounced: usize,
-    /// The most bytes of live settlements and compositions no run cell held once a miss had
-    /// evicted: a high-water mark.
+    /// The most bytes of live compositions no run cell held once a miss had evicted: a high-water
+    /// mark.
     pub unheld: usize,
-    /// The most settlements live at once at a birth: a high-water mark.
-    pub live: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -278,18 +241,6 @@ fn tally(count: impl FnOnce(&mut Tiers)) {
         count(&mut now);
         tiers.set(now);
     });
-}
-
-/// What a test hands each keyed seek's key, beside [`TIERS`] before and after the drain answered
-/// it.
-#[cfg(test)]
-pub(crate) type Answered = fn(crate::values::LayerKey, Tiers, Tiers);
-
-#[cfg(test)]
-thread_local! {
-    /// What each keyed seek's key and tallies are handed to, while a test sets it.
-    pub(crate) static ANSWERED: std::cell::Cell<Option<Answered>> =
-        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -308,18 +259,12 @@ thread_local! {
             agent: 0,
             agent_verdicts: 0,
             scratch_bytes: 0,
-            sought: 0,
-            laid: 0,
-            settled: 0,
             evicted: 0,
-            cold_births: 0,
-            relayed: 0,
-            rested: 0,
             stepped: 0,
             composed: 0,
+            graphs: 0,
             bounced: 0,
             unheld: 0,
-            live: 0,
         })
     };
 }
@@ -362,8 +307,7 @@ thread_local! {
     /// Cells a step asked for that the drain created — every spawn and every tail's successor,
     /// not a root work or a loop cell: a count. Tests reset it.
     pub(crate) static BORN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Those of them that are a call's frame, sought, hopped under a settlement, replayed or
-    /// rebuilt: a count. Tests reset it.
+    /// Those of them that are a call's frame: a count. Tests reset it.
     pub(crate) static FRAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Parks the drain has handled: a count. Tests reset it.
     pub(crate) static PARKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -396,22 +340,7 @@ pub struct Scheduler<'a, 'graph, B: StepBundle<'graph>> {
     census: Census,
 }
 
-/// Where the drain places a frame it seeks for: the depot slot it runs under, whether placing it
-/// missed, the composition its first step must rebuild, and the request its first step lays a
-/// level from.
-type Placing<'graph> = (
-    DepotRef,
-    bool,
-    Option<ContentDigest>,
-    Option<Box<Requested<'graph>>>,
-);
-
 /// One entry of the ready stack.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "an unborn request carries what a miss settles; boxing it would allocate per call, \
-              and the stack holds only the unborn siblings along one path"
-)]
 enum Entry<'graph, B: StepBundle<'graph>> {
     /// A live cell with a step to run: a woken consumer, or a root work.
     Live(CellHandle),
@@ -517,8 +446,6 @@ where
                     loop_base: 0,
                 },
                 depot: DepotRef::ROOT,
-                arrival: Arrival::Placed,
-                sought: None,
                 state,
             },
         )?;
@@ -725,7 +652,8 @@ where
 
     /// Give a request its cell, under `parent`, its birth crossing as `born` says, running under
     /// the depot slot its lending resolves to, which it borrows. `asker` is the depot slot the cell
-    /// that asked runs under. A miss evicts to the budget once the new cell borrows its settlement.
+    /// that asked runs under. A miss evicts to the budget once the new cell borrows its
+    /// composition.
     fn create(
         &mut self,
         provenance: Provenance,
@@ -736,44 +664,21 @@ where
         #[cfg(test)]
         {
             BORN.with(|born| born.set(born.get() + 1));
-            if matches!(
-                asked.lending,
-                Lending::Call(_) | Lending::Under(_) | Lending::Replay(_) | Lending::Pinning(..)
-            ) {
+            if matches!(asked.lending, Lending::Call(_)) {
                 FRAMES.with(|frames| frames.set(frames.get() + 1));
             }
         }
-        let depot = &mut self.graph.depot;
-        let mut replayed = SmallVec::<[DepotRef; 4]>::new();
-        let replaying = matches!(asked.lending, Lending::Replay(_));
-        let (under, missed, wanting, sought) = match asked.lending {
-            Lending::Parent => (asker, false, None, None),
-            Lending::Call(seek) => self.seek(seek),
-            Lending::Replay(levels) => self.replay(levels, asker, &mut replayed),
-            Lending::Pinning(seek, syntax) => {
-                let (_, built) = self.composed(Compose::Owned(syntax));
-                let (under, missed, wanting, sought) = self.seek(seek);
-                (under, missed || built, wanting, sought)
-            }
-            Lending::Under(under) if depot.is_live(under) => {
-                depot.stamp(under);
-                (under, false, None, None)
-            }
-            Lending::Under(_) => {
-                #[cfg(test)]
-                tally(|tiers| tiers.cold_births += 1);
-                (DepotRef::ROOT, false, None, None)
-            }
-            Lending::Compose(compose) => {
-                let (under, missed) = self.composed(compose);
-                (under, missed, None, None)
-            }
+        let (under, missed) = match asked.lending {
+            Lending::Parent => (asker, false),
+            // A callee of composed code whose composition is gone is born under the root, and
+            // bounces with its syntax.
+            Lending::Call(under) => match self.graph.depot.is_live(under) {
+                true => (under, false),
+                false => (DepotRef::ROOT, false),
+            },
+            Lending::Compose(compose) => self.composed(compose),
         };
         self.graph.depot.borrow(under);
-        // A replay's levels are held until the frame borrows the last: its chain holds them since.
-        for level in replayed.iter().rev() {
-            self.graph.depot.release(*level);
-        }
         if missed {
             let _evicted = self.graph.depot.evict_to_budget();
             #[cfg(test)]
@@ -785,16 +690,6 @@ where
                 });
             }
         }
-        #[cfg(test)]
-        {
-            let live = self.graph.depot.len();
-            tally(|tiers| tiers.live = tiers.live.max(live));
-        }
-        let arrival = match wanting {
-            Some(digest) => Arrival::Wanting(digest),
-            None if replaying => Arrival::Replayed,
-            None => Arrival::Placed,
-        };
         self.born(
             parent,
             asked.placement,
@@ -802,208 +697,9 @@ where
                 step: asked.step,
                 provenance,
                 depot: under,
-                arrival,
-                sought,
                 state: Rested::Dormant(asked.state, born),
             },
         )
-    }
-
-    /// The depot slot a frame born by a replay runs under, whether any level missed, the
-    /// composition its first step must rebuild, and the request its first step lays a level from:
-    /// each of `levels` found under the one before, or settled there, from `base`, the asker's —
-    /// its pins found or built first — and borrowed into `held` until the frame borrows its own;
-    /// the last is the frame's own seek. A level that settles nothing ends the replay, and the
-    /// frame is born where it stopped, with no request.
-    fn replay(
-        &mut self,
-        levels: Vec<Replayed<'graph>>,
-        base: DepotRef,
-        held: &mut SmallVec<[DepotRef; 4]>,
-    ) -> Placing<'graph> {
-        // The frame was counted cold where its own seek found its parent gone; it is born warm.
-        #[cfg(test)]
-        if levels
-            .last()
-            .is_some_and(|last| last.seek.settlement.is_some())
-        {
-            tally(|tiers| tiers.cold_births = tiers.cold_births.saturating_sub(1));
-        }
-        // A chain resting on a layer the load laid starts there; any other, at the asker's.
-        let rests = (levels.first()).map(|first| first.seek.parent);
-        let base = rests
-            .filter(|at| at.load_ordinal().is_some())
-            .unwrap_or(base);
-        let (mut parent, mut missed) = (base, false);
-        let count = levels.len();
-        for (at, Replayed { seek, pins }) in levels.into_iter().enumerate() {
-            for syntax in pins {
-                missed |= self.composed(Compose::Owned(syntax)).1;
-            }
-            let (under, miss, wanting, sought) = self.seek(Seek { parent, ..seek });
-            missed |= miss;
-            if at + 1 == count {
-                return (under, missed, wanting, sought);
-            }
-            if wanting.is_some() || under == parent {
-                return (under, missed, wanting, None);
-            }
-            self.graph.depot.borrow(under);
-            held.push(under);
-            parent = under;
-        }
-        (parent, missed, None, None)
-    }
-
-    /// The depot slot a frame `seek` asks for runs under, whether it was a miss, the composition
-    /// its first step must rebuild, and — where the seek hands it back and the frame runs under the
-    /// settlement it sought — the request its first step lays a level from: the parent itself for a
-    /// seek with no key; under the root or a load layer, the layer the load laid beneath it for the
-    /// key, which lays no level; else the settlement under the parent the key names, stamped, or
-    /// built — its binding's image relayed into the agent tier under the root, nothing relayed
-    /// under a composition. The root, cold, for a parent that is no longer live, handed the
-    /// request whatever the seek says, which the frame's replay seeks its own layer with. A miss under a composition
-    /// binding a module of another composed code pins that code's composition, where no layer below
-    /// holds the module's tree; where that composition is gone, the frame is born under the parent
-    /// wanting it rebuilt.
-    fn seek(&mut self, seek: Seek<'graph>) -> Placing<'graph> {
-        #[cfg(test)]
-        let (key, before) = (
-            (seek.settlement.as_ref()).map(|(_, sought)| sought.key),
-            TIERS.with(std::cell::Cell::get),
-        );
-        let placing = self.placed(seek);
-        #[cfg(test)]
-        if let (Some(key), Some(answered)) = (key, ANSWERED.with(std::cell::Cell::get)) {
-            answered(key, before, TIERS.with(std::cell::Cell::get));
-        }
-        placing
-    }
-
-    /// [`seek`](Self::seek)'s answer.
-    fn placed(&mut self, seek: Seek<'graph>) -> Placing<'graph> {
-        let Seek {
-            parent,
-            settlement,
-            hands_back,
-        } = seek;
-        let Some((image, sought)) = settlement else {
-            // A callee of composed code whose composition is gone is born under the root, and
-            // bounces with its syntax.
-            return match self.graph.depot.is_live(parent) {
-                true => (parent, false, None, None),
-                false => (DepotRef::ROOT, false, None, None),
-            };
-        };
-        let key = sought.key;
-        #[cfg(test)]
-        tally(|tiers| tiers.sought += 1);
-        let depot = &mut self.graph.depot;
-        // A callee whose depot slot is gone is born cold under the root, and handed its request,
-        // which its first step's replay seeks its own layer with.
-        if !depot.is_live(parent) {
-            #[cfg(test)]
-            tally(|tiers| tiers.cold_births += 1);
-            return (
-                DepotRef::ROOT,
-                false,
-                None,
-                Some(Box::new(Requested { sought, image })),
-            );
-        }
-        let handed = |image, sought| hands_back.then(|| Box::new(Requested { sought, image }));
-        // Under the root or a load layer, a layer the load laid answers first: never evicted, it
-        // borrows nothing, and a frame under it lays no level.
-        let beneath = match parent.opened() {
-            None => Some(parent.load_ordinal()),
-            Some(_) => None,
-        };
-        if let Some(beneath) = beneath
-            && let Some((ordinal, _)) = self.graph.facts.layer(beneath, key)
-        {
-            #[cfg(test)]
-            tally(|tiers| tiers.laid += 1);
-            return (DepotRef::load(ordinal), false, None, None);
-        }
-        let door = depot.door(parent, self.graph.facts);
-        let base = door.composition.map(|(digest, _)| digest);
-        if let Some(found) = depot.find(parent, key) {
-            #[cfg(debug_assertions)]
-            assert!(
-                base.is_some() || self.holds_binding(&image),
-                "a hit's binding rests: its key digests the content its types are read from"
-            );
-            self.graph.depot.stamp(found);
-            return (found, false, None, handed(image, sought));
-        }
-        // Under a composition, each module of other composed code no layer below holds the tree
-        // of pins its composition.
-        let mut pins = SmallVec::new();
-        if let Some(base) = base {
-            let below = match door.composition {
-                Some((_, composition)) => Facts::composed(composition, door.top),
-                None => Facts::under(self.graph.facts, door.top),
-            };
-            for asked in &sought.ask.bound {
-                let super::seek::Asked::Module {
-                    content,
-                    composition: Some(composed),
-                    ..
-                } = *asked
-                else {
-                    continue;
-                };
-                if composed == base
-                    || below.tree_of(content).is_some()
-                    || self.graph.facts.tree_of(content).is_some()
-                {
-                    continue;
-                }
-                match depot.composition(composed) {
-                    Some(at) => {
-                        if !pins.contains(&at) {
-                            pins.push(at);
-                        }
-                    }
-                    None => return (parent, false, Some(composed), None),
-                }
-            }
-        }
-        let pinned = depot.pinned(&pins);
-        // The binding's types rest once it resolves, before its walk reads them: in the agent tier
-        // under the root, and in the walk's own chain under a composition.
-        let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
-        let before = resting.own_len();
-        let mut relayed = before;
-        let mut rest = |walk: Option<&crate::values::Chain<'_, '_, '_, '_>>| match (base, walk) {
-            (None, _) => {
-                image.relay(&resting);
-                relayed = resting.own_len();
-            }
-            (Some(_), Some(walk)) => image.relay(walk),
-            (Some(_), None) => {}
-        };
-        let settles = self.graph.settles;
-        let built = Settled::build(
-            depot.under(parent, self.graph.facts),
-            pinned,
-            self.graph.facts,
-            |bump, below, pinned, witness| {
-                settles.settle(bump, below, pinned, &sought.ask, &mut rest, witness)
-            },
-        );
-        let Some(facts) = built else {
-            debug_assert_eq!(relayed, before, "nothing rests for a settlement not built");
-            return (parent, false, None, None);
-        };
-        let settled = self.graph.depot.insert(parent, key, facts, pins);
-        #[cfg(test)]
-        tally(|tiers| {
-            tiers.settled += 1;
-            tiers.relayed += relayed - before;
-            tiers.rested += resting.own_len() - relayed;
-        });
-        (settled, true, None, handed(image, sought))
     }
 
     /// The composition `compose` asks for, and whether it was a miss: found by its syntax digest
@@ -1025,21 +721,17 @@ where
         let Compose::Owned(syntax) = compose else {
             return (DepotRef::ROOT, false);
         };
-        let settles = self.graph.settles;
-        let facts = Composed::build(syntax, |syntax, bump, witness| {
-            settles.compose(syntax, bump, witness)
+        let composes = self.graph.composes;
+        let budget = self.graph.depot.budget().bytes.get();
+        let facts = Composed::build(syntax, budget, |syntax, home, witness| {
+            composes.compose(syntax, home, witness)
         });
         #[cfg(test)]
-        tally(|tiers| tiers.composed += 1);
+        tally(|tiers| {
+            tiers.composed += 1;
+            tiers.graphs += usize::from(facts.binding().is_some());
+        });
         (self.graph.depot.compose(digest, facts), true)
-    }
-
-    /// Whether the frozen load or the agent tier holds the node of every handle `image` carries,
-    /// as the miss that built its settlement relayed them. Lays nothing.
-    #[cfg(debug_assertions)]
-    fn holds_binding(&self, image: &crate::values::BindingImage<'_>) -> bool {
-        let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
-        image.handles().all(|kt| resting.resolves(kt))
     }
 
     /// Enter one cell, wake its state, and run the step its continuation names — beside `kept`'s
@@ -1055,10 +747,17 @@ where
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
         let (tiers, facts, books) = (graph.tiers, graph.facts, &graph.depot);
+        let instances = graph.instances;
         let Some(kept) = kept else {
             return (graph.cells)
                 .enter(cell, |context| {
-                    run_step::<B>((context, cell), tiers, (facts, books), spawns, None)
+                    run_step::<B>(
+                        (context, cell),
+                        tiers,
+                        (facts, books, instances),
+                        spawns,
+                        None,
+                    )
                 })
                 .map_err(|_| DrainStalled::Unenterable);
         };
@@ -1071,7 +770,7 @@ where
                 run_step::<B>(
                     (context, cell),
                     tiers,
-                    (facts, books),
+                    (facts, books, instances),
                     spawns,
                     Some(&header),
                 )
@@ -1171,7 +870,11 @@ fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
         CellHandle,
     ),
     tiers: TypeTiers<'graph>,
-    (load, books): (&'graph LoadFacts<'graph>, &BuildDepot<'graph>),
+    (load, books, instances): (
+        &'graph LoadFacts<'graph>,
+        &BuildDepot<'graph>,
+        Option<&'graph Instances<'graph>>,
+    ),
     spawns: &mut Spawns<'graph, B>,
     beside: Option<&dyn ReadsBeside<'graph>>,
 ) -> (Action<'graph, B>, Provenance, DepotRef)
@@ -1185,8 +888,6 @@ where
         step,
         provenance,
         depot,
-        arrival,
-        sought,
         state,
     } = context
         .continuation()
@@ -1217,20 +918,30 @@ where
         tiers.agent.len(),
         context.writer().in_use(),
     );
-    // The door reads the settlement the cell runs under, over the composition its chain rests on
-    // or the load, borrowed from the depot for the step.
-    let door = books.door(depot, load);
-    let (facts, composed) = match door.composition {
-        Some((digest, composition)) => (Facts::composed(composition, door.top), Some(digest)),
-        None => (Facts::under(load, door.top), None),
+    // The door reads the composition the cell runs under, or the load, borrowed from the depot
+    // for the step. A step under its composition makes and reads instances of the composition's
+    // graph; one under the load, of the program's.
+    let door = books.door(depot);
+    let (facts, composed, instances) = match door.composition {
+        Some((digest, composition)) => (Facts::composed(composition), Some(digest), door.instances),
+        None => (
+            Facts::under(load),
+            None,
+            instances.map(|instances| instances as &dyn BaseInstances),
+        ),
+    };
+    let facts = match instances {
+        Some(instances) => facts.answering(instances).rebinding(instances),
+        None => facts,
     };
     let step = step(Step::new(
         (context, cell),
         tiers,
         facts,
         &provenance,
-        (depot, composed, arrival, sought),
-        (books, spawns, beside),
+        (depot, composed),
+        (spawns, beside),
+        instances,
         state,
         scratch,
     ));

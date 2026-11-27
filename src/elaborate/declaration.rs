@@ -60,7 +60,7 @@ pub fn declares_nominal(node: &KExpression<'_>) -> bool {
 /// A nominal component reading one is rigid too: each member is the derived name of the group a
 /// binding seals ([`Nominals`]), through the one closed rule a closed group seals by
 /// ([`sealed_nominals`]), and so is a lone signature ([`sealed_signature`]). A signature or alias
-/// fellow of a nominal reading one is [`Elaboration::Unknown`]: its relative type is read closed.
+/// fellow of a nominal reading one is rigid alike, sealed with the group.
 ///
 /// Every member is read and every schema elaborated before the group seals, so a member of a
 /// sealed group reads its fellows as siblings and a ring of declarations needs no placeholder. Only
@@ -122,7 +122,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 members.push((member.name, None, KKind::NewType));
                 fellows.push(Fellow {
                     slot: *slot,
-                    handle: types.sibling(first),
+                    handle: types.sibling(first).into(),
                     params: &[],
                 });
             }
@@ -130,7 +130,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 members.push((member.name, None, KKind::TypeConstructor));
                 fellows.push(Fellow {
                     slot: *slot,
-                    handle: types.sibling(first),
+                    handle: types.sibling(first).into(),
                     params,
                 });
             }
@@ -149,7 +149,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 siblings.extend(owned.iter().map(|index| types.sibling(*index)));
                 fellows.push(Fellow {
                     slot: *slot,
-                    handle: types.union_of(scratch, &siblings),
+                    handle: types.union_of(scratch, &siblings).into(),
                     params,
                 });
             }
@@ -157,6 +157,8 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
         }
     }
 
+    // A run-bound name read from here on, by a relative or a schema, leaves the group to a binding.
+    let rigid = reader.rigid_reads();
     // Each signature and alias, relative: over its nominal fellows' handles, and over each other
     // signature or alias it names, read first. They are read in written order — a component's
     // members are in slot order — so a cycle among them refuses at the first one written.
@@ -192,7 +194,6 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
 
     // Each window member's schema, every type it reads an operand: a newtype's representation, a
     // family's over its parameters' quantifiers.
-    let rigid = reader.rigid_reads();
     let mut operands = BumpVec::new_in(scratch);
     let mut schemas = BumpVec::with_capacity_in(members.len(), scratch);
     for member in read.iter() {
@@ -278,7 +279,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
             }
             Declared::Signature { .. } | Declared::Alias(_) => {
                 let relative = relative.expect("a signature or alias is read relative");
-                operands.push(relative.into());
+                operands.push(relative);
                 Handed::Relative((operands.len() - 1) as u16)
             }
         });
@@ -304,7 +305,12 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 output: output as u8,
             };
             let derive = &mut |term: DerivedTerm<'_>| reader.marks().derive(term);
-            named.push(handed(types, scratch, term, derive).ok_or(Elaboration::Unknown { site })?);
+            let handle =
+                handed(types, scratch, term, derive).map_err(|unwalked| Elaboration::Unknown {
+                    site,
+                    unwalked: unwalked.into(),
+                })?;
+            named.push(handle.expect("a window whose every member a closed schema filled seals"));
         }
         return Ok(named.leak());
     }
@@ -322,7 +328,7 @@ enum Reading {
     Unread,
     /// Being read: a mention reaching it again closes a cycle through signatures and aliases alone.
     Open,
-    Read(KType),
+    Read(Parametric),
 }
 
 /// A component's signature and alias members, each read relative on first mention: over its
@@ -344,7 +350,7 @@ struct Relatives<'a, 'graph, 'x, 'tier, 'pair, 'reg, 'door, R: ?Sized> {
 impl<'graph, R: Reads<'graph> + ?Sized> Relatives<'_, 'graph, '_, '_, '_, '_, '_, R> {
     /// Member `index`'s relative type, read on first call. A call that re-enters a member still
     /// being read is a cycle through signatures and aliases alone, refused at that member.
-    fn relative(&self, index: usize) -> Result<KType, Elaboration> {
+    fn relative(&self, index: usize) -> Result<Parametric, Elaboration> {
         match self.state[index].get() {
             Reading::Read(handle) => return Ok(handle),
             Reading::Open => return Err(self.read[index].cycle()),
@@ -366,12 +372,8 @@ impl<'graph, R: Reads<'graph> + ?Sized> Relatives<'_, 'graph, '_, '_, '_, '_, '_
             locals: &[],
             binder: Cell::new(false),
         };
-        // A fellow over a run-bound name is left to the run, with the nominals it reads.
-        let handle = closed(
-            self.types,
-            self.read[index].site,
-            self.read[index].elaborate(&elaborator)?,
-        )?;
+        // A fellow over a run-bound name is rigid, sealed with the nominals it reads.
+        let handle = self.read[index].elaborate(&elaborator)?;
         self.state[index].set(Reading::Read(handle));
         Ok(handle)
     }
@@ -382,17 +384,6 @@ const TOP: Groups<'static> = Groups {
     bounds: &[],
     outer: None,
 };
-
-/// A nominal's declared part, read under [`TOP`] with no head parameter in reach: concrete where
-/// it read no name a run binds, and left unknown at `site` otherwise, since a nominal over a
-/// run-bound name is declared where it runs.
-fn closed(
-    types: &Chain<'_, '_, '_, '_>,
-    site: Site,
-    declared: Parametric,
-) -> Result<KType, Elaboration> {
-    super::judge::static_of(types, declared).ok_or(Elaboration::Unknown { site })
-}
 
 /// One member of a component, read off its declaration node before anything is elaborated.
 struct Declaration<'graph, 'x> {
@@ -549,7 +540,7 @@ pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
     reader: &R,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
-) -> Result<(KType, BumpVec<'x, HeadShape>), Elaboration> {
+) -> Result<(Parametric, BumpVec<'x, HeadShape>), Elaboration> {
     let declaration = Declaration::of(reader.shape(), node, scratch)?;
     let Declared::Signature { group, body } = declaration.kind else {
         return Err(Elaboration::Unsupported {
@@ -566,9 +557,6 @@ pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
     };
     let mut heads = BumpVec::new_in(scratch);
     let signature = signature_type(&elaborator, group, body, declaration.site, &mut heads)?;
-    let signature = super::judge::static_of(types, signature).ok_or(Elaboration::Unknown {
-        site: declaration.site,
-    })?;
     Ok((signature, heads))
 }
 
@@ -639,7 +627,7 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
     let mut draft = Signing::new(scratch);
     let mut locals: BumpVec<'_, (TypeSymbol, Parametric)> = BumpVec::new_in(scratch);
     if let Some(group) = group {
-        let group = elaborator.group(group, &TOP)?;
+        let group = elaborator.group(group, &TOP, false)?;
         for (index, (name, bound)) in group.names.iter().zip(&group.bounds).enumerate() {
             if group.names[..index].contains(name) {
                 return Err(unsupported);
@@ -802,7 +790,11 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
         operands,
     };
     let derive = &mut |term: DerivedTerm<'_>| elaborator.reader.marks().derive(term);
-    handed(types, scratch, term, derive).ok_or(Elaboration::Unknown { site })
+    let handle = handed(types, scratch, term, derive).map_err(|unwalked| Elaboration::Unknown {
+        site,
+        unwalked: unwalked.into(),
+    })?;
+    Ok(handle.expect("a signature seals at every operand"))
 }
 
 /// How a run of a `SIG` body's bodyless `GROUP` head reduces, read off its form id and — for a

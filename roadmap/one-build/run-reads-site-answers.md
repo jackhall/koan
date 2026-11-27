@@ -46,9 +46,6 @@ little else: a read's rules are `walk/lookups.rs` and `lookup.rs`, a
 
 ## Dependencies
 
-**Requires:**
-
-- [The build over the binding graph](build-over-the-binding-graph.md) — the
-  answers a run performs are the graph's.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

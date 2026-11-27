@@ -196,7 +196,7 @@ impl<'graph> Fixture<'_, 'graph> {
 
     /// What a step reads facts through, over the program the fixture last parsed.
     pub fn facts(&self) -> Facts<'graph> {
-        Facts::of(self.load())
+        Facts::under(self.load())
     }
 
     /// What a step reads shapes through, over the program the fixture last parsed.
@@ -215,7 +215,7 @@ impl<'graph> Fixture<'_, 'graph> {
         activation: &KActivation<'graph, 'cell>,
     ) -> KReading<'cell, 'graph, 'cell> {
         let load = self.load_of(activation);
-        (activation.view()).reading(&Code::of(load.shapes()), Facts::of(load))
+        (activation.view()).reading(&Code::of(load.shapes()), Facts::under(load))
     }
 
     /// The shape whose slots `activation` binds.
@@ -256,7 +256,7 @@ impl<'graph> Fixture<'_, 'graph> {
         self.load.set(Some(parsed.load));
         let activation = resident(
             writer,
-            KActivation::of_program(writer, shape, &Facts::of(parsed.load), builtins),
+            KActivation::of_program(writer, shape, &Facts::under(parsed.load), builtins),
         );
         let address = std::ptr::from_ref(activation).addr();
         self.runs.borrow_mut().push((address, parsed.load));
@@ -325,7 +325,7 @@ impl<'graph> Fixture<'_, 'graph> {
                 &self.reading_of(activation),
                 self.written(),
                 component,
-                (crate::values::DepotRef::ROOT, None),
+                crate::values::DepotRef::ROOT,
                 types,
                 self.scratch,
                 &mut |_, _| None,
@@ -423,7 +423,7 @@ impl<'graph> Fixture<'_, 'graph> {
             &self.reading_of(activation),
             self.written(),
             component,
-            (crate::values::DepotRef::ROOT, None),
+            crate::values::DepotRef::ROOT,
             types,
             self.scratch,
             &mut |_, _| Some(Supplied::Body(body)),

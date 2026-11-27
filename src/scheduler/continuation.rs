@@ -20,8 +20,7 @@ use crate::memory::{
 };
 use crate::scheduler::action::{Action, Step, Use};
 use crate::scheduler::kept::{Kept, KeptPart};
-use crate::scheduler::seek::Requested;
-use crate::values::{ContentDigest, DepotRef, TypeTiers};
+use crate::values::{DepotRef, TypeTiers};
 
 /// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
 /// the family it holds at a step and parks with, the family of what a parked cell keeps in its
@@ -192,24 +191,7 @@ where
     pub provenance: Provenance,
     /// The depot slot the cell runs under, which the drain borrowed for it at its birth.
     pub depot: DepotRef,
-    /// What the drain tells the cell's first step about how it placed it.
-    pub arrival: Arrival,
-    /// The request a frame's asker handed the drain to give its first step: the frame lays its
-    /// level from it.
-    pub sought: Option<Box<Requested<'graph>>>,
     pub state: Rested<'graph, 'cell, B>,
-}
-
-/// What a cell's birth tells its first step about how the drain placed it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Arrival {
-    /// Placed as it asked, or a step past the first.
-    Placed,
-    /// A call whose settlement binds a module of composed code whose composition, by syntax digest,
-    /// the miss found gone: the first step bounces with its syntax.
-    Wanting(ContentDigest),
-    /// Born by a replay of its callee's stamp: it does not replay again.
-    Replayed,
 }
 
 /// How a continuation holds its state.

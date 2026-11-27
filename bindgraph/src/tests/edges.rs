@@ -12,8 +12,10 @@ use bumpstorage::Bump;
 
 use super::cases::{Case, bind};
 use super::harness::Kept;
-use super::toy::{Probe, Span, Toy, ToyAnswers, atom, list, name, peel, union};
-use crate::{Binding, BodyId, Edge, EdgeId, Graph, LayError, NameId, QuestionId, Site};
+use super::toy::{Probe, Span, Toy, ToyAnswers, Verdict, atom, list, name, peel, union};
+use crate::{
+    Answers, Binding, BodyId, Doors, Edge, EdgeId, Graph, LayError, NameId, QuestionId, Site,
+};
 
 const NUMBER: u8 = 0;
 const STR: u8 = 1;
@@ -141,6 +143,51 @@ fn a_call_owned_later_answers_its_question_itself() {
     let walked = bound.bound.walked();
     bound.instance(first, &bind(&[(x, atom(0)), (u, atom(3))]), &mut answers);
     assert_eq!(bound.bound.walked(), walked);
+}
+
+/// An answer function that records, for each question it answers, the call that entered the
+/// instance answering it.
+struct Entered<'a> {
+    inner: &'a mut ToyAnswers,
+    seen: Vec<(QuestionId, Option<EdgeId>)>,
+}
+
+impl Answers<Toy> for Entered<'_> {
+    fn answer(&mut self, question: QuestionId, doors: &mut Doors<'_, Toy>) -> Verdict {
+        self.seen.push((question, doors.entered()));
+        self.inner.answer(question, doors)
+    }
+}
+
+#[test]
+fn an_answer_sees_the_call_that_entered_its_instance() {
+    let mut case = Case::new();
+    let root = case.text.root();
+    let callee = case.text.body(root);
+    let c = case.text.name(Site::Entry(callee));
+    let probed = probe(&mut case, Site::Entry(callee), c, Probe::Leaf);
+    let first = case.text.statement(root);
+    let by_number = case.call(first, callee, vec![(c, atom(NUMBER))]);
+    let second = case.text.statement(root);
+    let by_str = case.call(second, callee, vec![(c, atom(STR))]);
+    let again = case.text.statement(root);
+    case.call(again, callee, vec![(c, atom(NUMBER))]);
+    let (graph, mut answers) = case.lay();
+
+    let bump = Bump::new();
+    let mut kept = Kept::new(&graph, &bump);
+    let mut entered = Entered {
+        inner: &mut answers,
+        seen: Vec::new(),
+    };
+    kept.instance(graph.root(), &Binding::new(), &mut entered);
+    // Each view is answered once, under the first call that entered it.
+    let mut seen: Vec<_> = (entered.seen.iter())
+        .filter(|(question, _)| *question == probed)
+        .map(|&(_, edge)| edge)
+        .collect();
+    seen.sort();
+    assert_eq!(seen, [Some(by_number), Some(by_str)]);
 }
 
 /// `PAIR`: one `BindingNode`, its entry, binds `a` and `b` and owns all three dispatches. Under

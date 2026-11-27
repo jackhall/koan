@@ -123,8 +123,19 @@ pub fn representation(
     scratch: BumpAllocator<'_>,
     identity: KType,
 ) -> Option<KType> {
+    let read = payload_of(types, scratch, identity.into())?;
+    Some(types.concrete(read).expect(FAMILY))
+}
+
+/// [`representation`] of a variant written over names, `:(Elt -> Option)`'s `Some`: a family
+/// application's representation with its arguments, which may hold names, substituted.
+pub fn payload_of(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    identity: Parametric,
+) -> Option<Parametric> {
     if let Some(NodeSchema::NewType(representation)) = types.member_schema(identity) {
-        return Some(representation);
+        return Some(representation.into());
     }
     let (family, arguments) = match types.node(identity) {
         TypeNode::ConstructorApply {
@@ -144,10 +155,14 @@ pub fn representation(
     bindings.extend(param_names.iter().map(|name| {
         arguments
             .and_then(|arguments| arguments.get(name.symbol()))
-            .unwrap_or(KType::ANY)
+            .unwrap_or(KType::ANY.into())
     }));
-    let read = substitute_quantified(types, scratch, representation, &bindings);
-    Some(types.concrete(read).expect(FAMILY))
+    Some(substitute_quantified(
+        types,
+        scratch,
+        representation,
+        &bindings,
+    ))
 }
 
 /// Why a family's representation read at its arguments is concrete: it reads its own parameters

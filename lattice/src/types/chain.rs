@@ -1684,15 +1684,16 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     }
 
     /// `declared` as a value's type: a type narrowed to concrete through
-    /// [`concrete`](Self::concrete), `None` where a variable is reachable from it, and a scheme as
-    /// it is.
+    /// [`concrete`](Self::concrete), and a scheme where no variable but its own group's is
+    /// reachable from it; `None` where one is.
     pub fn concrete_declared(
         &self,
         declared: DeclaredType<Parametric>,
     ) -> Option<DeclaredType<KType>> {
         match declared {
             DeclaredType::Type(kt) => self.concrete(kt).map(DeclaredType::Type),
-            DeclaredType::Scheme(scheme) => Some(DeclaredType::Scheme(scheme)),
+            DeclaredType::Scheme(scheme) => (!self.enter(scheme.raw()).contains_outside())
+                .then_some(DeclaredType::Scheme(scheme)),
         }
     }
 

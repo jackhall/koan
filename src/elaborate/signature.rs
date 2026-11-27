@@ -14,10 +14,10 @@ use crate::parse::symbol_from_quote_body;
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Callable, Elaboration, FunctionGroupMap, IMPLICIT, ParameterBinding, Registered, Registration,
-    ShapeGroupMap, Which, is_equal, is_unequal,
+    Callable, Elaboration, FunctionGroupMap, IMPLICIT, ParameterBinding, Rebounds, Registered,
+    Registration, ShapeGroupMap, Which, is_equal, is_unequal,
 };
-use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, TypeNode,
 };
@@ -33,6 +33,9 @@ use crate::values::Chain;
 /// (bare or combined) over its head's slot names, quantified where the form carries a `FOR ALL`
 /// group, a binary `OP`'s over `left` and `right`, and a `UNARY OP`'s over `operands`, a list of
 /// its operand. Born for a registration, it also hands back what the registration's bucket holds.
+/// Where its own group bounds a `FOR ALL` name over an encloser's names, the type lays that bound
+/// at its upper end at every binding, and carries the bound as written beside it ([`Rebounds`]),
+/// its registered shape likewise.
 pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
     form: &KExpression<'graph>,
     reader: &R,
@@ -87,7 +90,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 return Err(unsupported);
             };
             let group = match group {
-                Some(part) => elaborator.group(part, &top)?,
+                Some(part) => elaborator.group(part, &top, true)?,
                 None => QuantifierGroup::empty(scratch),
             };
             let (interned, head) = match shape.id {
@@ -126,10 +129,25 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     registration.classes,
                 )
             });
+            // Each bound over names, by its variable's position in the group it bounds.
+            let rebounds = |at: &dyn Fn(TypeSymbol) -> Option<usize>| match &group.related[..] {
+                [] => Rebounds::NONE,
+                related => Rebounds(scratch.alloc_slice_fill_iter(related.iter().map(
+                    |(name, bound)| {
+                        let at = at(*name).expect("a bounded name is in its group");
+                        (u8::try_from(at).expect("a group holds few names"), *bound)
+                    },
+                ))),
+            };
+            let registered = registered.map(|registered| Registered {
+                rebounds: rebounds(&|name| registered.quantifier_map.get(name)),
+                ..registered
+            });
             Ok(Callable {
                 ktype: interned.handle,
                 quantifier_map: map,
                 registered,
+                rebounds: rebounds(&|name| map.get(name)),
             })
         }
         BodyKind::Operator | BodyKind::UnaryOperator => {
@@ -157,6 +175,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 ktype: function.into(),
                 quantifier_map: FunctionGroupMap::default(),
                 registered,
+                rebounds: Rebounds::NONE,
             })
         }
         BodyKind::Module | BodyKind::Surfaced | BodyKind::Caught => Err(unsupported),
@@ -282,6 +301,7 @@ fn registered<'x>(
         shape: shape.handle,
         quantifier_map: shape_group_map(scratch, map, shape.quantifier_map),
         parameters,
+        rebounds: Rebounds::NONE,
     }
 }
 

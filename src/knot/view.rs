@@ -1,6 +1,6 @@
 //! A **code view**: code spliced or sliced at run time, held as a balanced tree over the flat
 //! syntax it came from, which copies nothing, renumbers nothing and digests nothing until it is
-//! materialized. See [README.md § The code node](README.md#the-code-node) and
+//! materialized. See [README.md § A code view](README.md#a-code-view) and
 //! [scope README § Splicing](../scope/README.md#splicing).
 //!
 //! A view's root is a [`NodeView`]: a node's parts as an AVL tree of [`CodeItem`]s

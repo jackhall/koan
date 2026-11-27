@@ -2,10 +2,11 @@
 //! function, and the bindings it reads.
 //!
 //! The crate decides ownership, edges and reuse, and never an answer's content. The domain comes
-//! in two parts. [`Facts`] names what the graph and its instances keep: a term of a call's mapping
+//! in two parts. [`Kept`] names what the graph and its instances keep: a term of a call's mapping
 //! or of an `AnswersName` edge on an arm or a site, a `NameQuestion`, a `NameAnswer` and a
-//! `SiteAnswer`, each `Copy` and naming no content, with each `NameQuestion`'s count of answers and
-//! each answer's index below it. [`Domain`] is handed to each `instance` call and names the
+//! `SiteAnswer`, each `Copy`, naming no content and borrowing nothing, so a graph is one type
+//! whatever facts it is laid over. [`Facts`] names its `Kept` and answers about them: each term's
+//! mentions, and each `NameQuestion`'s count of answers and each answer's index below it. [`Domain`] is handed to each `instance` call and names the
 //! **content** a binding holds, which may borrow that call: what a `NameQuestion` asks of
 //! contents, how a term applies, the **union** of contents, the **rigid** an answered name has
 //! where no answer gives it content, a content's digest and whether it lasts as long as the graph.
@@ -46,7 +47,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use crate::graph::Ask;
-use crate::id::{NameId, QuestionId};
+use crate::id::{EdgeId, NameId, QuestionId};
 
 /// How a term mentions one of the names it is over.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -61,8 +62,9 @@ pub enum Nesting {
 }
 
 /// What the graph and its instances keep: the text's terms and the asks and answers an instance
-/// is made of, each `Copy` and naming no content.
-pub trait Facts {
+/// is made of, each `Copy`, naming no content and borrowing nothing, so a graph is laid over
+/// facts that borrow without borrowing them.
+pub trait Kept: 'static {
     /// What a call maps a callee's name to, and what an `AnswersName` edge on an arm or a site
     /// gives an answered name: a term over names, each left open where it appears.
     type Term: Copy + Eq + fmt::Debug;
@@ -72,22 +74,37 @@ pub trait Facts {
     type NameAnswer: Copy + Eq + fmt::Debug;
     /// One `SiteQuestion` answered under a binding.
     type SiteAnswer: Copy + PartialEq + fmt::Debug;
+}
+
+/// The facts a graph is laid over and its instances read: what each kept term mentions, and each
+/// kept ask's answers.
+pub trait Facts {
+    /// The types the graph and its instances keep.
+    type Kept: Kept;
 
     /// Each name `term` mentions: bare, inside a type it builds, or as one alternative of a union
     /// it builds.
-    fn mentions(&self, term: Self::Term) -> Vec<(NameId, Nesting)>;
+    fn mentions(&self, term: <Self::Kept as Kept>::Term) -> Vec<(NameId, Nesting)>;
 
     /// The arm an answer takes, if it decides one.
-    fn arm(&self, answer: Self::SiteAnswer) -> Option<u32>;
+    fn arm(&self, answer: <Self::Kept as Kept>::SiteAnswer) -> Option<u32>;
 
     /// How many answers `question` has: at least one.
-    fn answer_count(&self, question: Self::NameQuestion) -> u32;
+    fn answer_count(&self, question: <Self::Kept as Kept>::NameQuestion) -> u32;
 
     /// `answer`'s index among `question`'s answers, below [`Self::answer_count`].
-    fn answer_index(&self, question: Self::NameQuestion, answer: Self::NameAnswer) -> u32;
+    fn answer_index(
+        &self,
+        question: <Self::Kept as Kept>::NameQuestion,
+        answer: <Self::Kept as Kept>::NameAnswer,
+    ) -> u32;
 
     /// The answer at `index` among `question`'s answers: [`Self::answer_index`]'s inverse.
-    fn nth_answer(&self, question: Self::NameQuestion, index: u32) -> Self::NameAnswer;
+    fn nth_answer(
+        &self,
+        question: <Self::Kept as Kept>::NameQuestion,
+        index: u32,
+    ) -> <Self::Kept as Kept>::NameAnswer;
 }
 
 /// What one `instance` call reads: the content a binding holds, and the judgements over it.
@@ -124,22 +141,38 @@ pub trait Domain: Sized {
     /// `content`'s digest: two contents with one digest are one content.
     fn digest(&self, content: Self::Content) -> u128;
 
+    /// Whether `content`, given site name `name` by an onward call, is what a run binding `name`
+    /// at its site would bind: never a rigid, nor a bound standing for several contents.
+    fn arrives(&self, name: NameId, content: Self::Content) -> bool;
+
     /// Whether `content` stays readable for the graph's life.
     fn lasts(&self, content: Self::Content) -> bool;
 }
 
 /// A domain's term.
-pub(crate) type Term<D> = <<D as Domain>::Facts as Facts>::Term;
+pub(crate) type Term<D> = <<<D as Domain>::Facts as Facts>::Kept as Kept>::Term;
 /// A domain's `NameQuestion`.
-pub(crate) type NameQuestion<D> = <<D as Domain>::Facts as Facts>::NameQuestion;
+pub(crate) type NameQuestion<D> = <<<D as Domain>::Facts as Facts>::Kept as Kept>::NameQuestion;
 /// A domain's `NameAnswer`.
-pub(crate) type NameAnswer<D> = <<D as Domain>::Facts as Facts>::NameAnswer;
+pub(crate) type NameAnswer<D> = <<<D as Domain>::Facts as Facts>::Kept as Kept>::NameAnswer;
 
 /// The embedder's answer function.
 pub trait Answers<F: Facts> {
     /// Answers `question`, reading the binding only through `doors`. Must be deterministic: the
     /// same answers to the same asks in the same order give the same asks and the same answer.
-    fn answer(&mut self, question: QuestionId, doors: &mut Doors<'_, F>) -> F::SiteAnswer;
+    fn answer(
+        &mut self,
+        question: QuestionId,
+        doors: &mut Doors<'_, F>,
+    ) -> <F::Kept as Kept>::SiteAnswer;
+
+    /// Told of each evaluation an `instance` call enters, by its index within the call
+    /// ([`Doors::own_evaluation`]), beside the call that entered it and the evaluation that made
+    /// that call; `None` for the evaluation asked for. What the embedder's report reads to place an
+    /// evaluation among those the call reaches; it must not change an answer.
+    fn entering(&mut self, evaluation: u32, by: Option<(EdgeId, u32)>) {
+        let _ = (evaluation, by);
+    }
 }
 
 /// The content each name is bound to; a name the binding leaves out is open. A call's input,
@@ -220,25 +253,54 @@ impl<D: Domain> fmt::Debug for Binding<D> {
 pub struct Doors<'a, F: Facts> {
     question: QuestionId,
     reads: &'a [NameId],
-    asks: &'a [Ask<F>],
-    serve: &'a mut dyn FnMut(usize) -> F::NameAnswer,
+    asks: &'a [Ask<F::Kept>],
+    serve: &'a mut dyn FnMut(usize) -> <F::Kept as Kept>::NameAnswer,
+    answering: Answering,
+}
+
+/// Which evaluation answers a question, within the `instance` call that makes it: what the
+/// embedder's report reads to say where an answer was made, which must not change the answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Answering {
+    /// The call whose edge first entered the instance answering; `None` at the instance asked
+    /// for, and in a replay.
+    pub entered: Option<EdgeId>,
+    /// The evaluation answering, by its index within the `instance` call, where the question is
+    /// its node's own; `None` for a question it borrows, and in a replay.
+    pub own: Option<u32>,
 }
 
 impl<'a, F: Facts> Doors<'a, F> {
     /// Doors for answering `question`, which reads `reads` and declares `asks`; `serve` answers
-    /// the declared ask at a position.
+    /// the declared ask at a position. `answering` says which evaluation answers.
     pub(crate) fn new(
         question: QuestionId,
         reads: &'a [NameId],
-        asks: &'a [Ask<F>],
-        serve: &'a mut dyn FnMut(usize) -> F::NameAnswer,
+        asks: &'a [Ask<F::Kept>],
+        serve: &'a mut dyn FnMut(usize) -> <F::Kept as Kept>::NameAnswer,
+        answering: Answering,
     ) -> Self {
         Self {
             question,
             reads,
             asks,
             serve,
+            answering,
         }
+    }
+
+    /// The call whose edge first entered the instance answering, within the `instance` call that
+    /// makes it; `None` at the instance asked for, and in a replay. It says where an answer was
+    /// made, for the embedder's report, and must not change the answer.
+    pub fn entered(&self) -> Option<EdgeId> {
+        self.answering.entered
+    }
+
+    /// The evaluation answering, by its index within the `instance` call that makes it, where the
+    /// question is its node's own ([`Answering::own`]). Two answers carrying one index were made
+    /// by one instance; like [`entered`](Self::entered), it must not change the answer.
+    pub fn own_evaluation(&self) -> Option<u32> {
+        self.answering.own
     }
 
     /// Asks `question` of `names`, in order, and returns the answer.
@@ -247,7 +309,11 @@ impl<'a, F: Facts> Doors<'a, F> {
     ///
     /// Where a name is not among the reads the text declared for the question being answered, or
     /// the question does not declare this ask: the description and the answer function disagree.
-    pub fn ask(&mut self, names: &[NameId], question: F::NameQuestion) -> F::NameAnswer {
+    pub fn ask(
+        &mut self,
+        names: &[NameId],
+        question: <F::Kept as Kept>::NameQuestion,
+    ) -> <F::Kept as Kept>::NameAnswer {
         for name in names {
             assert!(
                 self.reads.contains(name),

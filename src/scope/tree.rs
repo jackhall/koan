@@ -23,7 +23,7 @@
 //! The load's walk (`dispatch/walk/trees.rs`) builds the trees, through the constructors here.
 //! Everything here is `Copy` and names a body by its [`Segment`], never by a reference into program
 //! storage, so a tree is covariant in its lifetime: laid in program storage for the load's records,
-//! or in a shorter-lived region for a resumption's.
+//! or in a composition's or a frame's shorter-lived storage.
 
 use std::fmt;
 
@@ -36,9 +36,10 @@ use crate::values::digest::{
 };
 use crate::values::{Chain, ContentDigest};
 
+use super::facts::{Address, Unknown};
 use super::keyed::Keyed;
-use super::runs::Running;
 use super::shape::{BodyShape, Segment, Site, Slot};
+use super::site::Selection;
 
 /// What the load knows of one module-valued expression's content. Built through the constructors
 /// below, which compute each node's [`Identity`].
@@ -139,7 +140,7 @@ pub enum Leaf<'graph> {
 }
 
 /// A call a binding's answer selects among: each candidate's callee and the call's argument trees,
-/// beside what [`runs`](super::runs) reads to choose among them.
+/// beside the use's selection, which chooses among them ([`Selection::runs`]).
 #[derive(Clone, Copy)]
 pub struct Called<'graph> {
     /// The body the use is written in, whose levels its types are read at.
@@ -148,7 +149,8 @@ pub struct Called<'graph> {
     pub callees: &'graph [Callee<'graph>],
     /// Each argument's tree, in the call's slot order.
     pub arguments: &'graph [Tree<'graph>],
-    pub undecided: UndecidedCall<'graph>,
+    /// The use's selection, whose candidates name their callee by list position.
+    pub selection: Selection<'graph>,
 }
 
 /// A candidate of a [`Called`]: its callable body, `None` for one no body of the program's
@@ -161,21 +163,49 @@ pub struct Callee<'graph> {
     pub quantified: bool,
 }
 
-/// What a use whose selection an answer decides keeps: the candidates some binding may run, each
-/// beside its position in the use's candidate list, written over names, and whether the use is in
-/// unfilled code.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct UndecidedCall<'graph> {
-    pub kept: &'graph [Running<'graph>],
-    pub positions: &'graph [u16],
-    pub unfilled: bool,
-}
-
-/// A binder, by the body declaring it and its slot there.
+/// A binder, by the body declaring it and where its activation holds it there.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Binder {
     pub body: Segment,
-    pub slot: Slot,
+    pub at: BinderAt,
+}
+
+/// Where a binder's value is held: a slot of its body, or the held slot of a call or an `EVAL`
+/// written in place, its own holder, by its site.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum BinderAt {
+    Slot(Slot),
+    Held(Site),
+}
+
+impl Binder {
+    /// The binder at `slot` of `body`.
+    pub fn at_slot(body: Segment, slot: Slot) -> Self {
+        Binder {
+            body,
+            at: BinderAt::Slot(slot),
+        }
+    }
+
+    /// The binder's slot, where a slot holds it: a part held in place is no parameter, carries no
+    /// annotation and births nothing.
+    pub fn slot(self) -> Option<Slot> {
+        match self.at {
+            BinderAt::Slot(slot) => Some(slot),
+            BinderAt::Held(_) => None,
+        }
+    }
+
+    /// The name a binding binds the binder's value under.
+    pub fn unknown(self) -> Unknown {
+        Unknown {
+            segment: self.body,
+            at: match self.at {
+                BinderAt::Slot(slot) => Address::Slot(slot),
+                BinderAt::Held(site) => Address::Held(site),
+            },
+        }
+    }
 }
 
 /// Which run of a leaf's body holds its binder: a `MODULE` or `GROUP` body's by its builder
@@ -381,6 +411,24 @@ impl<'graph> Tree<'graph> {
         }
     }
 
+    /// [`retyped_closed`](Self::retyped_closed) where its identity, `digest`, is known.
+    pub fn retyped_known(
+        carried: KType,
+        source: &'graph Tree<'graph>,
+        digest: ContentDigest,
+    ) -> Self {
+        debug_assert_eq!(
+            Tree::retyped_closed(carried, source).digest(),
+            Some(digest),
+            "a retyped tree's identity is its type over its source's"
+        );
+        Tree::Retyped {
+            carried: carried.into(),
+            source,
+            identity: Identity::Closed(digest),
+        }
+    }
+
     /// A leaf on `binder`, read through `chain`, in the run `within` names.
     pub fn bound(
         binder: Binder,
@@ -400,10 +448,12 @@ impl<'graph> Tree<'graph> {
             .chain(arguments.iter().map(|(_, tree)| tree.identity()));
         let identity = match Identity::over(children, |digests| {
             let mut hasher = DigestHasher::new(Tag::Leaf);
-            hasher
-                .count(binder.body.index() as usize)
-                .count(binder.slot.index())
-                .count(chain.len());
+            hasher.count(binder.body.index() as usize);
+            match binder.at {
+                BinderAt::Slot(slot) => hasher.count(0).count(slot.index()),
+                BinderAt::Held(site) => hasher.count(1).count(site.index()),
+            };
+            hasher.count(chain.len());
             for label in chain {
                 hasher.feed(label);
             }
@@ -669,7 +719,7 @@ impl fmt::Debug for Tree<'_> {
                 .finish(),
             Tree::Leaf(Leaf::Bound { binder, chain, .. }) => f
                 .debug_struct("Leaf")
-                .field("slot", &binder.slot)
+                .field("binder", &binder.at)
                 .field("chain", chain)
                 .finish(),
             Tree::TypeValue { named, .. } => f.debug_tuple("TypeValue").field(named).finish(),

@@ -1,25 +1,27 @@
 //! The **judgement doors**: every judgement the walk and the elaborator make over a type that may
 //! hold a run-bound name goes through one of these, which marks
-//! ([build/README.md § Resumption](../build/README.md#resumption)).
+//! ([stored questions](../build/README.md#stored-questions)).
 //!
 //! A door hands back what the lattice answers and marks the run-bound names of what it judged
 //! **open** ([`Marks::open`]) unless its answer holds at every binding within their ends: a verdict
 //! of *always* or *never* (the rigid rule), a *fits* that holds, a type that is closed. What a unit
-//! only names stays named, so a binding reads its unit record with the bound type written in; what
-//! it judged open re-runs. A door whose inputs are closed never marks. Marking is by default:
-//! a rule that skips a door is a test failure (`the_walk_judges_through_its_doors`), never a unit
-//! record wrongly shared.
+//! only names stays named; what it judged open it poses whole, as a question a binding answers. A
+//! door whose inputs are closed never marks. Marking is by default: a rule that skips a door is a
+//! test failure (`the_walk_judges_through_its_doors`), never a judgement left unasked.
 //!
-//! A **discrete** door — one handing back a verdict, a bool, a stamp or a kind — whose rigid
-//! answer is undecided asks the marks first ([`Marks::witnessed`]): a witnessing walk answers it
-//! under its witness, by the closed door, and notes the question beside the answer instead of
-//! marking it undecided. The answer holds no type, and the door hands it back in rigid terms. A
-//! door handing back a type never asks.
+//! A **discrete** door — one handing back a verdict, a bool, a stamp or a kind — answers rigidly
+//! by [`rigid_answer`], the one rule per question kind the binding graph answers by too, so the
+//! load and an instance cannot drift.
+//!
+//! Every discrete door **poses** its question whole before it marks ([`Marks::asked`]), beside its
+//! rigid answer where it has one, wherever a type the question judges holds a variable: a walk
+//! lays each in its unit's record, in order, the asks a stored site question decides from
+//! ([`SiteQuestion`](crate::scope::SiteQuestion)).
 //!
 //! A type that depends on a question's answer goes through [`decided`], and a rule with no question
 //! through [`ruled`]: each hands back the same type at load and under every binding — a type
 //! written over names, or a derived name typed on the question's answers or by the rule — and
-//! never reads the witness ([derived names](crate::scope::DerivedTerm)).
+//! ([derived names](crate::scope::DerivedTerm)).
 //!
 //! Substitution and the constructors commute with a binding, so they are not doors; nor is any
 //! judgement whose operands are [`KType`] alone, which holds no variable by its type.
@@ -27,16 +29,17 @@
 use crate::memory::collect;
 use crate::memory::{BumpAllocator, BumpVec};
 pub use crate::scope::free_variables;
-pub use crate::scope::rigid_answer;
 use crate::scope::{
-    Answer, Decider, DerivedId, DerivedTerm, NeverSatisfied, OpenKind, Question, Restamp, Rule,
-    bare_variable, constructed_upper, handed, is_module, is_variable, kind_varies, may_be_never,
-    tag_union,
+    Answer, Decider, DerivedId, DerivedTerm, NeverSatisfied, Nominals, OpenKind, Question,
+    Rebounds, Restamp, Rule, Shaped, Showing, Signed, Unwalked, bare_variable, constructed_upper,
+    handed, is_module, is_variable, kind_varies, rigid_verdict, tag_union,
 };
+pub use crate::scope::{rigid_answer, rigid_within, variable_outside};
+use crate::symbols::{BinderSymbol, Symbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, Interval, Judged, KType, Parametric, PathClass, Scheme, Side,
-    Solution, SolveRecord, Step, TypeHandle, TypeNode, UnifyFailure, Variable, Variance, Verdict,
-    admits_with, instance_under, read_through, select_by_class,
+    Solution, SolveRecord, Step, TypeNode, Variable, Variance, Verdict, admits_with,
+    instance_under, join, read_through, select_by_class,
 };
 use crate::values::Chain;
 
@@ -51,19 +54,11 @@ pub trait Marks {
         judged: DeclaredType<Parametric>,
     );
 
-    /// The witness's answer to `question`, noted beside it: `None` outside a witnessing walk, or
-    /// where its witness cannot answer in the question's rigid terms.
-    fn witnessed(&self, question: Question<'_>) -> Option<Answer> {
-        let _ = question;
-        None
-    }
-
-    /// The [derived name](crate::scope::DerivedName) for `term`, named by its content and laid
-    /// where the walk's store keeps the names it meets. `None` outside a walk, where no binding is
-    /// written into what a door hands back.
-    fn derive(&self, term: DerivedTerm<'_>) -> Option<Parametric> {
-        let _ = term;
-        None
+    /// Note `question` whole as a door judged it, beside `rigid`, its answer at every binding where
+    /// the door has one: a walk lays each in its unit's record, in order. A door notes only a
+    /// question over a type that holds a variable; one over closed types is no question.
+    fn asked(&self, question: Question<'_>, rigid: Option<Answer>) {
+        let _ = (question, rigid);
     }
 
     /// The term the derived name `id` names, where the walk's store holds it: `None` outside a
@@ -72,13 +67,41 @@ pub trait Marks {
         let _ = id;
         None
     }
+
+    /// Whether the lexical variable at `level` is a type binder the text declares and the load
+    /// left unknown, which no bound describes: `false` outside a walk, which reads no shapes.
+    fn declares_type(&self, level: usize) -> bool {
+        let _ = level;
+        false
+    }
 }
 
-/// The marks of a judgement outside a walk: none is kept.
+/// Where a door names what it hands back over names: marks that also name each
+/// [derived name](crate::scope::DerivedName) by its content. A walk's naming is total, its error
+/// [`Infallible`](std::convert::Infallible), so a door in a walk hands back a type over every name
+/// a binding writes in; outside a walk no binding is written in, and the error is the
+/// [`Unwalked`] witness that leaves the type unknown.
+pub trait Derives: Marks {
+    /// Why a term goes unnamed: never, in a walk.
+    type Unwalked;
+
+    /// The derived name for `term`, laid where the walk's store keeps the names it meets.
+    fn derive(&self, term: DerivedTerm<'_>) -> Result<Parametric, Self::Unwalked>;
+}
+
+/// The marks of a judgement outside a walk: none is kept, and no term is named.
 pub struct NoMarks;
 
 impl Marks for NoMarks {
     fn open(&self, _: OpenKind, _: Option<DeclaredType<Parametric>>, _: DeclaredType<Parametric>) {}
+}
+
+impl Derives for NoMarks {
+    type Unwalked = Unwalked;
+
+    fn derive(&self, _: DerivedTerm<'_>) -> Result<Parametric, Unwalked> {
+        Err(Unwalked::outside_a_walk())
+    }
 }
 
 /// Whether `ty` may hold a variable: a scheme is read by the marks, which find what it holds free.
@@ -87,6 +110,44 @@ fn holds_variable(types: &Chain<'_, '_, '_, '_>, ty: DeclaredType<Parametric>) -
         DeclaredType::Type(ty) => types.concrete(ty).is_none(),
         DeclaredType::Scheme(_) => true,
     }
+}
+
+/// [`rigid_answer`] of `question`, each derived name's term read off the marks: the one rule per
+/// question kind every door and the binding graph answer rigidly by.
+pub fn rigid<M: Marks + ?Sized>(
+    marks: &M,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    question: &Question<'_>,
+) -> Option<Answer> {
+    rigid_answer(types, scratch, &|id| marks.term(id), question)
+}
+
+/// Ask `question` at a door: its [`rigid`] answer, noted beside it ([`posed`]); then that.
+fn ask(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    question: Question<'_>,
+) -> Option<Answer> {
+    let rigid = rigid(marks, types, scratch, &question);
+    posed(marks, types, question, rigid)
+}
+
+/// `question`, its rigid answer `rigid`, noted whole where a type it judges holds a variable
+/// ([`Marks::asked`]); then `rigid`.
+fn posed(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    question: Question<'_>,
+    rigid: Option<Answer>,
+) -> Option<Answer> {
+    let mut open = false;
+    question.each_type(&mut |ty| open = open || holds_variable(types, ty));
+    if open {
+        marks.asked(question, rigid);
+    }
+    rigid
 }
 
 /// Mark `kind` over `judged` against `slot`, where either may hold a variable.
@@ -99,6 +160,30 @@ fn mark(
 ) {
     if holds_variable(types, judged) || slot.is_some_and(|slot| holds_variable(types, slot)) {
         marks.open(kind, slot, judged);
+    }
+}
+
+/// Mark `kind` over `judged`'s type and each bound its group writes over names.
+fn mark_shaped(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    kind: OpenKind,
+    slot: Option<DeclaredType<Parametric>>,
+    judged: Shaped<'_>,
+) {
+    mark(marks, types, kind, slot, judged.ty);
+    mark_bounds(marks, types, kind, judged);
+}
+
+/// Mark `kind` over each bound `judged`'s group writes over names.
+fn mark_bounds(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    kind: OpenKind,
+    judged: Shaped<'_>,
+) {
+    for (_, bound) in judged.rebounds.0 {
+        mark(marks, types, kind, None, (*bound).into());
     }
 }
 
@@ -117,22 +202,22 @@ fn mark_interval(
 }
 
 /// [`judge_signed`](crate::scope::judge_signed): the verdict named where it is *always* or *never*, which holds at every
-/// binding within the arguments' ends; else the witness's, or each argument, and the shape, marked
+/// binding within the arguments' ends; else each argument, and the shape, marked
 /// [`Verdict`](OpenKind::Verdict). The intervals are [`judged_intervals`]'s, the same at load and
 /// under every binding. A *never* hands back none.
-pub fn verdict<'x>(
-    marks: &dyn Marks,
+pub fn verdict<'x, U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
-    shape: DeclaredType<Parametric>,
+    shape: Shaped<'_>,
     arguments: &[Interval],
 ) -> Judged<'x> {
-    let judged = crate::scope::judge_signed(types, scratch, shape, arguments);
-    witnessed_verdict(marks, types, scratch, (shape, arguments), judged)
+    let judged = crate::scope::judge_signed(types, scratch, shape.ty, arguments);
+    judged_verdict(marks, types, scratch, (shape, arguments), judged)
 }
 
-/// [`judge_signed`](crate::scope::judge_signed) alone: no witness read and nothing marked. *Always* and *never* hold at every
-/// binding within the arguments' ends; a caller reading it judges through [`witnessed_verdict`]
+/// [`judge_signed`](crate::scope::judge_signed) alone: nothing marked. *Always* and *never* hold at every
+/// binding within the arguments' ends; a caller reading it judges through [`judged_verdict`]
 /// too.
 pub fn judged<'x>(
     types: &Chain<'_, '_, '_, '_>,
@@ -144,32 +229,42 @@ pub fn judged<'x>(
 }
 
 /// [`verdict`] past its lattice judgement `judged` of `shape` over `arguments`: for a caller that
-/// reads the lattice's own judgement too, which every binding gives alike.
-pub fn witnessed_verdict<'x>(
-    marks: &dyn Marks,
+/// reads the lattice's own judgement too, which every binding gives alike. Over bounds a binding
+/// writes into the shape, the judgement is at their upper ends, so only its *never* holds at every
+/// binding.
+pub fn judged_verdict<'x, U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
-    (shape, arguments): (DeclaredType<Parametric>, &[Interval]),
+    (shape, arguments): (Shaped<'_>, &[Interval]),
     judged: Judged<'x>,
 ) -> Judged<'x> {
     let mut verdict = judged.verdict;
+    let question = Question::Verdict { shape, arguments };
+    let rigid = rigid_verdict(types, &question, verdict);
+    if rigid.is_none() {
+        verdict = Verdict::Maybe;
+    }
+    let answered = posed(marks, types, question, rigid);
     if verdict == Verdict::Maybe {
-        match marks.witnessed(Question::Verdict { shape, arguments }) {
-            Some(Answer::Verdict(witnessed)) => verdict = witnessed,
+        match answered {
+            Some(Answer::Verdict(rigid)) => verdict = rigid,
             _ => {
-                mark(marks, types, OpenKind::Verdict, None, shape);
+                mark_shaped(marks, types, OpenKind::Verdict, None, shape);
                 for argument in arguments {
-                    mark_interval(marks, types, OpenKind::Verdict, Some(shape), *argument);
+                    mark_interval(marks, types, OpenKind::Verdict, Some(shape.ty), *argument);
                 }
             }
         }
     }
     let solved = match verdict {
         Verdict::Never => None,
-        _ => judged_intervals(marks, types, scratch, (shape, arguments), judged).map(|intervals| {
-            let types = scratch.alloc_slice_fill_iter(intervals.iter().map(|each| each.upper));
-            Solution { types, intervals }
-        }),
+        _ => judged_intervals(marks, types, scratch, (shape.ty, arguments), judged).map(
+            |intervals| {
+                let types = scratch.alloc_slice_fill_iter(intervals.iter().map(|each| each.upper));
+                Solution { types, intervals }
+            },
+        ),
     };
     let solve = SolveRecord {
         solved,
@@ -183,8 +278,8 @@ pub fn witnessed_verdict<'x>(
 /// reproducible, so a binding written in gives the run's; where it is not, each end the output of
 /// [`Rule::Judged`] over the shape and the arguments, which a binding judges again, whether or not
 /// the load's judgement solved. `None` where none solves.
-pub fn judged_intervals<'x>(
-    marks: &dyn Marks,
+pub fn judged_intervals<'x, U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     (shape, arguments): (DeclaredType<Parametric>, &[Interval]),
@@ -194,7 +289,7 @@ pub fn judged_intervals<'x>(
         DeclaredType::Scheme(scheme) => scheme.group(types).bounds,
         DeclaredType::Type(_) => &[],
     };
-    if judged.solve.reproducible || bounds.is_empty() || bounds.len() > 127 {
+    if judged.solve.reproducible || bounds.is_empty() {
         return judged.solve.intervals();
     }
     let mut operands = BumpVec::with_capacity_in(1 + 2 * arguments.len(), scratch);
@@ -234,36 +329,30 @@ pub fn variable_above(
 }
 
 /// The kind of the concrete type above every instance of `ty`: its head's, which no binding
-/// changes, save where `ty` is a variable or a union holding one, whose binding decides it: the
-/// witness's, else marked [`Kind`](OpenKind::Kind).
+/// changes, save where `ty` is a variable or a union holding one, whose binding decides it: marked
+/// [`Kind`](OpenKind::Kind).
 pub fn kind_above(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     ty: Parametric,
 ) -> crate::type_lattice::KKind {
-    if kind_varies(types, ty) {
-        if let Some(Answer::Kind(kind)) = marks.witnessed(Question::Kind { ty }) {
-            return kind;
-        }
-        mark(marks, types, OpenKind::Kind, None, DeclaredType::Type(ty));
+    match kind_decided(marks, types, scratch, ty) {
+        Some(kind) => kind,
+        None => crate::type_lattice::bound_above(types, scratch, ty).kind_of(types),
     }
-    crate::type_lattice::bound_above(types, scratch, ty).kind_of(types)
 }
 
 /// The kind of the concrete type above every instance of `ty`, where a rule acts on it exactly:
-/// its head's, which no binding changes, or for a variable or a union holding one the witness's;
-/// `None` for one no witness answers, marked [`Kind`](OpenKind::Kind), whose binding decides it.
+/// its head's, which no binding changes; `None` for a variable or a union holding one, marked
+/// [`Kind`](OpenKind::Kind), whose binding decides it.
 pub fn kind_decided(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     ty: Parametric,
 ) -> Option<crate::type_lattice::KKind> {
-    if !kind_varies(types, ty) {
-        return Some(crate::type_lattice::bound_above(types, scratch, ty).kind_of(types));
-    }
-    if let Some(Answer::Kind(kind)) = marks.witnessed(Question::Kind { ty }) {
+    if let Some(Answer::Kind(kind)) = ask(marks, types, scratch, Question::Kind { ty }) {
         return Some(kind);
     }
     mark(marks, types, OpenKind::Kind, None, DeclaredType::Type(ty));
@@ -273,8 +362,8 @@ pub fn kind_decided(
 /// The type of a type value of `ty`: the kind its head fixes, or for a variable the decided name
 /// typed on the kind each binding gives it, so a type name's own value is one type at load and
 /// under every binding. Outside a walk, `Any` type.
-pub fn kind_value(
-    marks: &dyn Marks,
+pub fn kind_value<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     ty: Parametric,
@@ -314,8 +403,8 @@ pub fn read_points(
 /// A rigid refusal marks nothing: it holds at every binding. A binding `B` of the upper end lies
 /// under its bound and one of `wanted` under its own, so their meet is `Never` too; and `B` of the
 /// lower end lies above the lower end read below its variables, so it lies outside a type under
-/// `wanted`'s bound too. Else named where *fits* holds rigidly at the upper end, or the witness's
-/// answer, or marked [`NeverSatisfies`](OpenKind::NeverSatisfies).
+/// `wanted`'s bound too. Else named where *fits* holds rigidly at the upper end, or marked
+/// [`NeverSatisfies`](OpenKind::NeverSatisfies).
 pub fn never_satisfies(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
@@ -324,13 +413,8 @@ pub fn never_satisfies(
     wanted: Parametric,
 ) -> Option<NeverSatisfied> {
     let refused = Some(NeverSatisfied { value, wanted });
-    if crate::scope::unsatisfiable(types, scratch, value, wanted).is_some() {
-        return refused;
-    }
-    if crate::type_lattice::fits(types, scratch, value.upper, wanted) {
-        return None;
-    }
-    match marks.witnessed(Question::NeverSatisfies { value, wanted }) {
+    let question = Question::NeverSatisfies { value, wanted };
+    match ask(marks, types, scratch, question) {
         Some(Answer::Satisfiable) => None,
         Some(Answer::Never) => refused,
         _ => {
@@ -355,7 +439,7 @@ pub fn never_satisfied(
 
 /// The first of `against`, the closed builtin overloads at a registration's key, that the
 /// unquantified `registered` overlaps, by position: named where every binding agrees, closed or
-/// overlapping none at its bounds; else the witness's answer, or marked with
+/// overlapping none at its bounds; else marked with
 /// [`Question::Overlaps`]'s kind, since a binding may make it overlap.
 pub fn overlapping(
     marks: &dyn Marks,
@@ -368,11 +452,7 @@ pub fn overlapping(
         registered,
         against,
     };
-    let answered = match rigid_answer(types, scratch, &question) {
-        Some(answered) => Some(answered),
-        None => marks.witnessed(question),
-    };
-    match answered {
+    match ask(marks, types, scratch, question) {
         Some(Answer::Overlaps(at)) => at.map(usize::from),
         _ => {
             mark(marks, types, question.kind(), None, registered.into());
@@ -381,8 +461,8 @@ pub fn overlapping(
     }
 }
 
-/// *Fits*: named where it holds, which it does at every binding within the ends; else the
-/// witness's answer, or marked [`Fits`](OpenKind::Fits) against `b`.
+/// *Fits*: named where it holds, which it does at every binding within the ends; else marked
+/// [`Fits`](OpenKind::Fits) against `b`.
 pub fn fits(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
@@ -390,19 +470,11 @@ pub fn fits(
     a: impl Into<DeclaredType<Parametric>>,
     b: impl Into<DeclaredType<Parametric>>,
 ) -> bool {
-    let (a, b) = (a.into(), b.into());
-    let holds = crate::type_lattice::fits(types, scratch, a, b);
-    if !holds {
-        if let Some(Answer::Bool(holds)) = marks.witnessed(Question::Fits { a, b }) {
-            return holds;
-        }
-        mark(marks, types, OpenKind::Fits, Some(b), a);
-    }
-    holds
+    fit_decided(marks, types, scratch, a, b) == Some(true)
 }
 
 /// *Fits*, where a rule acts on its failure: `Some` where it holds, where neither type holds a
-/// variable, or where the witness answers; else `None`, marked [`Fits`](OpenKind::Fits), since a
+/// variable; else `None`, marked [`Fits`](OpenKind::Fits), since a
 /// binding decides it. A rule refuses only on `Some(false)`, which holds at every binding.
 pub fn fit_decided(
     marks: &dyn Marks,
@@ -412,13 +484,8 @@ pub fn fit_decided(
     b: impl Into<DeclaredType<Parametric>>,
 ) -> Option<bool> {
     let (a, b) = (a.into(), b.into());
-    if crate::type_lattice::fits(types, scratch, a, b) {
-        return Some(true);
-    }
-    if !holds_variable(types, a) && !holds_variable(types, b) {
-        return Some(false);
-    }
-    if let Some(Answer::Bool(holds)) = marks.witnessed(Question::Fits { a, b }) {
+    if let Some(Answer::Bool(holds)) = ask(marks, types, scratch, Question::Fits { a: a.into(), b })
+    {
         return Some(holds);
     }
     mark(marks, types, OpenKind::Fits, Some(b), a);
@@ -427,7 +494,7 @@ pub fn fit_decided(
 
 /// Whether `a` lies under `b` in the order, where a rule acts on either answer: `Some` where both
 /// are closed, where `a` is a variable whose declared bound lies under a closed `b` — every
-/// binding of it does too — or where the witness answers; else `None`, marked
+/// binding of it does too; else `None`, marked
 /// [`Under`](OpenKind::Under), since the order relates closed types alone and a binding decides.
 pub fn under_decided(
     marks: &dyn Marks,
@@ -436,14 +503,7 @@ pub fn under_decided(
     a: Parametric,
     b: Parametric,
 ) -> Option<bool> {
-    match (types.concrete(a), types.concrete(b)) {
-        (Some(a), Some(b)) => {
-            return Some(crate::type_lattice::is_subtype_of(types, scratch, a, b));
-        }
-        (None, Some(b)) if rigid_within(types, scratch, a, b) => return Some(true),
-        _ => {}
-    }
-    if let Some(Answer::Bool(under)) = marks.witnessed(Question::Under { a, b }) {
+    if let Some(Answer::Bool(under)) = ask(marks, types, scratch, Question::Under { a, b }) {
         return Some(under);
     }
     mark(marks, types, OpenKind::Under, Some(b.into()), a.into());
@@ -451,44 +511,26 @@ pub fn under_decided(
 }
 
 /// Whether the registered shape `a` strictly outranks `b` at `class`, one bit of a use's ranking
-/// table: `Some` where both are closed or where the witness answers; else `None`, marked with
+/// table: `Some` where both are closed; else `None`, marked with
 /// [`Question::Outranks`]'s kind, since a binding ranks a rigid shape.
 pub fn outranks(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
-    (a, b): (DeclaredType<Parametric>, DeclaredType<Parametric>),
+    (a, b): (Shaped<'_>, Shaped<'_>),
     class: u16,
 ) -> Option<bool> {
-    if let (Some(a), Some(b)) = (types.concrete_declared(a), types.concrete_declared(b)) {
-        let ranked = crate::type_lattice::outranks(types, scratch, a.into(), b.into(), class);
-        return Some(ranked);
-    }
     let question = Question::Outranks { a, b, class };
-    if let Some(Answer::Bool(ranked)) = marks.witnessed(question) {
+    if let Some(Answer::Bool(ranked)) = ask(marks, types, scratch, question) {
         return Some(ranked);
     }
-    mark(marks, types, question.kind(), Some(b), a);
+    mark_shaped(marks, types, question.kind(), Some(b.ty), a);
+    mark_bounds(marks, types, question.kind(), b);
     None
 }
 
-/// Whether `a` lies under the closed `b` at every binding: the order where `a` is closed, and
-/// where it is a variable, whether its declared bound does. It reads nothing a binding decides, so
-/// it never marks: where a binding alone would put `a` under `b`, it is no.
-pub fn under_every_binding(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    a: Parametric,
-    b: KType,
-) -> bool {
-    match types.concrete(a) {
-        Some(a) => crate::type_lattice::is_subtype_of(types, scratch, a, b),
-        None => rigid_within(types, scratch, a, b),
-    }
-}
-
-/// Whether `value`'s lower end lies outside `bound`: named where it does; else the witness's
-/// answer, or marked [`LowerEndOutside`](OpenKind::LowerEndOutside).
+/// Whether `value`'s lower end lies outside `bound`: named where it does; else marked
+/// [`LowerEndOutside`](OpenKind::LowerEndOutside).
 pub fn lower_end_outside(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
@@ -497,72 +539,17 @@ pub fn lower_end_outside(
     bound: impl Into<DeclaredType<Parametric>>,
 ) -> bool {
     let bound = bound.into();
-    // A signature the lattice reads below as `Never` still declares its member names at every pin.
-    let outside = crate::type_lattice::lower_end_outside(types, scratch, value, bound)
-        || (bound.as_type().and_then(|bound| types.concrete(bound)))
-            .is_some_and(|asked| crate::scope::signature_outside(types, value.lower, asked));
-    if !outside {
-        if let Some(Answer::Bool(outside)) =
-            marks.witnessed(Question::LowerEndOutside { value, bound })
-        {
-            return outside;
-        }
-        mark_interval(marks, types, OpenKind::LowerEndOutside, Some(bound), value);
+    let question = Question::LowerEndOutside { value, bound };
+    if let Some(Answer::Bool(outside)) = ask(marks, types, scratch, question) {
+        return outside;
     }
-    outside
-}
-
-/// [`admits_with`]: what it collects is judged where the solve is read ([`solve`],
-/// [`reproducible`]), which marks.
-pub fn admits<'run, T: TypeHandle>(
-    types: &Chain<'run, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    declared: Parametric,
-    carried: T,
-    variance: Variance,
-    collector: &mut Collector<'_, 'run, T>,
-) -> Result<(), UnifyFailure<T>> {
-    admits_with(types, scratch, declared, carried, variance, collector)
-}
-
-/// Whether a run reproduces `collector`'s solve: named where it does; else every slot and
-/// contribution of `involved` marked [`Unreproduced`](OpenKind::Unreproduced).
-pub fn reproducible<'run, T: TypeHandle>(
-    marks: &dyn Marks,
-    types: &Chain<'run, '_, '_, '_>,
-    collector: &Collector<'_, 'run, T>,
-    involved: &[(Parametric, Parametric)],
-) -> bool {
-    let reproducible = collector.reproducible(types);
-    if !reproducible {
-        for (slot, contribution) in involved {
-            let slot = Some(DeclaredType::Type(*slot));
-            mark(
-                marks,
-                types,
-                OpenKind::Unreproduced,
-                slot,
-                DeclaredType::Type(*contribution),
-            );
-        }
-    }
-    reproducible
-}
-
-/// `collector`'s solve, marked as [`reproducible`] marks.
-pub fn solve<'l, 'run>(
-    marks: &dyn Marks,
-    types: &Chain<'run, '_, '_, '_>,
-    collector: &Collector<'l, 'run, Parametric>,
-    involved: &[(Parametric, Parametric)],
-) -> Result<BumpVec<'l, Parametric>, UnifyFailure<Parametric>> {
-    reproducible(marks, types, collector, involved);
-    collector.solve(types)
+    mark_interval(marks, types, OpenKind::LowerEndOutside, Some(bound), value);
+    false
 }
 
 /// [`class_step`](crate::type_lattice::class_step): a solve record, whose
-/// [`reproducible`](SolveRecord::reproducible) says whether a run solves it alike. A caller marks
-/// one it does not store whole ([`stored_solve`]) through [`unreproduced`].
+/// [`reproducible`](SolveRecord::reproducible) says whether a run solves it alike. A caller stores
+/// one it does not whole ([`stored_solve`]).
 pub fn class_step<'l, 'run: 'l>(
     types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'l>,
@@ -574,36 +561,17 @@ pub fn class_step<'l, 'run: 'l>(
     crate::type_lattice::class_step(types, scratch, bounds, pinned, slots, exact)
 }
 
-/// Mark each of `slots` (a slot beside the type admitted there)
-/// [`Unreproduced`](OpenKind::Unreproduced): a solve a run may not reproduce, which no stored solve
-/// stands for.
-pub fn unreproduced(
-    marks: &dyn Marks,
-    types: &Chain<'_, '_, '_, '_>,
-    slots: &[(Parametric, Parametric)],
-) {
-    for (slot, contribution) in slots {
-        let slot = Some(DeclaredType::Type(*slot));
-        mark(
-            marks,
-            types,
-            OpenKind::Unreproduced,
-            slot,
-            DeclaredType::Type(*contribution),
-        );
-    }
-}
-
 /// A solve the load cannot write over the names it reads, stored whole as [`Rule::Solved`]: the
 /// callee's `scheme`, its group pinned as `pinned`, solved by one class step over `carried` — each
 /// involved slot's position, in slot order, beside the type it contributes — over exact
 /// contributions where `exact` says so. Whether it solves is [`Question::Defined`]: `None` where
-/// every binding, or the witness, answers no. Else each variable's solution, as [`ruled`] hands it
+/// every binding answers no. Else each variable's solution, as [`ruled`] hands it
 /// back: closed, or the derived name the stored solve types, so a run solves it under its own
-/// binding. Asked where the step is not one a run reproduces; `carried` and the group fit a
-/// stored solve's bits.
-pub fn stored_solve<'x>(
-    marks: &dyn Marks,
+/// binding. Asked where the step is not one a run reproduces. `carried` and the group fit a
+/// stored solve's bits, since the load refuses a quantified type too wide for them
+/// ([`TooWide`](crate::scope::Elaboration::TooWide)).
+pub fn stored_solve<'x, U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     scheme: Scheme,
@@ -611,7 +579,6 @@ pub fn stored_solve<'x>(
     carried: &[(usize, Parametric)],
     exact: bool,
 ) -> Option<&'x [Parametric]> {
-    debug_assert!(pinned.len() < 64 && carried.iter().all(|(position, _)| *position < 64));
     let mut operands = BumpVec::with_capacity_in(1 + carried.len() + pinned.len(), scratch);
     operands.push(DeclaredType::Scheme(scheme));
     let mut involved = 0u64;
@@ -634,8 +601,7 @@ pub fn stored_solve<'x>(
     };
     let operands = collect(scratch, operands.iter().copied());
     let question = Question::Defined { rule, operands };
-    let answered = rigid_answer(types, scratch, &question).or_else(|| marks.witnessed(question));
-    match answered {
+    match ask(marks, types, scratch, question) {
         Some(Answer::Bool(false)) => return None,
         Some(_) => {}
         None => {
@@ -650,13 +616,13 @@ pub fn stored_solve<'x>(
     ruled(marks, types, scratch, (rule, operands), &undecided)
 }
 
-/// What `(head payload)` builds over a static payload type, through the doors: a newtype's fit is
-/// the [`fits`] question of the payload against its representation, which the closed rule's own
-/// satisfaction is, and a family's solve is [`admits`] and [`solve`], applied where the load writes
-/// it over names. Where a run may solve the family otherwise, the operands of
-/// [`Rule::Constructed`] instead, whose closed rule the end's type is.
+/// What `(head payload)` builds over a static payload type: a newtype's head where its payload
+/// fits its representation, which the closed rule's own satisfaction is, or the
+/// [`fits`](Question::Fits) question a binding decides it by; and a family's solve, [`admits_with`]
+/// and the collector's solve, applied where the load writes it over names. Where a run may solve
+/// the family otherwise, the operands of [`Rule::Constructed`] instead, whose closed rule the
+/// end's type is. It judges nothing a caller does not name, so it never marks.
 fn built<'x>(
-    marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     (head, payload): (KType, Parametric),
@@ -665,13 +631,18 @@ fn built<'x>(
     use crate::values::ConstructionRefused;
     match types.member_schema(head) {
         Some(NodeSchema::NewType(representation)) => {
-            match fits(marks, types, scratch, payload, representation) {
-                true => Ok(Built::Typed(head.into())),
-                false => Err(ConstructionRefused::Misfit {
-                    identity: head,
-                    representation,
-                    payload,
-                }),
+            let misfit = ConstructionRefused::Misfit {
+                identity: head,
+                representation,
+                payload,
+            };
+            let (a, b) = (DeclaredType::Type(payload), representation.into());
+            if crate::type_lattice::fits(types, scratch, a, b) {
+                return Ok(Built::Typed(head.into()));
+            }
+            match holds_variable(types, a) || holds_variable(types, b) {
+                true => Ok(Built::Fitting(Question::Fits { a: a.into(), b })),
+                false => Err(misfit),
             }
         }
         Some(NodeSchema::TypeConstructor {
@@ -683,7 +654,7 @@ fn built<'x>(
                 family: head,
                 payload,
             };
-            admits(
+            admits_with(
                 types,
                 scratch,
                 representation,
@@ -699,8 +670,7 @@ fn built<'x>(
                     operands.iter().copied(),
                 )));
             }
-            let involved = [(representation, payload)];
-            let solved = solve(marks, types, &collector, &involved).map_err(|_| refused)?;
+            let solved = collector.solve(types).map_err(|_| refused)?;
             let mut arguments = BumpVec::with_capacity_in(param_names.len(), scratch);
             arguments.extend(
                 (param_names.iter().zip(solved.iter()))
@@ -714,18 +684,21 @@ fn built<'x>(
     }
 }
 
-/// [`built`]'s answer: the type built, or the operands of a construction a run may solve otherwise.
+/// [`built`]'s answer: the type built; the operands of a construction a run may solve otherwise;
+/// or a newtype's head where a binding decides its payload's fit, the question it asks.
 enum Built<'x> {
     Typed(Parametric),
     Unreproduced(&'x [DeclaredType<Parametric>]),
+    Fitting(Question<'x>),
 }
 
 /// The lower end of `(head payload)` over a static payload type ([`built`]). Where a run may solve
 /// the family otherwise, the type on whether it solves ([`Question::Defined`] over
-/// [`Rule::Constructed`]): the rule's output where it does, `Never` where it does not, so it is the
-/// same at load and under every binding.
-pub fn construction(
-    marks: &dyn Marks,
+/// [`Rule::Constructed`]): the rule's output where it does, `Never` where it does not; where a
+/// binding decides a newtype payload's fit, the head on whether it fits. So it is the same at load
+/// and under every binding.
+pub fn construction<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     (head, payload): (KType, Parametric),
@@ -734,12 +707,16 @@ pub fn construction(
         family: head,
         payload,
     };
-    let operands = match built(marks, types, scratch, (head, payload))? {
+    let never = Parametric::from(KType::NEVER);
+    let operands = match built(types, scratch, (head, payload))? {
         Built::Typed(built) => return Ok(built),
         Built::Unreproduced(operands) => operands,
+        Built::Fitting(question) => {
+            let arms = [never, head.into()];
+            return Ok(decided(marks, types, scratch, (question, &arms), never));
+        }
     };
     let rule = Rule::Constructed;
-    let never = Parametric::from(KType::NEVER);
     let constructed = ruled(marks, types, scratch, (rule, operands), &[head.into()]);
     let constructed = constructed.ok_or(refused)?[0];
     let question = Question::Defined { rule, operands };
@@ -756,16 +733,18 @@ pub fn construction(
 /// peels to where the head is its tag projection ([`constructed_upper`]). Where a run may solve the
 /// family otherwise, [`Rule::Construction`]'s upper output, the closed rule over both outcomes, so
 /// it is the same at load and under every binding.
-pub fn construction_upper(
-    marks: &dyn Marks,
+pub fn construction_upper<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     (head, payload): (KType, Parametric),
     owner: Option<KType>,
 ) -> Parametric {
     let through = owner.and_then(|owner| tag_union(types, scratch, owner));
-    let built = match built(marks, types, scratch, (head, payload)) {
+    let built = match built(types, scratch, (head, payload)) {
         Ok(Built::Typed(built)) => Ok(built),
+        // A misfit faults, so the upper end is the head whether or not the payload fits.
+        Ok(Built::Fitting(_)) => Ok(head.into()),
         Err(refused) => Err(refused),
         Ok(Built::Unreproduced(_)) => {
             let mut operands = BumpVec::with_capacity_in(3, scratch);
@@ -783,40 +762,120 @@ pub fn construction_upper(
     constructed_upper(types, scratch, (head, through), built)
 }
 
+/// The value member `typed` reads off a module the load cannot see, beside the type the module
+/// carries: the derived name a member read is typed by ([`Rule::SignatureValue`]), or the one
+/// decided on whether the module declares it, each read through its arrival guard. `None` for any
+/// other type.
+pub fn unseen_member(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    typed: Parametric,
+) -> Option<(ValueSymbol, Parametric)> {
+    let typed = arriving(marks, types, typed);
+    let TypeNode::Derived { term, .. } = types.node(typed) else {
+        return None;
+    };
+    let read = |rule, operands: &[DeclaredType<Parametric>]| match (rule, operands) {
+        (Rule::SignatureValue(name), [DeclaredType::Type(carried)]) => Some((name, *carried)),
+        _ => None,
+    };
+    match marks.term(term)? {
+        DerivedTerm::Output { rule, operands, .. } => read(rule, operands),
+        DerivedTerm::Decided {
+            decision: Decider::Answer(Question::Defined { rule, operands }),
+            ..
+        } => read(rule, operands),
+        _ => None,
+    }
+}
+
+/// The instance of the value member `name` of a module the load cannot see, whose module carries
+/// `carried`, read at an instance site wanted at `wanted` ([`Rule::MemberInstance`]): the question
+/// whether it has one there, beside its rigid answer, and the instance's type — `None` where the
+/// answer is no.
+pub fn member_instance<'l, U>(
+    marks: &dyn Derives<Unwalked = U>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'l>,
+    (name, carried): (ValueSymbol, Parametric),
+    wanted: Option<Parametric>,
+) -> (Question<'l>, Option<Answer>, Option<Parametric>) {
+    let rule = Rule::MemberInstance {
+        name,
+        wanted: wanted.is_some(),
+    };
+    let mut operands = BumpVec::with_capacity_in(2, scratch);
+    operands.push(DeclaredType::Type(carried));
+    operands.extend(wanted.map(DeclaredType::Type));
+    let operands = operands.leak();
+    let question = Question::Defined { rule, operands };
+    let rigid = ask(marks, types, scratch, question);
+    if rigid == Some(Answer::Bool(false)) {
+        return (question, rigid, None);
+    }
+    let instance = ruled_one(marks, types, scratch, rule, operands)
+        .ok()
+        .flatten();
+    (question, rigid, instance)
+}
+
+/// [`Rule::InstanceAt`] over `scheme`, beside the bounds `rebounds` its group writes over names,
+/// wanted at `wanted`: the rule beside its operands, the bounds after the scheme and the wanted
+/// type by group position.
+pub fn instance_at<'l>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'l>,
+    (scheme, rebounds): (Scheme, Rebounds<'_>),
+    wanted: Parametric,
+) -> (Rule, &'l [DeclaredType<Parametric>]) {
+    let mut bounded = BumpVec::with_capacity_in(rebounds.0.len(), scratch);
+    bounded.extend(rebounds.0.iter().copied());
+    bounded.sort_unstable_by_key(|(at, _)| *at);
+    let mut operands = BumpVec::with_capacity_in(2 + bounded.len(), scratch);
+    operands.extend([DeclaredType::Scheme(scheme), DeclaredType::Type(wanted)]);
+    operands.extend(bounded.iter().map(|(_, bound)| DeclaredType::Type(*bound)));
+    let rule = Rule::InstanceAt {
+        variables: scheme.group(types).bounds.len() as u8,
+        bounded: (bounded.iter()).fold(0, |mask, (at, _)| mask | 1 << at),
+    };
+    (rule, operands.leak())
+}
+
 /// [`instance_under`]: named where its solve record is reproducible, so a binding written in gives
 /// the run's. Where it is not, the instance is fixed at each variable's output of
 /// [`Rule::InstanceAt`], which a binding instantiates again, whether or not the load's solve
-/// succeeded: whether one is fixed is [`Question::Defined`], and a no — at every binding or the
-/// witness's — is no solve. Undecided, its types are marked with the question's kind.
-pub fn instance<'l, 'run: 'l>(
-    marks: &dyn Marks,
+/// succeeded: whether one is fixed is [`Question::Defined`], and a no at every binding is no
+/// solve. Undecided, its types are marked with the question's kind.
+pub fn instance<'l, 'run: 'l, U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'l>,
-    scheme: Scheme,
+    (scheme, rebounds): (Scheme, Rebounds<'_>),
     wanted: Parametric,
 ) -> SolveRecord<'l> {
     let record = instance_under(types, scratch, scheme, wanted);
     let bounds = scheme.group(types).bounds;
-    if record.reproducible || bounds.len() > usize::from(u8::MAX) {
+    // Over bounds a binding writes in, the solve at their upper ends is no binding's own.
+    if record.reproducible && rebounds.is_empty() {
         return record;
     }
-    let rule = Rule::InstanceAt {
-        variables: bounds.len() as u8,
+    let record = SolveRecord {
+        reproducible: false,
+        ..record
     };
-    let operands = [DeclaredType::Scheme(scheme), DeclaredType::Type(wanted)];
-    let operands = collect(scratch, operands.iter().copied());
+    let (rule, operands) = instance_at(types, scratch, (scheme, rebounds), wanted);
     let unsolved = SolveRecord {
         solved: None,
         ..record
     };
     let question = Question::Defined { rule, operands };
-    match rigid_answer(types, scratch, &question).or_else(|| marks.witnessed(question)) {
+    match ask(marks, types, scratch, question) {
         Some(Answer::Bool(false)) => return unsolved,
         Some(_) => {}
         None => {
-            let scheme = DeclaredType::Scheme(scheme);
-            mark(marks, types, question.kind(), Some(wanted.into()), scheme);
-            mark(marks, types, question.kind(), None, wanted.into());
+            for operand in operands {
+                mark(marks, types, question.kind(), Some(wanted.into()), *operand);
+            }
         }
     }
     let mut undecided = BumpVec::with_capacity_in(bounds.len(), scratch);
@@ -838,7 +897,7 @@ pub fn instance<'l, 'run: 'l>(
 }
 
 /// Whether `ty` is a function type, as an instance is wanted at one: named where its head says,
-/// at every binding alike; else the witness's answer, or marked with [`Question::IsFunction`]'s
+/// at every binding alike; else marked with [`Question::IsFunction`]'s
 /// kind and taken as none.
 pub fn is_function(
     marks: &dyn Marks,
@@ -847,7 +906,7 @@ pub fn is_function(
     ty: Parametric,
 ) -> bool {
     let question = Question::IsFunction { ty };
-    match rigid_answer(types, scratch, &question).or_else(|| marks.witnessed(question)) {
+    match ask(marks, types, scratch, question) {
         Some(Answer::Bool(function)) => function,
         _ => {
             mark(marks, types, question.kind(), None, ty.into());
@@ -903,8 +962,8 @@ pub fn projection(
 /// Substitution commutes with the door, so it marks nothing. A variable whose bound does not
 /// guarantee the piece has the derived name of the piece a binding reads ([`Rule::Piece`]), the
 /// same at load and under every binding; outside a walk, where no binding is written in, none.
-pub fn piece(
-    marks: &dyn Marks,
+pub fn piece<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     ty: Parametric,
@@ -914,47 +973,8 @@ pub fn piece(
     if piece.is_some() || !is_variable(&types.node(ty)) {
         return piece;
     }
-    ruled_one(
-        marks,
-        types,
-        scratch,
-        Rule::Piece(step),
-        &[DeclaredType::Type(ty)],
-    )
-}
-
-/// Whether `end` is a lexical variable, or a projection of one, whose declared bound lies under
-/// `ceiling` in the order. It reads the declared bound, which no binding changes, and every binding
-/// lies under it, so it never marks.
-pub fn rigid_within(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    end: Parametric,
-    ceiling: KType,
-) -> bool {
-    match types.node(end) {
-        TypeNode::Lexical { bound, .. }
-        | TypeNode::Derived { bound, .. }
-        | TypeNode::Projection { bound, .. } => {
-            crate::type_lattice::is_subtype_of(types, scratch, bound, ceiling)
-        }
-        _ => false,
-    }
-}
-
-/// Whether `ty` is a variable whose declared bound meets `other` at `Never` alone, so that no
-/// binding of it lies under `other`: a binding lies under the bound, or is a view's carrier, which
-/// lies under nothing but `Any` and a union holding it. It reads the declared bound, which no
-/// binding changes, so it never marks.
-pub fn variable_outside(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    ty: Parametric,
-    other: KType,
-) -> bool {
-    (types.node(ty).rigid_bound()).is_some_and(|bound| {
-        crate::type_lattice::meet(types, scratch, bound, other) == KType::NEVER
-    })
+    let operand = [DeclaredType::Type(ty)];
+    (ruled_one(marks, types, scratch, Rule::Piece(step), &operand).ok()).flatten()
 }
 
 /// `ty`'s node where it is no variable, where a rule declines a variable rather than judges what
@@ -978,29 +998,25 @@ pub fn path_class(types: &Chain<'_, '_, '_, '_>, ty: Parametric) -> Option<PathC
 
 /// `ty`'s node, where a rule reads off it whether a binder declared at `ty` is a module binder —
 /// a discrete judgement, as a variable's node is read for its bound alone: `None` where `ty` is a
-/// variable bounded by no signature, or one the witness binds to no signature, noted beside its
-/// question; else its node, a variable's marked [`ModuleBinder`](OpenKind::ModuleBinder) where no
-/// witness answers.
+/// variable bounded by no signature, noted beside its question; else its node, a variable's
+/// marked [`ModuleBinder`](OpenKind::ModuleBinder).
 pub fn module_node<'n>(
     marks: &dyn Marks,
     types: &Chain<'n, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
     ty: Parametric,
 ) -> Option<TypeNode<'n, Parametric>> {
     if !bare_variable(types, DeclaredType::Type(ty)) {
         return node_unless_variable(types, ty);
     }
-    // A view's name, the type a `:Module` binder carries, or a signature over names, is a
-    // signature at every binding.
-    if is_signature_name(marks, types, ty) {
-        return Some(own_variable(types, ty));
-    }
     // Only a bound that is a signature names the schema a module binder's reads go through: a
-    // variable bounded by any other is no module binder, whatever a binding gives it.
+    // variable bounded by any other is no module binder, whatever a binding gives it, save a name
+    // that is a signature at every binding.
     let bound = own_variable(types, ty).rigid_bound();
-    if !bound.is_some_and(|bound| is_module(types, bound)) {
+    if !is_signature_name(marks, types, ty) && !bound.is_some_and(|bound| is_module(types, bound)) {
         return None;
     }
-    match marks.witnessed(Question::Module { ty }) {
+    match ask(marks, types, scratch, Question::Module { ty }) {
         Some(Answer::Bool(false)) => return None,
         Some(_) => {}
         None => mark(
@@ -1016,7 +1032,7 @@ pub fn module_node<'n>(
 
 /// Whether `ty` is a signature or an application of one, as the view door takes: its head's
 /// answer where it is closed or its head is no variable, which no binding changes; no for a
-/// variable whose bound meets no signature; else the witness's answer, or `None`, marked
+/// variable whose bound meets no signature; else `None`, marked
 /// [`ModuleBinder`](OpenKind::ModuleBinder).
 pub fn module_decided(
     marks: &dyn Marks,
@@ -1024,19 +1040,7 @@ pub fn module_decided(
     scratch: BumpAllocator<'_>,
     ty: Parametric,
 ) -> Option<bool> {
-    if let Some(closed) = types.concrete(ty) {
-        return Some(is_module(types, closed));
-    }
-    if let Some(node) = node_unless_variable(types, ty) {
-        return Some(matches!(
-            node,
-            TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
-        ));
-    }
-    if variable_outside(types, scratch, ty, KType::EMPTY_SIGNATURE) {
-        return Some(false);
-    }
-    if let Some(Answer::Bool(module)) = marks.witnessed(Question::Module { ty }) {
+    if let Some(Answer::Bool(module)) = ask(marks, types, scratch, Question::Module { ty }) {
         return Some(module);
     }
     mark(
@@ -1054,7 +1058,97 @@ pub fn module_decided(
 /// never marks.
 pub fn is_carried(marks: &dyn Marks, types: &Chain<'_, '_, '_, '_>, ty: Parametric) -> bool {
     matches!(types.node(ty), TypeNode::Derived { term, .. }
-        if matches!(marks.term(term), Some(DerivedTerm::Carried { .. })))
+        if marks.term(term).is_some_and(|term| term.carries_a_module()))
+}
+
+/// `typed` as a solve reads it where every binder declared `Any` it names
+/// ([`DerivedTerm::Carried`] under `Any`) were declared at no name: each such name written in at
+/// its ends, `Never` into the lower end and `Any` into the upper, and each derived name over one
+/// handed again. A name a question decides over one is read at its own ends, since the question
+/// decides otherwise at each type between them. Declared `Any` is a spelling, so a solve over
+/// such a name is what it is over `Any`. Bookkeeping on the names, so it never marks.
+pub fn any_names_at_their_ends<U>(
+    marks: &dyn Derives<Unwalked = U>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    typed: Interval,
+) -> Interval {
+    let at = |ty: Parametric, end: KType| {
+        let binds = AnyAt {
+            marks,
+            scratch,
+            end,
+        };
+        match crate::scope::rebound(types, scratch, DeclaredType::Type(ty), &binds) {
+            crate::scope::Closed::Type(DeclaredType::Type(closed)) => closed.into(),
+            crate::scope::Closed::Partial(DeclaredType::Type(partial)) => partial,
+            _ => ty,
+        }
+    };
+    Interval {
+        lower: at(typed.lower, KType::NEVER),
+        upper: at(typed.upper, KType::ANY),
+    }
+}
+
+/// A binding writing `end` in for each name of a binder declared `Any`, and the same end of each
+/// name a question decides over one, and nothing else: the walk's names and their terms
+/// otherwise.
+struct AnyAt<'m, 'x, U> {
+    marks: &'m dyn Derives<Unwalked = U>,
+    scratch: BumpAllocator<'x>,
+    end: KType,
+}
+
+impl<U> crate::scope::Binds for AnyAt<'_, '_, U> {
+    fn level(&self, _: &Chain<'_, '_, '_, '_>, _: usize) -> Option<KType> {
+        None
+    }
+
+    fn term(&self, id: DerivedId) -> Option<DerivedTerm<'_>> {
+        self.marks.term(id)
+    }
+
+    fn name(
+        &self,
+        _: &Chain<'_, '_, '_, '_>,
+        _: BumpAllocator<'_>,
+        term: DerivedTerm<'_>,
+    ) -> Option<Parametric> {
+        self.marks.derive(term).ok()
+    }
+
+    fn written(&self, types: &Chain<'_, '_, '_, '_>, variable: Variable) -> Option<Parametric> {
+        let Variable::Derived { term, .. } = variable else {
+            return None;
+        };
+        match self.marks.term(term)? {
+            DerivedTerm::Carried { bound, .. } if bound == Parametric::from(KType::ANY) => {
+                Some(self.end.into())
+            }
+            // The decided name's lower end is `Never`, and its upper the join of its arms where
+            // each is closed, else `Any`: no type between the name's ends picks one arm.
+            decided @ DerivedTerm::Decided { .. } => {
+                let (written, changed) = decided.substituted(types, self.scratch, self);
+                if !changed {
+                    return None;
+                }
+                let DerivedTerm::Decided { arms, .. } = written else {
+                    unreachable!("a decided term stays decided")
+                };
+                let upper = || {
+                    (arms.iter()).try_fold(KType::NEVER, |joined, arm| {
+                        Some(join(types, self.scratch, joined, types.concrete(*arm)?))
+                    })
+                };
+                Some(match self.end == KType::NEVER {
+                    true => KType::NEVER.into(),
+                    false => upper().unwrap_or(KType::ANY).into(),
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Whether `ty` is a view's name ([`Rule::View`]): at every binding a signature pinning every head
@@ -1068,10 +1162,7 @@ pub fn is_view(marks: &dyn Marks, types: &Chain<'_, '_, '_, '_>, ty: Parametric)
 /// a `:Module` binder carries ([`is_carried`]), or a signature written over names
 /// ([`DerivedTerm::Signature`]). Bookkeeping on the name, so it never marks.
 pub fn is_signature_name(marks: &dyn Marks, types: &Chain<'_, '_, '_, '_>, ty: Parametric) -> bool {
-    is_view(marks, types, ty)
-        || is_carried(marks, types, ty)
-        || matches!(types.node(ty), TypeNode::Derived { term, .. }
-            if matches!(marks.term(term), Some(DerivedTerm::Signature { .. })))
+    crate::scope::signature_name(types, &|id| marks.term(id), ty)
 }
 
 /// The member `name` a module's own signature written over names declares, read off its
@@ -1090,6 +1181,229 @@ pub fn signed_member(
         Some(DerivedTerm::Signature { signed, operands }) if !signed.declared => {
             Some(signed.member(operands, name))
         }
+        _ => None,
+    }
+}
+
+/// What a type declared over run-bound names shows of itself in its declaration's text, the same
+/// at every binding ([`declared`]).
+#[derive(Clone, Copy)]
+pub enum Declared<'a> {
+    /// A `NEWTYPE`, a `UNION` or one of its variants, or a family, of the group `group`.
+    Nominal {
+        group: &'a Nominals<'a>,
+        shown: Showing<'a>,
+    },
+    /// A `SIG`.
+    Signature(Signed<'a>),
+}
+
+impl Declared<'_> {
+    /// The names of a declared union's variants, in declared order: `None` for any other
+    /// declaration.
+    pub fn variants(&self) -> Option<impl Iterator<Item = Symbol> + '_> {
+        match *self {
+            Declared::Nominal {
+                group,
+                shown: Showing::Union { variants, .. },
+            } => Some(variants.iter().map(|index| group.name(*index).symbol())),
+            _ => None,
+        }
+    }
+
+    /// Whether `Owner.name` over the declaration reads a member its text shows: a union's
+    /// variant, or a field or a variant of a newtype's or a variant's representation.
+    pub fn shows_member(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        name: BinderSymbol,
+    ) -> bool {
+        if let Some(mut variants) = self.variants() {
+            return variants.any(|variant| variant == name.symbol());
+        }
+        match *self {
+            Declared::Nominal {
+                shown:
+                    Showing::Member {
+                        representation: Some(representation),
+                        ..
+                    },
+                ..
+            } => {
+                types
+                    .projection(scratch, representation, Step::Field(name))
+                    .is_some()
+                    || crate::scope::variant_named(types, representation, name.symbol()).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// The parameters a head spelling over the declaration names: a family's, or those every
+    /// variant of a union takes. `None` for a declaration that takes none.
+    pub fn params(&self) -> Option<&[TypeSymbol]> {
+        match *self {
+            Declared::Nominal {
+                shown: Showing::Union { params, .. },
+                ..
+            } => params.filter(|params| !params.is_empty()),
+            Declared::Nominal {
+                shown: Showing::Member { params, .. },
+                ..
+            } => (!params.is_empty()).then_some(params),
+            Declared::Signature(_) => None,
+        }
+    }
+}
+
+/// What `ty` shows where it is a type declared over run-bound names — a nominal or a signature,
+/// whose derived name hands back the declaration a binding seals — read off its term: `None` for
+/// any other type. A spelling over one is licensed by its declaration, never by a binding. It
+/// reads the declaration, so it never marks.
+pub fn declared<'m>(
+    marks: &'m dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    ty: Parametric,
+) -> Option<Declared<'m>> {
+    let TypeNode::Derived { term, .. } = types.node(ty) else {
+        return None;
+    };
+    match marks.term(term)? {
+        DerivedTerm::Nominal {
+            group,
+            operands,
+            output,
+        } => (group.shown(output, operands)).map(|shown| Declared::Nominal { group, shown }),
+        DerivedTerm::Signature { signed, .. } => Some(Declared::Signature(*signed)),
+        _ => None,
+    }
+}
+
+/// Whether the bound of `ty`, the static type of a value a field read `x.name` reads, licenses the
+/// read at every binding: a field the bound guarantees, a member a signature bound declares, or a
+/// member of a type value under a type bound. `None` where `ty` is no type over run-bound `FOR
+/// ALL` names alone ([`over_for_all_names`]), whose read is judged as any other type's
+/// ([what a body may ask of a `FOR ALL` name](../../design/quantified-types.md#what-a-body-may-ask-of-a-for-all-name)).
+/// It reads the bound, never what a binding gives the name, so it never marks.
+pub fn read_licensed(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    ty: Parametric,
+    name: BinderSymbol,
+) -> Option<bool> {
+    if !over_for_all_names(marks, types, scratch, ty) {
+        return None;
+    }
+    if types.projection(scratch, ty, Step::Field(name)).is_some() {
+        return Some(true);
+    }
+    let bound = crate::type_lattice::bound_above(types, scratch, ty);
+    Some(
+        bound_declares(marks, types, scratch, ty, name)
+            || crate::type_lattice::is_subtype_of(types, scratch, bound, KType::ANY_TYPE),
+    )
+}
+
+/// Whether `ty` holds a run-bound `FOR ALL` name and every name it holds is one, a projection off
+/// one, or a derived name over such names alone: a type whose bound licenses what a body asks of
+/// it. A module's carried type, a view, a signature written over names and a path's variable are
+/// given by a module the run builds, and a declaration the load left unknown is decided where it
+/// is typed, so `false`. Bookkeeping on the names, so it never marks.
+pub fn over_for_all_names(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    ty: Parametric,
+) -> bool {
+    if types.concrete(ty).is_some() {
+        return false;
+    }
+    let mut alone = true;
+    read_through(types, scratch, ty, Side::Above, &mut |variable| {
+        alone &= match variable {
+            // A declaration the load left unknown, past a quote's chain, is decided where it is
+            // typed, not licensed by a bound.
+            Variable::Lexical { level, .. } => !marks.declares_type(level),
+            Variable::Projection { .. } => true,
+            Variable::Derived { term, .. } => match marks.term(term) {
+                Some(DerivedTerm::Output { rule, operands, .. }) if rule != Rule::View => {
+                    (operands.iter()).all(|operand| match operand {
+                        DeclaredType::Type(ty) => {
+                            types.concrete(*ty).is_some()
+                                || over_for_all_names(marks, types, scratch, *ty)
+                        }
+                        DeclaredType::Scheme(_) => false,
+                    })
+                }
+                _ => false,
+            },
+            Variable::Path { .. } | Variable::Quantified { .. } | Variable::Parameter { .. } => {
+                false
+            }
+        };
+        None
+    });
+    alone
+}
+
+/// Whether every module of `ty`, a type a binding decides, declares the member `name`, by the
+/// bound alone: an application declares what its signature does whatever its pins, a union where
+/// each member does, a meet where one does, and a name where its bound does. It reads bounds,
+/// which are closed, and derived names' terms, so it never marks.
+pub fn bound_declares(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    ty: Parametric,
+    name: BinderSymbol,
+) -> bool {
+    let declares = |ty: &DeclaredType<Parametric>| match ty {
+        DeclaredType::Type(ty) => bound_declares(marks, types, scratch, *ty, name),
+        DeclaredType::Scheme(_) => false,
+    };
+    match types.node(ty) {
+        TypeNode::SignatureApply { signature, .. } => {
+            super::members::applied_member(types, scratch, signature, &[], name).is_some()
+        }
+        TypeNode::Union { members } => {
+            (members.iter()).all(|each| bound_declares(marks, types, scratch, each, name))
+        }
+        TypeNode::SignatureMeet { members } => {
+            (members.iter()).any(|each| bound_declares(marks, types, scratch, each, name))
+        }
+        TypeNode::Derived { term, .. }
+            if let Some(DerivedTerm::Output {
+                rule: Rule::Meet,
+                operands,
+                ..
+            }) = marks.term(term) =>
+        {
+            operands.iter().any(declares)
+        }
+        _ => {
+            let bound = crate::type_lattice::bound_above(types, scratch, ty);
+            super::members::signature_member(&NoMarks, types, scratch, bound.into(), name).is_some()
+        }
+    }
+}
+
+/// The bound a refusal names `ty` by, read from above: wording for a message, never a judgement of
+/// what a binding gives it, so it never marks.
+pub fn named_bound(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    ty: Parametric,
+) -> KType {
+    crate::type_lattice::bound_above(types, scratch, ty)
+}
+
+/// The level of `ty` where it is a run-bound name's own lexical variable: bookkeeping on the
+/// variable, so it never marks.
+pub fn lexical_level(types: &Chain<'_, '_, '_, '_>, ty: Parametric) -> Option<usize> {
+    match own_variable(types, ty) {
+        TypeNode::Lexical { level, .. } => Some(level),
         _ => None,
     }
 }
@@ -1114,8 +1428,8 @@ pub fn closed_type_node<'n>(types: &Chain<'n, '_, '_, '_>, ty: KType) -> TypeNod
 /// binding, else the derived name for the lower end ([`Rule::Retyped`]), which a binding gives the
 /// lower end a load with it declared retypes to. So the interval is the same at load and under
 /// every binding, and the retype asks nothing.
-pub fn retyped(
-    marks: &dyn Marks,
+pub fn retyped<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     declared: Parametric,
@@ -1158,8 +1472,7 @@ pub fn retyped_lower(
     }
 }
 
-/// How a retype to `declared` re-stamps, beside it: named where `declared` is closed; else the
-/// witness's answer over the rigid `declared`, which a binding's table closes, or marked
+/// How a retype to `declared` re-stamps, beside it: named where `declared` is closed; else marked
 /// [`Retype`](OpenKind::Retype).
 pub fn restamp(
     marks: &dyn Marks,
@@ -1167,11 +1480,8 @@ pub fn restamp(
     scratch: BumpAllocator<'_>,
     declared: Parametric,
 ) -> Option<Restamp> {
-    if let Some(closed) = types.concrete(declared) {
-        let how = crate::values::Restamping::of(types, scratch, closed);
-        return Some(Restamp { how, at: declared });
-    }
-    if let Some(Answer::Restamps(how)) = marks.witnessed(Question::Restamp { declared }) {
+    let question = Question::Restamp { declared };
+    if let Some(Answer::Restamps(how)) = ask(marks, types, scratch, question) {
         return Some(Restamp { how, at: declared });
     }
     mark(
@@ -1182,6 +1492,17 @@ pub fn restamp(
         DeclaredType::Type(declared),
     );
     None
+}
+
+/// The closed type above `ty` at every binding: each variable read at the end its position
+/// needs, its bound where covariant and its lower end where contravariant. What a bound written
+/// over an encloser's names is laid at; it reads bounds alone, so it never marks.
+pub fn upper_end(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    ty: Parametric,
+) -> KType {
+    crate::type_lattice::bound_above(types, scratch, ty)
 }
 
 /// `ty` as a closed type, where a rule keeps it rigid otherwise: a binding substitutes the rigid
@@ -1198,25 +1519,36 @@ pub fn static_declared(
     types.concrete_declared(ty)
 }
 
-/// Whether `a` and `b` are one type: named where they are, or where their heads are no variable
-/// and differ, which no binding makes alike; else the witness's answer, or marked
-/// [`Unequal`](OpenKind::Unequal).
+/// Whether `a` and `b` are one type: [`same_decided`], undecided taken as no.
 pub fn same(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
     a: impl Into<DeclaredType<Parametric>>,
     b: impl Into<DeclaredType<Parametric>>,
 ) -> bool {
+    same_decided(marks, types, scratch, a, b) == Some(true)
+}
+
+/// Whether `a` and `b` are one type, where a rule acts on either answer: named where they are, or
+/// where neither holds a variable; else `None`, marked
+/// [`Unequal`](OpenKind::Unequal), since two non-variable heads over variables may come out one
+/// under a binding.
+pub fn same_decided(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    a: impl Into<DeclaredType<Parametric>>,
+    b: impl Into<DeclaredType<Parametric>>,
+) -> Option<bool> {
     let (a, b) = (a.into(), b.into());
-    let same = a == b;
-    // Two non-variable heads over variables may come out one under a binding.
-    if !same && (holds_variable(types, a) || holds_variable(types, b)) {
-        if let Some(Answer::Bool(same)) = marks.witnessed(Question::Same { a, b }) {
-            return same;
+    match ask(marks, types, scratch, Question::Same { a, b }) {
+        Some(Answer::Bool(same)) => Some(same),
+        _ => {
+            mark(marks, types, OpenKind::Unequal, Some(b), a);
+            None
         }
-        mark(marks, types, OpenKind::Unequal, Some(b), a);
     }
-    same
 }
 
 /// `typed`'s type where it is exact and closed: a fold's reading, which is the load's alone, so it
@@ -1228,34 +1560,81 @@ pub fn exactly(types: &Chain<'_, '_, '_, '_>, typed: Interval) -> Option<KType> 
 }
 
 /// Whether `interval` is one type: [`same`] over its ends.
-pub fn exact(marks: &dyn Marks, types: &Chain<'_, '_, '_, '_>, interval: Interval) -> bool {
-    same(marks, types, interval.lower, interval.upper)
+pub fn exact(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    interval: Interval,
+) -> bool {
+    same(marks, types, scratch, interval.lower, interval.upper)
 }
 
-/// Whether `ty` is the closed type `constant`: named where it is, or where it holds a variable
-/// only below a head that is no variable — save `Never`, which a union of names may be; else the
-/// witness's answer, or marked [`Unequal`](OpenKind::Unequal).
+/// Whether `interval` is one type, where a rule acts on either answer: [`same_decided`] over its
+/// ends, beside the question it asks.
+pub fn exact_decided<'x>(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    interval: Interval,
+) -> (Question<'x>, Option<bool>) {
+    let question = Question::Same {
+        a: interval.lower.into(),
+        b: interval.upper.into(),
+    };
+    (
+        question,
+        same_decided(marks, types, scratch, interval.lower, interval.upper),
+    )
+}
+
+/// Whether `ty` is the closed type `constant`: [`is_decided`], undecided taken as no.
 pub fn is(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
     ty: impl Into<DeclaredType<Parametric>>,
     constant: KType,
 ) -> bool {
+    is_decided(marks, types, scratch, ty, constant) == Some(true)
+}
+
+/// Whether `ty` is the closed type `constant`, where a rule acts on either answer: named where it
+/// is, or where it holds a variable only below a head that is no variable — save `Never`, which a
+/// union of names may be; else `None`, marked
+/// [`Unequal`](OpenKind::Unequal).
+pub fn is_decided(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    ty: impl Into<DeclaredType<Parametric>>,
+    constant: KType,
+) -> Option<bool> {
     let ty = ty.into();
-    let never = constant == KType::NEVER;
     let constant = DeclaredType::Type(Parametric::from(constant));
-    let is = ty == constant;
-    let open = match never {
-        true => types.concrete_declared(ty).is_none() && may_be_never(types, ty),
-        false => bare_variable(types, ty),
-    };
-    if !is && open {
-        if let Some(Answer::Bool(is)) = marks.witnessed(Question::Same { a: ty, b: constant }) {
-            return is;
+    match ask(marks, types, scratch, Question::Same { a: ty, b: constant }) {
+        Some(Answer::Bool(is)) => Some(is),
+        _ => {
+            mark(marks, types, OpenKind::Unequal, Some(constant), ty);
+            None
         }
-        mark(marks, types, OpenKind::Unequal, Some(constant), ty);
     }
-    is
+}
+
+/// The type on a yes-or-no `question`'s answer, `answered` as its door handed it back: `yes` or
+/// `no` where the door answered, else the name [`decided`] types on both, so it is the same
+/// at load and under every binding. Outside a walk an undecided question hands back `no`.
+pub fn on_answer<U>(
+    marks: &dyn Derives<Unwalked = U>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    (question, answered): (Question<'_>, Option<bool>),
+    (no, yes): (Parametric, Parametric),
+) -> Parametric {
+    match answered {
+        Some(true) => yes,
+        Some(false) => no,
+        None => decided(marks, types, scratch, (question, &[no, yes]), no),
+    }
 }
 
 /// Each type `rule` hands back over `operands`: [`handed`] of each output's term, a closed output,
@@ -1263,8 +1642,8 @@ pub fn is(
 /// at load and under every binding. Outside a walk, where no binding is written in, an output no
 /// spelling gives is its own of `undecided`. `None` where the closed rule has no answer over
 /// closed operands.
-pub fn ruled<'x>(
-    marks: &dyn Marks,
+pub fn ruled<'x, U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     (rule, operands): (Rule, &[DeclaredType<Parametric>]),
@@ -1279,35 +1658,36 @@ pub fn ruled<'x>(
             output,
         };
         let undecided = undecided[usize::from(output)];
-        let name = &mut |term: DerivedTerm<'_>| Some(marks.derive(term).unwrap_or(undecided));
-        outputs.push(handed(types, scratch, term, name)?);
+        let name = &mut |term: DerivedTerm<'_>| Ok::<_, U>(marks.derive(term).unwrap_or(undecided));
+        outputs.push(handed(types, scratch, term, name).ok().flatten()?);
     }
     Some(collect(scratch, outputs.iter().copied()))
 }
 
 /// The meet of `a` and `b` through [`Rule::Meet`]: closed where both are, `a` where they are one
-/// type or `b` is `Any`, else the derived name of their meet, which a binding meets. `None` over
-/// names outside a walk, where no binding is written in.
-pub fn met(
-    marks: &dyn Marks,
+/// type or `b` is `Any`, else the derived name of their meet, which a binding meets. `marks`'s
+/// error over names outside a walk, where no binding is written in.
+pub fn met<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     a: Parametric,
     b: Parametric,
-) -> Option<Parametric> {
+) -> Result<Parametric, U> {
     let operands = [DeclaredType::Type(a), DeclaredType::Type(b)];
     let term = DerivedTerm::Output {
         rule: Rule::Meet,
         operands: &operands,
         output: 0,
     };
-    handed(types, scratch, term, &mut |term: DerivedTerm<'_>| {
+    let met = handed(types, scratch, term, &mut |term: DerivedTerm<'_>| {
         marks.derive(term)
-    })
+    })?;
+    Ok(met.expect("two closed types meet"))
 }
 
 /// Whether the partial `rule` has an answer over `operands` ([`Question::Defined`]), as every
-/// binding or the witness answers; `None` where it is undecided, its operands marked
+/// binding answers; `None` where it is undecided, its operands marked
 /// [`Spells`](OpenKind::Spells). Beside it, whether the answer is every binding's.
 pub fn defined(
     marks: &dyn Marks,
@@ -1318,8 +1698,8 @@ pub fn defined(
 ) -> (Option<bool>, bool) {
     let operands = collect(scratch, operands.iter().copied());
     let question = Question::Defined { rule, operands };
-    let rigid = rigid_answer(types, scratch, &question);
-    match rigid.or_else(|| marks.witnessed(question)) {
+    let rigid = rigid(marks, types, scratch, &question);
+    match posed(marks, types, question, rigid) {
         Some(answer) => (Some(answer == Answer::Bool(true)), rigid.is_some()),
         None => {
             for operand in operands {
@@ -1331,15 +1711,15 @@ pub fn defined(
 }
 
 /// The output of the partial `rule` over `operands`, one output: [`handed`] of its term, closed,
-/// written over names, or the derived name standing for it. `None` outside a walk, where no
-/// binding is written in, or where the closed rule has no answer over closed operands.
-pub fn ruled_one(
-    marks: &dyn Marks,
+/// written over names, or the derived name standing for it. `None` where the closed rule has no
+/// answer over closed operands; `marks`'s error outside a walk, where no binding is written in.
+pub fn ruled_one<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     rule: Rule,
     operands: &[DeclaredType<Parametric>],
-) -> Option<Parametric> {
+) -> Result<Option<Parametric>, U> {
     let operands = collect(scratch, operands.iter().copied());
     let term = DerivedTerm::Output {
         rule,
@@ -1349,45 +1729,35 @@ pub fn ruled_one(
     handed(types, scratch, term, &mut |term| marks.derive(term))
 }
 
-/// What the spelling over a head `rule` spells over `operands` ([`Rule::Member`],
-/// [`Rule::Applied`] and the rest of [`crate::scope`]'s heads): the rule's closed output where every
-/// operand is closed. Else whether it spells is [`defined`], refused (`None`) where every binding,
-/// or the witness, answers no, and the type is the decided name on that answer, `Never` where it
-/// does not spell and the rule's output where it does, so it is the same at load and under every
-/// binding. `Some(None)` over names outside a walk, where no binding is written in.
-pub fn spelled(
-    marks: &dyn Marks,
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    rule: Rule,
-    operands: &[DeclaredType<Parametric>],
-) -> Option<Option<Parametric>> {
-    defined_else(marks, types, scratch, (rule, operands), KType::NEVER.into())
-}
-
-/// [`spelled`] for a partial rule whose type where it has no answer is `otherwise`, not `Never`:
-/// the read a site falls back to there, so the decided name closes as a fresh load's fallback.
-pub fn defined_else(
-    marks: &dyn Marks,
+/// Whether the partial `rule` spells over `operands`, and its type: the rule's closed output
+/// where every operand is closed, else the decided name on [`defined`], `otherwise` where it does
+/// not spell and the rule's output where it does, so it is the same at load and under every
+/// binding; `None` where every binding answers no. `otherwise` is the read a site
+/// falls back to where the rule has no answer, so the decided name closes as a fresh load's
+/// fallback.
+pub fn defined_else<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     (rule, operands): (Rule, &[DeclaredType<Parametric>]),
     otherwise: Parametric,
-) -> Option<Option<Parametric>> {
+) -> Option<Result<Parametric, U>> {
     let (spells, rigid) = defined(marks, types, scratch, rule, operands);
     if spells == Some(false) {
         return None;
     }
-    let Some(output) = ruled_one(marks, types, scratch, rule, operands) else {
-        return Some(None);
+    // Closed operands the rule has no answer over spell nothing, as `defined` answers.
+    let output = match ruled_one(marks, types, scratch, rule, operands) {
+        Ok(output) => output?,
+        Err(unwalked) => return Some(Err(unwalked)),
     };
     if rigid {
-        return Some(Some(output));
+        return Some(Ok(output));
     }
     let operands = collect(scratch, operands.iter().copied());
     let question = Question::Defined { rule, operands };
     let arms = [otherwise, output];
-    Some(Some(decided(
+    Some(Ok(decided(
         marks,
         types,
         scratch,
@@ -1398,12 +1768,11 @@ pub fn defined_else(
 
 /// The type on the answer `question` takes, `arms` the type on each answer, every one written over
 /// names: [`handed`] of the [decided](DerivedTerm::Decided) term — the one arm where every arm is
-/// it, the arm of the question's rigid answer, else the derived name typed on the arms. It never
-/// reads the witness, so it hands back the same type at load and under every binding; a site asks
-/// the witness apart for any discrete outcome the answer chooses. Outside a walk, where no binding
+/// it, the arm of the question's rigid answer, else the derived name typed on the arms, so it
+/// hands back the same type at load and under every binding. Outside a walk, where no binding
 /// is written in, it hands back `undecided`.
-pub fn decided(
-    marks: &dyn Marks,
+pub fn decided<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     (question, arms): (Question<'_>, &[Parametric]),
@@ -1414,21 +1783,21 @@ pub fn decided(
         decision: Decider::Answer(question),
         arms,
     };
-    let name = &mut |term: DerivedTerm<'_>| Some(marks.derive(term).unwrap_or(undecided));
-    handed(types, scratch, term, name).unwrap_or(undecided)
+    let name = &mut |term: DerivedTerm<'_>| Ok::<_, U>(marks.derive(term).unwrap_or(undecided));
+    (handed(types, scratch, term, name).ok().flatten()).unwrap_or(undecided)
 }
 
 /// [`decided`] with each answer's type given by `arm`: only the rigid answer's where there is one,
 /// so an arm no binding takes lays nothing.
-pub fn decided_by(
-    marks: &dyn Marks,
+pub fn decided_by<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     question: Question<'_>,
     arm: &mut dyn FnMut(Answer) -> Parametric,
     undecided: Parametric,
 ) -> Parametric {
-    if let Some(answer) = rigid_answer(types, scratch, &question) {
+    if let Some(answer) = rigid(marks, types, scratch, &question) {
         return arm(answer);
     }
     let arms = (0..question.answer_count()).map(|index| arm(question.nth_answer(index)));
@@ -1439,8 +1808,8 @@ pub fn decided_by(
 /// The type `then` gives where every one of `questions`, each a *yes* or *no* question, answers
 /// *yes*, else `otherwise`: decided names chained one question deep each, so it is the same at
 /// load and under every binding.
-pub fn when_all(
-    marks: &dyn Marks,
+pub fn when_all<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     questions: &[Question<'_>],
@@ -1461,8 +1830,8 @@ pub fn when_all(
 /// arrives, and `Never` where one never does: each end the decided name over whether each is
 /// `Never` ([`decided_by`]). So it is the same at load and under every binding, and a site that
 /// guards on [`is`] `Never` reads the guard only to skip its refusals.
-pub fn arrives(
-    marks: &dyn Marks,
+pub fn arrives<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     uppers: &[Parametric],
@@ -1484,8 +1853,8 @@ pub fn arrives(
 
 /// `end` where none of `uppers` is `Never`, else `Never`, one question deep each; `undecided`
 /// outside a walk. An end that is `Never` or the upper itself is `Never` with it, so asks nothing.
-pub fn never_unless(
-    marks: &dyn Marks,
+pub fn never_unless<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     uppers: &[Parametric],
@@ -1564,16 +1933,17 @@ fn never_with(
 
 /// The signature the skeleton `signed` seals at `operands`, each written over names: closed where
 /// every operand is, else the derived name whose term a binding seals as a fresh load does.
-/// `None` outside a walk, where no binding is written in.
-pub fn signature(
-    marks: &dyn Marks,
+/// `marks`'s error outside a walk, where no binding is written in.
+pub fn signature<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     signed: &crate::scope::Signed<'_>,
     operands: &[DeclaredType<Parametric>],
-) -> Option<Parametric> {
+) -> Result<Parametric, U> {
     let term = DerivedTerm::Signature { signed, operands };
-    handed(types, scratch, term, &mut |term| marks.derive(term))
+    let sealed = handed(types, scratch, term, &mut |term| marks.derive(term))?;
+    Ok(sealed.expect("a signature seals at every operand"))
 }
 
 /// Whether a binding decides `ty`'s head: a variable, or a union holding one. It reads the type's

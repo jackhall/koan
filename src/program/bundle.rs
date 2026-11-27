@@ -11,13 +11,13 @@
 
 use std::cell::Cell;
 
-use crate::knot::{KActivationView, KRegionHeader, KValue, Knotted, KnottedFamily};
+use crate::knot::{KActivationView, KRegionHeader, KValue, KnottedFamily};
 use crate::memory::{
     CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable, resident,
 };
 use crate::parse::SourceRef;
-use crate::scheduler::{Born, Kept, KeptPart, MemoHome, StepBundle};
-use crate::scope::{CaptureSlot, ComposedRoot, Level, Segment, Site, Slot, Stamp};
+use crate::scheduler::{Born, Kept, KeptPart, StepBundle};
+use crate::scope::{CaptureSlot, ComposedRoot, Segment, Site, Slot};
 use crate::scope::{Hop, Named};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Halves, KType};
@@ -44,12 +44,7 @@ pub enum KBirth<'graph, 'cell> {
     /// none. `handed` are the digest memos the caller hands on with arguments it passed bare.
     /// `call` is the extent of the call's node. `owed` is what the evaluation that tailed into this
     /// frame owed, its hop table counting the frame the hop replaced: `None` when the frame was
-    /// spawned. `inherit` is where the asker's decision memo rests, which seeds the frame's
-    /// where its home holds none. `level` is the request of the settlement the frame seeks, which a
-    /// callable born under it records in its stamp: kept by a hop under its frame's own
-    /// settlement; `None` for any other frame, which lays its own from the request the drain
-    /// hands it back.
-    /// `passing` is what the call hands its frame through kept parts, laid beside the birth
+    /// spawned. `passing` is what the call hands its frame through kept parts, laid beside the birth
     /// ([`Passing`]): every call lays it, and the wake keeps each value it names and sets it to
     /// `None`, beside `kept`, what the frame keeps of its callee and arguments ([`Keeps`]). A
     /// copied birth has neither, and keeps afresh.
@@ -62,22 +57,18 @@ pub enum KBirth<'graph, 'cell> {
         handed: &'cell [Handed],
         call: SourceRef,
         owed: Option<Owed<'cell>>,
-        inherit: Option<MemoHome>,
-        level: Option<&'cell Level<'cell, Knotted<'graph, 'cell>>>,
         passing: Option<&'cell Passing<'graph, 'cell>>,
         kept: Option<&'cell Keeps<'graph, 'cell>>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
     /// carries and the names `offered`, a record of them by name, supplies — and `contract`, the
-    /// `EVAL`'s declared return, which the frame owes. `call` is the extent of the `EVAL`'s node,
-    /// and `inherit` as a call's.
+    /// `EVAL`'s declared return, which the frame owes. `call` is the extent of the `EVAL`'s node.
     Eval {
         program: &'graph Program<'graph>,
         code: KValue<'graph, 'cell>,
         offered: KValue<'graph, 'cell>,
         contract: Contract,
         call: SourceRef,
-        inherit: Option<MemoHome>,
     },
     /// A `USING` or a `BUILD` over code composed at run time: one step, under the code's
     /// composition, where its shape lies, fills the holes of `code` from `source`, a `USING`'s,
@@ -119,11 +110,8 @@ pub enum Entered<'graph, 'cell> {
 /// the own body of a routing caching frame, whose caching chain it then interns through; whether
 /// its frame's body caches, read once at the frame's first step, since its blocks and inline
 /// module bodies are classed with it; the depot slot its frame runs under, which a callable born
-/// in it is born under; where its frame's decision memo rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
-/// the composed code its frame runs, which a value born in it keeps — the books hold only its
-/// digest; the stamp of the chain of settlements its frame's depot slot closes, which a
-/// callable born in it keeps beside that node — `None` for a frame under its own settlement whose
-/// body births no callable; and what its frame keeps of its arguments, callee and binders, which
+/// in it is born under; the root of the composed code its frame runs, which a value born in it
+/// keeps — the books hold only its digest; and what its frame keeps of its arguments, callee and binders, which
 /// a name read of the frame's body reads beside the value — `None` outside a called frame, and for
 /// one called through a barrier; and what the `MATCH` arms it runs in keep of their `it`.
 #[derive(Clone, Copy)]
@@ -131,9 +119,6 @@ pub struct Within<'graph, 'cell> {
     pub routes: bool,
     pub caches: bool,
     pub build: DepotRef,
-    pub stamp: Option<Stamp<'cell, Knotted<'graph, 'cell>>>,
-    pub memo: Option<MemoHome>,
-    pub inherit: Option<MemoHome>,
     pub root: Option<ComposedRoot<'cell>>,
     pub kept: Option<&'cell FrameKept<'graph, 'cell>>,
     pub arms: Option<&'cell ArmKept<'graph, 'cell>>,
@@ -224,23 +209,19 @@ impl<'graph, 'cell> ArmKept<'graph, 'cell> {
 }
 
 impl<'graph, 'cell> Within<'graph, 'cell> {
-    /// The top level's before its runner names its memo: no caching frame, and the root. The program
-    /// never caches.
+    /// The top level's: no caching frame, and the root. The program never caches.
     pub const TOP: Self = Within {
         routes: false,
         caches: false,
         build: DepotRef::ROOT,
-        stamp: None,
-        memo: None,
-        inherit: None,
         root: None,
         kept: None,
         arms: None,
     };
 
-    /// Where a callable born in the body is born: the depot slot, and the stamp of its chain.
-    pub fn born(&self) -> (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>) {
-        (self.build, self.stamp)
+    /// Where a callable born in the body is born: the depot slot.
+    pub fn born(&self) -> DepotRef {
+        self.build
     }
 }
 
@@ -251,16 +232,10 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
     fn values(&self, out: &mut impl FnMut(&KValue<'graph, 'cell>)) {
         match self {
             KBirth::Call {
-                callee,
-                arguments,
-                level,
-                ..
+                callee, arguments, ..
             } => {
                 out(callee);
                 out(arguments);
-                (level.iter())
-                    .flat_map(|level| level.modules)
-                    .for_each(&mut *out);
             }
             KBirth::Eval { code, offered, .. } => {
                 out(code);
@@ -287,10 +262,6 @@ pub struct Handed {
 
 /// What a cell holds at a step and parks with.
 #[derive(Clone, Copy)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a parked state rests in its cell's continuation; boxing it would allocate per park"
-)]
 pub enum KState<'graph, 'cell> {
     /// A cell's first step: what it was born with.
     Born(KBirth<'graph, 'cell>),
@@ -362,13 +333,10 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 contributed,
                 handed,
                 owed,
-                level,
                 passing,
                 kept,
                 ..
             } => {
-                let level =
-                    level.map_or(Weight::ZERO, |level| Stamp { level, below: None }.weight());
                 // A tail's skeleton's values cross on their own, so the skeleton is what it holds
                 // besides; a spawned call's birth crosses whole.
                 let values = match (owed, passing) {
@@ -381,7 +349,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     (Some(_), Some(_)) => callee.weight(),
                     _ => callee.weight().plus(arguments.weight()),
                 };
-                values.plus(level).bytes()
+                values.bytes()
                     + size_of_val(*contributed)
                     + size_of_val(*handed)
                     + owed.map_or(0, |owed| size_of_val(owed.hops))
@@ -439,8 +407,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     handed,
                     call,
                     owed,
-                    inherit,
-                    level,
                     ..
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
@@ -465,8 +431,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         handed: collect(writer, handed.iter().copied()),
                         call,
                         owed: owed.map(|owed| relaid_owed(writer, owed)),
-                        level: copied_level(writer, &types, view, level),
-                        inherit,
                         passing: None,
                         kept: None,
                     }
@@ -477,7 +441,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     offered,
                     contract,
                     call,
-                    inherit,
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                     let [code, offered] = copy_severed::<_, KnottedFamily, _, 2>(
@@ -492,7 +455,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         offered,
                         contract,
                         call,
-                        inherit,
                     }
                 }
                 KBirth::Composed {
@@ -654,8 +616,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
             handed,
             call,
             owed,
-            inherit,
-            level,
             passing: Some(passing),
             kept: None,
         } = birth
@@ -671,8 +631,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
             handed,
             call,
             owed,
-            inherit,
-            level,
             passing: None,
             kept: Some(keeps(writer, passing, kept)),
         }
@@ -698,22 +656,15 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 home.read(|header, _| {
                     (header.into_value().branch()).map(|branch| types.link_or_merge(branch))
                 });
-                let KBirth::Call { level, .. } = view else {
-                    unreachable!("a skeleton is a call's")
-                };
-                successor(writer, &types, view, *level, (handed, kept), &|_| {})
+                successor(writer, &types, view, (handed, kept), &|_| {})
             }
             CrossedOperand::Copied {
                 view: copied, home, ..
             } => {
-                let KBirth::Call { level, .. } = *copied else {
-                    unreachable!("a skeleton is a call's")
-                };
-                let level = copied_level(writer, &types, view, level);
                 let adopt = |ktype: DeclaredType<KType>| {
                     home.read(|header, _| types.adopt(header.into_value().branch(), ktype));
                 };
-                successor(writer, &types, copied, level, (handed, kept), &adopt)
+                successor(writer, &types, copied, (handed, kept), &adopt)
             }
         }
     }
@@ -730,7 +681,6 @@ fn successor<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     types: &crate::values::Chain<'cell, 'cell, '_, '_>,
     skeleton: &KBirth<'graph, '_>,
-    level: Option<&'cell Level<'cell, Knotted<'graph, 'cell>>>,
     (handed, kept): (&[KValue<'graph, 'cell>], &[Kept<'graph>]),
     adopt: &dyn Fn(DeclaredType<KType>),
 ) -> KBirth<'graph, 'cell> {
@@ -743,7 +693,6 @@ fn successor<'graph, 'cell>(
         handed: memos,
         call,
         owed,
-        inherit,
         passing: Some(passing),
         ..
     } = skeleton
@@ -783,8 +732,6 @@ fn successor<'graph, 'cell>(
             }
             relaid_owed(writer, owed)
         }),
-        inherit: *inherit,
-        level,
         passing: None,
         kept: Some(keeps(writer, passing, kept)),
     }
@@ -814,29 +761,4 @@ fn keeps<'graph, 'cell>(
         arguments: writer.fill(count, |at| (passing.binders[at].symbol(), kept[at])),
     };
     resident(writer, keeps)
-}
-
-/// `level`, a copied birth's, laid through `writer`: its modules copied through `view`, the
-/// birth's copied operand, as the birth's other values are, and each type it names that `types`
-/// lacks adopted from the home it was copied out of.
-fn copied_level<'graph, 'cell, 'severed>(
-    writer: Writer<'cell, '_>,
-    types: &crate::values::Chain<'cell, 'cell, '_, '_>,
-    view: &CrossedOperand<'graph, 'cell, 'severed, KBirthFamily, KRegionHeader>,
-    level: Option<&'severed Level<'severed, Knotted<'graph, 'severed>>>,
-) -> Option<&'cell Level<'cell, Knotted<'graph, 'cell>>> {
-    level.map(|level| {
-        let stamp = Stamp { level, below: None }.copied(writer, &mut |module| {
-            let [module] = copy_severed::<_, KnottedFamily, _, 1>(writer, types, view, [module]);
-            module
-        });
-        if let CrossedOperand::Copied { home, .. } = view {
-            stamp.each_type(&mut |ktype| {
-                if !types.resolves(ktype) {
-                    home.read(|header, _| types.adopt(header.into_value().branch(), ktype));
-                }
-            });
-        }
-        stamp.level
-    })
 }

@@ -13,15 +13,15 @@ use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, fits_application, member};
 use crate::values::Chain;
 
-use super::judge::{self, Marks, NoMarks};
+use super::judge::{self, Derives, NoMarks};
 use super::members::{SignatureMember, schema_of, signature_member};
 
 /// The application a path is read through: `declared`, a root's declared type, walked through the
 /// value members `chain` names, where the walk ends at an application of a signature naming
 /// `label` a head parameter. `None` where it ends anywhere else, and the path reads the module's
 /// own type member.
-pub fn declared_through(
-    marks: &dyn Marks,
+pub fn declared_through<U>(
+    marks: &dyn Derives<Unwalked = U>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     declared: Parametric,

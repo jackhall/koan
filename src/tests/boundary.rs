@@ -174,8 +174,7 @@ pub(crate) fn collect_sources(directory: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// Every place `code`, a pass's rule file, asks which half of its store it runs over: a writer
-/// named, or the pass's resumption or its type channel's settlement read — what the store's read
-/// half alone reads. A rule lays
+/// named, or the pass's type channel read — what the store's read half alone reads. A rule lays
 /// in the walk's scratch and hands what it fixes to the store, which knows.
 pub(crate) fn mode_branches(code: &str) -> Vec<String> {
     let lines: Vec<&str> = code.lines().collect();

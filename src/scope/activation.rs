@@ -5,7 +5,10 @@
 //! callable the activation runs, a covariant view of one [`SlotArray`] over the shape's slots, and
 //! the digest memos of the slots the load marked digested
 //! ([`digest_memo`](Reading::digest_memo)): each empty until a `:|`, a call's hand-off or a
-//! binding event fills it with the digest of the value its slot holds. It names its shape by segment alone, so
+//! binding event fills it with the digest of the value its slot holds. Past the shape's slots the
+//! array keeps a **held slot** per part the body holds in place ([`Facts::held_sites`]), each
+//! with a digest memo past the digested slots' own: where the part's value is bound before its
+//! unit runs, as a `LET`'s is at its statement. It names its shape by segment alone, so
 //! it crosses a park; a step reads the shape and the facts about it through a [`Reading`], the view
 //! beside the step's [`Code`] and [`Facts`].
 //! The [`Activation`] is that view beside the array itself, which is the door that binds. Nothing
@@ -30,10 +33,10 @@ use std::ops::Deref;
 use crate::memory::{Covariant, SlotArray, SlotConflict, SlotView, Writer};
 use crate::values::{ContentDigest, Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
 
-use super::build_layer::BuildLayer;
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
-use super::records::Facts;
+use super::facts::Binding;
+use super::records::{CaptureRead, Facts};
 use super::shape::{BodyShape, CaptureSlot, Coordinate, Segment, ShapeKind, Slot, Target};
 use super::shapes::Code;
 
@@ -72,6 +75,9 @@ pub struct ActivationView<
     'graph: 'cell,
 {
     segment: Segment,
+    /// How many of the slots past the shape's are held slots: the last `held` of `slots`, and the
+    /// last `held` of `digests`.
+    held: u32,
     closure: &'cell ClosureBindings<'cell, X>,
     builtins: &'cell Builtins<'cell, X>,
     enclosing: Option<&'cell ActivationView<'graph, 'cell, XF, X>>,
@@ -84,9 +90,14 @@ pub struct ActivationView<
     /// One memo per slot the shape marks digested, in the order of its
     /// digested slots ([`Shapes::digested_index`](super::Shapes::digested_index)).
     digests: &'cell [Cell<Option<ContentDigest>>],
-    /// What its frame decided in its own activation so far, innermost event first: a block's and a
-    /// module body's are its frame's as they stood when it was laid down.
-    decided: Option<&'cell BuildLayer<'cell>>,
+    /// The handle slab of its frame's body: the words of each binding-graph node's instance its
+    /// frame reached, at the offsets the graph's layout fixes. A block and a module body share
+    /// their frame's, since their units are their frame's statements.
+    handles: &'cell [Cell<u64>],
+    /// What its frame's slots bound the names of its bind sites to, as its last one read them: the
+    /// binding a base record's types are closed under. `None` where its frame made no instances.
+    /// A block and a module body read their frame's.
+    binding: Option<Binding<'cell>>,
 }
 
 impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Clone for ActivationView<'graph, '_, XF, X> {
@@ -119,7 +130,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Clone for Activation<'graph, '_, XF> {
 
 impl<'graph, XF: KnottedFamily<'graph>> Copy for Activation<'graph, '_, XF> {}
 
-const _: () = assert!(size_of::<Activation<'static, 'static>>() == 88);
+const _: () = assert!(size_of::<Activation<'static, 'static>>() == 112);
 const _: () = assert!(!std::mem::needs_drop::<Activation<'static, 'static>>());
 
 impl<'graph, 'cell, XF: KnottedFamily<'graph>> Deref for Activation<'graph, 'cell, XF> {
@@ -134,7 +145,8 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF>
 where
     ValueFamily<XF>: Covariant<'graph>,
 {
-    /// The one constructor every kind goes through: `len` empty slots and the view over them.
+    /// The one constructor every kind goes through: the shape's slots and the body's held slots,
+    /// all empty, and the view over them.
     fn laid_down(
         writer: Writer<'cell, '_>,
         shape: &BodyShape<'_>,
@@ -144,18 +156,21 @@ where
         enclosing: Option<&'cell ActivationView<'graph, 'cell, XF>>,
         callable: Option<XF::Closed<'cell>>,
     ) -> Self {
-        let slots = SlotArray::new(writer, shape.slots());
-        let digests = writer.fill(facts.digested_count(shape), |_| Cell::new(None));
+        let held = facts.held_sites(shape).len();
+        let slots = SlotArray::new(writer, shape.slots() + held);
+        let digests = writer.fill(facts.digested_count(shape) + held, |_| Cell::new(None));
         Activation {
             view: ActivationView {
                 segment: shape.segment(),
+                held: held as u32,
                 closure,
                 builtins,
                 enclosing,
                 callable,
                 slots: slots.view(),
                 digests,
-                decided: enclosing.and_then(|enclosing| enclosing.decided),
+                handles: enclosing.map_or(&[], |enclosing| enclosing.handles),
+                binding: enclosing.and_then(|enclosing| enclosing.binding),
             },
             slots,
         }
@@ -181,7 +196,7 @@ where
     }
 
     /// A fresh activation of the callable shape `shape`, run by `callable` over its closure
-    /// bindings, every slot empty, reading what the activation the callable was born in decided.
+    /// bindings, every slot empty.
     pub fn of_callable(
         writer: Writer<'cell, '_>,
         shape: &BodyShape<'_>,
@@ -196,7 +211,7 @@ where
             facts.capture_count(shape),
             "the closure bindings follow the shape's capture layout",
         );
-        let mut called = Self::laid_down(
+        Self::laid_down(
             writer,
             shape,
             facts,
@@ -204,14 +219,11 @@ where
             builtins,
             None,
             Some(callable),
-        );
-        // A call reads first what the activation the callable was born in had decided.
-        called.view.decided = closure.decided();
-        called
+        )
     }
 
     /// A fresh activation of the module shape `shape` over its closure bindings, every slot
-    /// empty, reading `decided`, what the frame running it decided so far. It runs no knot
+    /// empty, sharing the handles and binding of the frame running it. It runs no knot
     /// member: a module's captures are never edges, and the caller ties the binder once this
     /// activation's every slot is bound.
     pub fn of_module(
@@ -220,7 +232,7 @@ where
         facts: &Facts<'_>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
-        decided: Option<&'cell BuildLayer<'cell>>,
+        (handles, binding): (&'cell [Cell<u64>], Option<Binding<'cell>>),
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Module);
         debug_assert_eq!(
@@ -229,7 +241,8 @@ where
             "the closure bindings follow the shape's capture layout",
         );
         let mut module = Self::laid_down(writer, shape, facts, closure, builtins, None, None);
-        module.view.decided = decided;
+        module.view.handles = handles;
+        module.view.binding = binding;
         module
     }
 
@@ -303,14 +316,29 @@ where
         )
     }
 
-    /// This activation reading `decided`, what its frame decided so far, over its own slots.
-    pub fn deciding(self, decided: &'cell BuildLayer<'cell>) -> Self {
+    /// This activation holding `handles`, its frame's handle slab.
+    pub fn with_handles(self, handles: &'cell [Cell<u64>]) -> Self {
         Activation {
             view: ActivationView {
-                decided: Some(decided),
+                handles,
                 ..self.view
             },
             ..self
+        }
+    }
+
+    /// This activation closing a base record's types under `binding`, what its frame's slots bound
+    /// at its last bind site.
+    pub fn binding(self, binding: Option<Binding<'cell>>) -> Self {
+        match binding {
+            None => self,
+            Some(_) => Activation {
+                view: ActivationView {
+                    binding,
+                    ..self.view
+                },
+                ..self
+            },
         }
     }
 }
@@ -328,6 +356,15 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF> {
         value: Value<'cell, XF::Closed<'cell>>,
     ) -> Result<(), SlotConflict> {
         self.slots.bind(slot.index(), value)
+    }
+
+    /// Bind the held slot `index`, the rank of its part's site among the body's held sites, once.
+    pub fn hold(
+        &self,
+        index: usize,
+        value: Value<'cell, XF::Closed<'cell>>,
+    ) -> Result<(), SlotConflict> {
+        self.slots.bind(self.view.held_at(index), value)
     }
 }
 
@@ -349,13 +386,40 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         Reading {
             view: self,
             shape: code.shape(self.segment),
-            facts: facts.activated(self.decided),
+            facts: facts.framed(self.handle_words(), self.binding),
         }
     }
 
-    /// What its frame decided in its own activation so far, innermost event first.
-    pub fn decided(&self) -> Option<&'cell BuildLayer<'cell>> {
-        self.decided
+    /// Its frame's handle slab.
+    pub fn handles(&self) -> &'cell [Cell<u64>] {
+        self.handles
+    }
+
+    /// The handle words of each frame around the callable its frame runs, as they stood at the
+    /// callable's birth, innermost first: its closure's, a block's frame's.
+    pub fn enclosers(&self) -> &'cell [crate::scope::EncloserWords<'cell>] {
+        match (self.closure.encloser().words, self.enclosing) {
+            ([], Some(enclosing)) => enclosing.enclosers(),
+            (words, _) => words,
+        }
+    }
+
+    /// The handle words its frame answers a site question through.
+    pub fn handle_words(&self) -> crate::scope::Handles<'cell> {
+        crate::scope::Handles {
+            slab: self.handles,
+            enclosers: self.enclosers(),
+        }
+    }
+
+    /// What its frame's slots bound at its last bind site.
+    pub fn frame_binding(&self) -> Option<Binding<'cell>> {
+        self.binding
+    }
+
+    /// The view of the activation around this one, a block's or a module body's frame's.
+    pub fn enclosing(&self) -> Option<&'cell ActivationView<'graph, 'cell, XF>> {
+        self.enclosing
     }
 
     pub fn builtins(&self) -> &'cell Builtins<'cell, XF::Closed<'cell>> {
@@ -378,7 +442,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     pub fn slots(
         &self,
     ) -> impl ExactSizeIterator<Item = (Slot, Value<'cell, XF::Closed<'cell>>)> + '_ {
-        (0..self.slots.len()).map(|index| {
+        (0..self.slots.len() - self.held as usize).map(|index| {
             let value = self.slots.get(index).expect(
                 "a slot read out of an activation is never empty: every unit of the body has run",
             );
@@ -418,9 +482,38 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         }
     }
 
+    /// The value a birth reads for a capture past its builder captures: [`read`](Self::read) at
+    /// a coordinate, or a held slot `hops` enclosing block activations out.
+    pub fn read_capture(&self, at: CaptureRead) -> Value<'cell, XF::Closed<'cell>> {
+        match at {
+            CaptureRead::At(at) => self.read(at),
+            CaptureRead::Held { hops, index } => {
+                let mut view = self;
+                for _ in 0..hops {
+                    view = view.enclosing.expect(
+                        "a held capture steps out only through enclosing block activations",
+                    );
+                }
+                view.held(index as usize)
+                    .expect("a part held in place is bound before a birth reading it")
+            }
+        }
+    }
+
     /// The value bound at `slot`, or `None` while it is empty.
     pub fn bound(&self, slot: Slot) -> Option<Value<'cell, XF::Closed<'cell>>> {
         self.slots.get(slot.index())
+    }
+
+    /// The value bound at the held slot `index`, or `None` while it is empty.
+    pub fn held(&self, index: usize) -> Option<Value<'cell, XF::Closed<'cell>>> {
+        self.slots.get(self.held_at(index))
+    }
+
+    /// Where the held slot `index` sits in the slot array: past the shape's slots.
+    fn held_at(&self, index: usize) -> usize {
+        assert!(index < self.held as usize, "a held slot the body keeps");
+        self.slots.len() - self.held as usize + index
     }
 
     /// The segment of the activation `at` reads a slot of, stepping out as
@@ -515,7 +608,7 @@ impl<'step, 'graph, 'cell, XF: KnottedFamily<'graph>> Reading<'step, 'graph, 'ce
         Reading {
             view,
             shape: self.facts.shapes().shape_at(view.segment),
-            facts: self.facts.activated(view.decided),
+            facts: self.facts,
         }
     }
 
@@ -535,5 +628,15 @@ impl<'step, 'graph, 'cell, XF: KnottedFamily<'graph>> Reading<'step, 'graph, 'ce
         }
         let index = self.facts.shapes().digested_index(view.segment, slot)?;
         Some(&view.digests[index])
+    }
+
+    /// The digest memo of the held slot `index` of this activation.
+    pub fn held_memo(&self, index: usize) -> &'cell Cell<Option<ContentDigest>> {
+        let digests = self.view.digests;
+        assert!(
+            index < self.view.held as usize,
+            "a held slot the body keeps"
+        );
+        &digests[digests.len() - self.view.held as usize + index]
     }
 }

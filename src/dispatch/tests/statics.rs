@@ -47,8 +47,8 @@ pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -
         )
         .expect("the load typed the shape");
     let rendered = match typed {
-        DeclaredType::Type(interval) => DeclaredType::Type(interval.upper),
-        DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
+        crate::scope::Holding::Type(interval) => DeclaredType::Type(interval.upper),
+        crate::scope::Holding::Scheme(scheme, _) => DeclaredType::Scheme(scheme),
     };
     display_name(
         rendered,
@@ -250,13 +250,13 @@ fn a_value_retyped_by_its_fit_is_pinned_at_its_paths() {
                   EXPR FOR ALL #[Cr] #(ECHO elem :(Counter WITH {Carrier = Cr})) -> Cr = \
                   #(elem.zero)\n\
                   MODULE ints = ((LET zero = 0))\n\
-                  LET outer = (FN :{h :Counter, g :Any} -> Any = #(\n  \
-                  LET z = h.zero\n  LET k = (ECHO h)\n  \
+                  LET outer = (FN :{h :Counter, b :{g :Any}} -> Any = #(\n  \
+                  LET g = b.g\n  LET z = h.zero\n  LET k = (ECHO h)\n  \
                   LET a :Counter = g\n  LET az = a.zero\n  LET ak = (ECHO a)\n  \
                   LET m = (g :! Counter)\n  LET mz = m.zero\n  LET mk = (ECHO m)\n  \
                   LET mw :(m.Carrier) = mz\n  \
                   z\n))\n\
-                  PRINT (outer {h = ints, g = ints})";
+                  PRINT (outer {h = ints, b = {g = ints}})";
     assert_eq!(run(source), "0");
     loaded(source, |program| {
         let outer = body(program, program.shape(), "outer");
@@ -787,8 +787,12 @@ fn by_names(program: &Program<'_>) -> Vec<String> {
         Some(match shape.slot_name(at) {
             crate::symbols::BinderSymbol::Value(_) => {
                 match facts.binder_type(&program.tiers().resting(), shape, at)? {
-                    DeclaredType::Type(typed) => format!("= {}", named(typed.upper.into())),
-                    DeclaredType::Scheme(scheme) => format!("= {}", named(scheme.into())),
+                    crate::scope::Holding::Type(typed) => {
+                        format!("= {}", named(typed.upper.into()))
+                    }
+                    crate::scope::Holding::Scheme(scheme, _) => {
+                        format!("= {}", named(scheme.into()))
+                    }
                 }
             }
             crate::symbols::BinderSymbol::Type(_) => {

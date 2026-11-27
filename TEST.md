@@ -47,7 +47,13 @@ cargo test -p sexlex           # the layout crate alone
 cargo test -p lattice          # the symbols, the type lattice's laws and its heap contract
 cargo test -p bindgraph        # the binding graph's cases and laws, over a toy domain
 cargo test -- --nocapture      # show stdout
+cargo test --features perf perf_report -- --nocapture  # the binding graph's perf report
 ```
+
+The `perf` report ([`perf.rs`](src/dispatch/tests/perf.rs)) loads and runs every runnable
+tutorial snippet and prints, per snippet and in total, the `NameQuestion`s the program graph's
+instances asked and the stored questions they evaluated, at the load and across the run. It
+compiles only under koan's `perf` feature, which turns on `bindgraph`'s counters.
 
 Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the
 code. After smoke-
@@ -155,16 +161,22 @@ The retype law ([`retypes.rs`](src/dispatch/tests/retypes.rs)) retypes a value d
 type — a dict or a nominal type among them — and a quote's code or a type value under a drawn code
 kind or kind, at each retype site, the evaluator's debug net its oracle: the value lies within the
 static type the load gives it there.
-The resumption laws ([`resumption.rs`](src/dispatch/tests/resumption.rs)) draw a never-called
+The stored-question laws ([`stored.rs`](src/dispatch/tests/stored.rs)) draw a never-called
 quantified registration and a binding of the unknowns its body reads, each to any closed type,
-`Never`, `Any` and unions included, and resume the load under it: the resumption renders as a load of the
-program with the binding declared (its restart), reaching the binding in two steps settles what one
-does, re-running every fact settles what re-running the woken ones does, each re-run fact lies
-within its load value with the binding substituted, and a resumption re-runs at most the facts its
-binding wakes. A fact typed `Never` never arrives and is the bottom: the monotone law reads it as
-within every fact and skips a use or settled check in a statement typed `Never`, and the confluence
-law lets a refusal met on the way agree with a whole binding that types `Never` the statement
-holding the refused site.
+`Never`, `Any` and unions included, against a fresh load of the program with the binding declared
+(its restart), read through the test door in [`under.rs`](src/dispatch/tests/under.rs): each
+stored question decides as the walk did at the load and as the restart does under the binding,
+and its asks only narrow as more of the binding is written in, save that a verdict on an ask reading
+a name bound to a type no value carries may go from *always* to *never*, since no call over such a
+value ever runs. The instance laws hold every instance to the stored question: each
+one the load makes from the root ([`made.rs`](src/dispatch/tests/made.rs)); each one a frame makes
+at a bind site under a staged binding ([`framed.rs`](src/dispatch/tests/framed.rs)), at every step
+of a widening chain of bindings in any order as a fresh store; and each one a run makes at
+`SUBJECT`'s bind sites when the drawn program calls it with values (`generate::called`), under the
+type names its frame bound, a `FOR ALL` name the call binds to a signature type among them. A drawn program the load refuses runs no frame, and the stored laws
+hold its refusal. The owner law
+([`owners.rs`](src/dispatch/tests/owners.rs)) holds each question to the latest bind site its
+reads depend on.
 
 ## Generated images
 

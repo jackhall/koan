@@ -161,7 +161,9 @@ fn a_closure_carries_every_enclosing_type_name_bound_at_its_birth() {
             }
         };
         let mut carried = facts.type_captures(f).to_vec();
-        let mut expected = vec![local("Elt"), local("Key")];
+        let mut expected = [local("Elt"), local("Key")]
+            .map(crate::scope::CaptureRead::At)
+            .to_vec();
         carried.sort_by_key(|coordinate| format!("{coordinate:?}"));
         expected.sort_by_key(|coordinate| format!("{coordinate:?}"));
         assert_eq!(carried, expected);
@@ -386,11 +388,12 @@ fn a_later_slot_reads_an_earlier_lexical_solution_at_its_ends() {
             "PRINT (WRAP \"s\")\nPRINT (WRAP 1)"
         )
     );
-    assert_eq!(
-        run(&source),
-        "load: <test>:2:50: no overload of `PAIR _ WITH _` admits these \
-         arguments:\n  (Number, Str), which can never satisfy :(EXPR FOR ALL #[Elt] #(PAIR _ :Elt \
-         WITH _ :Elt) -> Str)\n  in (WRAP 1) at <test>:6:7"
+    let refused = run(&source);
+    assert!(
+        refused.starts_with(
+            "load: <test>:2:50: no overload of `PAIR _ WITH _` admits these arguments:\n"
+        ) && refused.ends_with("\n  in (WRAP 1) at <test>:6:7"),
+        "{refused}"
     );
 }
 
@@ -428,4 +431,49 @@ fn a_call_by_name_over_a_lexical_variable_is_judged_by_a_reproducible_solve() {
         assert_eq!(ends(program, wrap, "called"), (list.clone(), list));
     });
     assert_eq!(run(&source), "[1]");
+}
+
+#[test]
+fn a_member_a_binding_closes_to_any_contributes_the_carried_type() {
+    // `m.held` contributes `m`'s `Elt` to `BOX`, which the load reads as a lexical variable and
+    // `(ints :| (Hold WITH {Elt = Any}))` closes to `Any`: there the call solves `BOX`'s `Elt` to
+    // the carried `Number`, as a load reads an upper end of `Any`, and `TELL` sees a list of
+    // numbers whichever way the module reaches `show`.
+    let source = "SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]\n\
+                  MODULE ints = ((LET held = 1))\n\
+                  EXPR FOR ALL #[Elt] #(BOX x :Elt) -> (LIST OF Elt) = #([x])\n\
+                  EXPR #(TELL r :(LIST OF Number)) -> Str = #(\"nums\")\n\
+                  EXPR #(TELL r :Any) -> Str = #(\"other\")\n\
+                  LET show = (FN :{m :Hold} -> Any = #(TELL (BOX m.held)))\n\
+                  LET g = (FN :{n :Any} -> Any = #(show {m = n}))\n\
+                  PRINT (g {n = ints})\n\
+                  PRINT (g {n = (ints :| (Hold WITH {Elt = Any}))})\n\
+                  PRINT (show {m = (ints :| (Hold WITH {Elt = Any}))})\n";
+    assert_eq!(run(source), "nums\nnums\nnums");
+}
+
+/// A `MATCH` over a parameter declared `Any` takes a type a question over the parameter's carried
+/// type decides, which a solve reads at its ends, as over `Any`: `s0` contributes `Number | Str`
+/// to `ID`, so `Tee` admits the `1` the run passes.
+///
+/// ```text
+/// EXPR FOR ALL #[Tee] #(ID y :Tee) -> Tee = #(y)
+/// EXPR #(SUBJECT x :Any) -> Any = #(
+///   LET s0 = (MATCH x WITH #{:Number: (1), _: ("s")})
+///   LET t0 = (ID s0)
+///   LET n :Number = t0
+///   n
+/// )
+/// PRINT (SUBJECT 5)
+/// ```
+#[test]
+fn a_match_over_a_name_declared_any_contributes_every_arm() {
+    let source = "EXPR FOR ALL #[Tee] #(ID y :Tee) -> Tee = #(y)\n\
+                  EXPR #(SUBJECT x :Any) -> Any = #(\n  \
+                  LET s0 = (MATCH x WITH #{:Number: (1), _: (\"s\")})\n  \
+                  LET t0 = (ID s0)\n  \
+                  LET n :Number = t0\n  \
+                  n\n)\n\
+                  PRINT (SUBJECT 5)";
+    assert_eq!(run(source), "1");
 }

@@ -10,11 +10,24 @@ use crate::type_lattice::{DeclaredType, DerivedId, KType, Parametric, PathClass,
 use crate::values::Chain;
 use crate::values::tests::TestTypes;
 
-use super::super::question::{Answer, Answered, Question, keeps, rebound};
+use super::super::question::{Question, rebound};
 use super::super::record_types::Closed;
 use super::super::rule::Rule;
 use super::super::typed::Resolved;
 use super::{Binds, Decider, DerivedName, DerivedTerm, Spellings, handed};
+
+/// [`handed`] through a namer that names every term, as a walk's does.
+fn named_by(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: &Bump,
+    term: DerivedTerm<'_>,
+    name: &mut dyn FnMut(DerivedTerm<'_>) -> Parametric,
+) -> Option<Parametric> {
+    let Ok(handed) = handed(types, scratch, term, &mut |term| {
+        Ok::<_, std::convert::Infallible>(name(term))
+    });
+    handed
+}
 
 fn name(text: &str, symbols: &SymbolInterner) -> TypeSymbol {
     TypeSymbol::declared(text, symbols).expect("a Type token")
@@ -102,8 +115,8 @@ fn a_term_is_its_rule_s_output_over_its_operands_bindings() {
         output: 0,
     };
     let laying = Laying::new(&[], &symbols);
-    let named = handed(&types, &scratch, element, &mut |term| {
-        Some(laying.named(&types, term))
+    let named = named_by(&types, &scratch, element, &mut |term| {
+        laying.named(&types, term)
     })
     .expect("a term over a variable is named");
     assert_eq!(laying.names.borrow().len(), 1, "the name is laid");
@@ -127,8 +140,8 @@ fn a_term_is_its_rule_s_output_over_its_operands_bindings() {
         operands: &meet_operands,
         output: 0,
     };
-    let met = handed(&types, &scratch, meet, &mut |term| {
-        Some(laying.named(&types, term))
+    let met = named_by(&types, &scratch, meet, &mut |term| {
+        laying.named(&types, term)
     })
     .expect("a meet over a variable is named");
     let either = types.union_of(&scratch, &[KType::NUMBER, KType::STR]);
@@ -140,8 +153,8 @@ fn a_term_is_its_rule_s_output_over_its_operands_bindings() {
     assert_eq!(under(&types, met, &binding), KType::NUMBER.into());
 }
 
-/// A binding that leaves a term open gives its name the name of the term it leaves, so a unit
-/// absorbed under it and one re-run under it hold one handle; one that makes the term spellable
+/// A binding that leaves a term open gives its name the name of the term it leaves, so every
+/// reader under it holds one handle; one that makes the term spellable
 /// gives the spelling, as a fresh walk's door hands back.
 #[test]
 fn a_partly_bound_term_hands_back_what_a_fresh_door_would() {
@@ -157,8 +170,8 @@ fn a_partly_bound_term_hands_back_what_a_fresh_door_would() {
         output: 0,
     };
     let laying = Laying::new(&[], &symbols);
-    let named = handed(&types, &scratch, meet, &mut |term| {
-        Some(laying.named(&types, term))
+    let named = named_by(&types, &scratch, meet, &mut |term| {
+        laying.named(&types, term)
     })
     .expect("a meet over two variables is named");
     // `Elt` bound alone: the name of `(Number & Key)`, as a fresh walk names that term.
@@ -178,8 +191,8 @@ fn a_partly_bound_term_hands_back_what_a_fresh_door_would() {
         output: 0,
     };
     let walk = Laying::new(&[], &symbols);
-    let restarted = handed(&types, &scratch, fresh, &mut |term| {
-        Some(walk.named(&types, term))
+    let restarted = named_by(&types, &scratch, fresh, &mut |term| {
+        walk.named(&types, term)
     });
     assert_eq!(Some(partial), restarted, "one handle for one term");
     // A piece of a variable bound to a list of another: the binding makes it the element.
@@ -189,8 +202,8 @@ fn a_partly_bound_term_hands_back_what_a_fresh_door_would() {
         operands: &piece_operands,
         output: 0,
     };
-    let piece_name = handed(&types, &scratch, piece, &mut |term| {
-        Some(laying.named(&types, term))
+    let piece_name = named_by(&types, &scratch, piece, &mut |term| {
+        laying.named(&types, term)
     })
     .expect("a piece the bound does not guarantee is named");
     let listed = Laying::new(&[(0, KType::ANY)], &symbols);
@@ -200,44 +213,6 @@ fn a_partly_bound_term_hands_back_what_a_fresh_door_would() {
         .extend(laying.names.borrow().iter().copied());
     // `Any` lacks the piece: the name stays.
     assert_eq!(under(&types, piece_name, &listed), piece_name);
-}
-
-/// A derived name in a question a binding keeps is written in by its term, so the question is
-/// kept as any other.
-#[test]
-fn a_question_over_a_derived_name_is_kept_by_its_term() {
-    let (registry, scratch) = (Bump::new(), Bump::new());
-    let types = TestTypes::new(&registry).load();
-    let symbols = SymbolInterner::new();
-    let elt = types.lexical(0, name("Elt", &symbols), KType::ANY);
-    let operands = [DeclaredType::Type(elt)];
-    let element = DerivedTerm::Output {
-        rule: Rule::Piece(Step::Element),
-        operands: &operands,
-        output: 0,
-    };
-    let laying = Laying::new(&[], &symbols);
-    let ty = handed(&types, &scratch, element, &mut |term| {
-        Some(laying.named(&types, term))
-    })
-    .expect("named");
-    let answered = Answered {
-        question: Question::Fits {
-            a: DeclaredType::Type(ty),
-            b: DeclaredType::Type(Parametric::from(KType::NUMBER)),
-        },
-        answer: Answer::Bool(true),
-    };
-    let under = |closed| {
-        let binding = Laying::new(&[(0, closed)], &symbols);
-        binding
-            .names
-            .borrow_mut()
-            .extend(laying.names.borrow().iter().copied());
-        keeps(&types, &scratch, &answered, &binding)
-    };
-    assert!(under(types.list(KType::NUMBER)));
-    assert!(!under(types.list(KType::STR)));
 }
 
 /// A union of variables a binding closes is the closed union of what it gives each: a member
@@ -293,8 +268,8 @@ fn a_decided_name_is_the_type_on_its_question_s_answer() {
         arms: &arms,
     };
     let laying = Laying::new(&[], &symbols);
-    let named = handed(&types, &scratch, arrives, &mut |term| {
-        Some(laying.named(&types, term))
+    let named = named_by(&types, &scratch, arrives, &mut |term| {
+        laying.named(&types, term)
     })
     .expect("an undecided question names its term");
     let bound = |closed: KType| {

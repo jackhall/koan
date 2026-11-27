@@ -4,7 +4,7 @@
 use std::fmt::Write;
 
 use crate::dispatch::{Koan, overload_types};
-use crate::elaborate::{builtin_error, builtin_result, builtin_shape_types, variant_named};
+use crate::elaborate::{builtin_error, builtin_result, builtin_shape_types, closed_variant};
 use crate::memory::Bump;
 use crate::parse::{BUILTIN_SHAPES, ShapeElement};
 use crate::program::{CellSubstrate, Output};
@@ -42,7 +42,7 @@ fn generated() -> String {
         .iter()
         .map(|kind| {
             let label = TypeSymbol::declared(kind.name(), &symbols).expect("a kind names a type");
-            variant_named(types, error, label.symbol()).expect("a kind's variant")
+            closed_variant(types, error, label.symbol()).expect("a kind's variant")
         })
         .collect();
     let overloads = overload_types(types, &symbols, &scratch);

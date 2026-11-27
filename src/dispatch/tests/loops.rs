@@ -5,10 +5,9 @@
 //! Four loops over [`caching::program`](super::caching::program)'s chain: a walk, which threads
 //! nothing it built; a record rebuilt whole each hop; and a list consed onto each hop — and a view
 //! of a large list homed above the loop, extended by one element each hop. Each body
-//! first calls `TOUCH`, a callee whose own body tails, and each loop runs in a self-hopping form,
-//! which hops under its frame's settlement, and a mutual form, which seeks one each hop. The
-//! drain samples every region at each tail ([`HOPS`]); what a copy lays is counted in
-//! [`COPIED`], and what a hop lays in the host's decision memo in `KEPT`. Each figure a run
+//! first calls `TOUCH`, a callee whose own body tails, and each loop runs in a self-hopping form
+//! and a mutual form, which hops between two callees. The drain samples every region at each tail
+//! ([`HOPS`]); what a copy lays is counted in [`COPIED`]. Each figure a run
 //! counts outside its samples is taken against a run of the same program that prints `0` instead
 //! of looping, so building the chain is not billed to the loop.
 //!
@@ -23,14 +22,13 @@
 use std::cell::Cell;
 
 use crate::memory::{FIRST_CHUNK, SPLICES};
-use crate::program::activation_store::KEPT;
 use crate::scheduler::{HOPS, HopSample, SKELETONS};
 use crate::values::{BuildBudget, COPIED};
 
 /// The depths every loop runs at.
 const DEPTHS: [u32; 3] = [16, 64, 256];
 
-/// The samples skipped before a loop is warm: its first settlement and its first chunks.
+/// The samples skipped before a loop is warm: its first chunks.
 const WARM: usize = 4;
 
 /// What a figure may move by between two depths without growing in them: a few of a bump's first
@@ -62,10 +60,12 @@ const STEP: &str = "EXPR #(NAME m :Counter r :{count :Number} link :Link) -> Num
                     EXPR #(NAME m :Counter r :{count :Number} end :Null) -> Number = \
                     #(ATTR r count)\n";
 
-/// The cons loop: hands on the list it was handed with one more cell in front.
-const ACC: &str = "EXPR #(NAME m :Counter acc :Any link :Link) -> Any = \
+/// The cons loop: hands on the list it was handed with one more cell in front. The list is
+/// declared at a type: a name declared `Any` that each hop builds over itself is refused.
+const ACC: &str = "EXPR #(NAME m :Counter acc :(Null | :{head :Number, tail :Any}) link :Link) -> Any = \
                    #((LET t = (TOUCH m)) (NEXT m {head = 1, tail = acc} (ATTR link next)))\n\
-                   EXPR #(NAME m :Counter acc :Any end :Null) -> Any = #(ATTR acc head)\n";
+                   EXPR #(NAME m :Counter acc :{head :Number, tail :Any} end :Null) -> Any = \
+                   #(ATTR acc head)\n";
 
 /// The walk through a helper that returns a part of its argument: `ONWARD` hands back the next
 /// link, which the hop hands on.
@@ -85,8 +85,7 @@ fn numbers(length: usize) -> String {
     format!("[{}]", "7 ".repeat(length).trim_end())
 }
 
-/// How a loop hops: into itself, under its frame's settlement, or between two callees, seeking
-/// one each hop.
+/// How a loop hops: into itself, or between two callees.
 #[derive(Clone, Copy, Debug)]
 enum Form {
     Selfward,
@@ -108,17 +107,12 @@ struct Measured {
     /// The samples of the loop's own tails, warm-up skipped.
     hops: Vec<HopSample>,
     copied: usize,
-    kept: usize,
-    hopped: usize,
 }
 
 /// Run `defs` and `main` over a chain of `depth` links, counting from zero.
 fn measured(depth: u32, defs: &str, main: &str) -> Measured {
-    use crate::dispatch::evaluate::HOPPED;
     HOPS.with(|hops| hops.borrow_mut().clear());
     COPIED.with(|copied| copied.set(0));
-    KEPT.with(|kept| kept.set(0));
-    HOPPED.with(|hopped| hopped.set(0));
     let source = format!("{HELPERS}{defs}{main}");
     let printed = super::caching::ran_under(depth, &source, BuildBudget::default()).printed;
     let samples = HOPS.with(|hops| hops.take());
@@ -139,8 +133,6 @@ fn measured(depth: u32, defs: &str, main: &str) -> Measured {
         printed,
         hops,
         copied: COPIED.with(Cell::get),
-        kept: KEPT.with(Cell::get),
-        hopped: HOPPED.with(Cell::get),
     }
 }
 
@@ -175,10 +167,6 @@ fn assert_flat(body: &str, arguments: &str, printed: impl Fn(u32) -> String) {
             .map(|&depth| {
                 let (looped, _) = looped(depth, "", body, form, arguments);
                 assert_eq!(looped.printed, printed(depth), "{form:?} at {depth}");
-                match form {
-                    Form::Selfward => assert!(looped.hopped > 0, "a selfward hop stays under"),
-                    Form::Mutual => assert_eq!(looped.hopped, 0, "a mutual hop seeks"),
-                }
                 spread(&looped.hops)
             })
             .collect();
@@ -355,16 +343,6 @@ fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
                 (early.host_region, early.host_scratch),
                 (last.host_region, last.host_scratch),
                 "{form:?}: the host's region and scratch over hops 16 to 256"
-            );
-            let laid: Vec<usize> = (DEPTHS.iter())
-                .map(|&depth| {
-                    let (looped, baseline) = self::looped(depth, prelude, body, form, arguments);
-                    looped.kept.saturating_sub(baseline.kept)
-                })
-                .collect();
-            assert!(
-                laid.iter().all(|&at| at == laid[0]),
-                "{form:?}: memo entries laid at depths {DEPTHS:?}: {laid:?}"
             );
         }
     }
@@ -616,7 +594,7 @@ const MATCH_WALK: &str = "EXPR #(NAME m :Counter link :Any) -> Str = \
 
 /// The cons loop through a `MATCH`: its `Link` arm hands on the list it was handed with one more
 /// cell in front.
-const MATCH_ACC: &str = "EXPR #(NAME m :Counter acc :Any link :Any) -> Any = \
+const MATCH_ACC: &str = "EXPR #(NAME m :Counter acc :(Null | :{head :Number, tail :Any}) link :Any) -> Any = \
                          #((LET t = (TOUCH m)) (MATCH link WITH \
                          #{Link: (NEXT m {head = 1, tail = acc} (ATTR it next)), \
                          Null: (ATTR acc head)}))\n";
@@ -895,8 +873,8 @@ fn per_hop(hops: &[HopSample]) -> [f64; 8] {
 }
 
 /// The loop programs Miri runs [`every_loop_runs_one_cell_per_hop_beside_each_frame_it_spawns`]
-/// over: a hop under its settlement through a helper frame, and one seeking it that threads a list
-/// through `MATCH` arms.
+/// over: a self hop through a helper frame, and a mutual one that threads a list through `MATCH`
+/// arms.
 const MIRI_LOOPS: [&str; 2] = ["onward Selfward", "match cons Mutual"];
 
 /// One cell per frame: between two warm tails of the same host no cell is born but a frame, and

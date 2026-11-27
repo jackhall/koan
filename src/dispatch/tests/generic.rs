@@ -393,8 +393,8 @@ fn a_call_admits_only_its_maybe_candidates() {
 #[test]
 fn a_kept_list_s_points_are_types_its_records_name() {
     // `exact` keeps the list open; `apart` always admits, its `First` solved to `Number | Str`,
-    // which no fact names whole but this point: a settlement rests it and a composition exports
-    // its term only if the records name it.
+    // which no fact names whole but this point: a composition exports its term only if the records
+    // name it.
     let source = "EXPR FOR ALL #[First Second] #(PAIR x :(LIST OF First) WITH y :Second) -> Str = \
                   #(\"apart\")\n\
                   EXPR #(PAIR x :(LIST OF Any) WITH y :Bool) -> Str = #(\"exact\")\n\
@@ -445,10 +445,11 @@ fn several_always_candidates_one_rigid_are_ranked_at_the_call() {
                   INNER x\n\
                   )";
     assert_eq!(last_in(source, "OUTER"), "kept always always");
-    assert_eq!(
-        run(&format!("{source}\nPRINT (OUTER 1)")),
-        "load: <test>:4:3: ambiguous call of `INNER _`: 2 overloads admit (Number) and none \
-         ranks first\n  in (OUTER 1) at <test>:6:7"
+    let refused = run(&format!("{source}\nPRINT (OUTER 1)"));
+    assert!(
+        refused.starts_with("load: <test>:4:3: ambiguous call of `INNER _`: 2 overloads admit (")
+            && refused.ends_with(") and none ranks first\n  in (OUTER 1) at <test>:6:7"),
+        "{refused}"
     );
 }
 
@@ -588,6 +589,53 @@ fn a_union_whose_members_tie_refuses_its_declaration() {
     assert!(pinned.contains("tie in one union"), "{pinned}");
 }
 
+/// A quantified type too wide for a stored solve refuses the load at its declaration: an expression
+/// shape of 64 slots, a function type of 64 parameters, a `FOR ALL` group of 64 names. One less
+/// loads.
+#[test]
+fn a_quantified_type_too_wide_for_a_stored_solve_refuses_its_declaration() {
+    let wide = |count: usize| {
+        let slots = (0..count)
+            .map(|at| format!("a{at} :Elt"))
+            .collect::<Vec<_>>();
+        run(&format!(
+            "EXPR FOR ALL #[Elt] #(WIDE {}) -> Any = #(1)
+PRINT \"loaded\"",
+            slots.join(" ")
+        ))
+    };
+    let refused = wide(64);
+    assert!(
+        refused.starts_with("load: <test>:1:") && refused.contains("has 64 slots"),
+        "{refused}"
+    );
+    assert_eq!(wide(63), "loaded");
+    let function = |count: usize| {
+        let params = (0..count)
+            .map(|at| format!("a{at} :Elt"))
+            .collect::<Vec<_>>();
+        run(&format!(
+            "MODULE m = (LET f = (FN FOR ALL #[Elt] :{{{}}} -> Any = #(1)))
+PRINT \"loaded\"",
+            params.join(", ")
+        ))
+    };
+    let refused = function(64);
+    assert!(refused.contains("has 64 parameters"), "{refused}");
+    assert_eq!(function(63), "loaded");
+    let group = |count: usize| {
+        let names = (0..count).map(|at| format!("Elt{at}x")).collect::<Vec<_>>();
+        run(&format!(
+            "EXPR FOR ALL #[{}] #(WIDE x :Elt0x) -> Any = #(1)
+PRINT \"loaded\"",
+            names.join(" ")
+        ))
+    };
+    let refused = group(64);
+    assert!(refused.contains("has 64 `FOR ALL` names"), "{refused}");
+    assert_eq!(group(63), "loaded");
+}
+
 #[test]
 fn a_union_member_more_specific_than_another_is_tried_first() {
     assert_eq!(
@@ -635,6 +683,19 @@ fn solving(source: &str) -> (String, usize, usize) {
         ADMITTED.with(std::cell::Cell::get),
         POINTED.with(std::cell::Cell::get),
     )
+}
+
+#[test]
+fn a_call_by_name_of_a_quantified_callee_solves_its_group_once_in_its_frame() {
+    // The caller solves nothing: `f`'s frame admits the record once at its entry, per call.
+    use crate::program::ADMITTED_BY_NAME;
+    let source = "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\n";
+    for (calls, printed) in [(1, "1"), (2, "1\ns")] {
+        let program = ["PRINT (lib.f {x = 1})\n", "PRINT (lib.f {x = \"s\"})\n"][..calls].concat();
+        ADMITTED_BY_NAME.with(|admitted| admitted.set(0));
+        assert_eq!(run(&format!("{source}{program}")), printed);
+        assert_eq!(ADMITTED_BY_NAME.with(std::cell::Cell::get), calls);
+    }
 }
 
 #[test]

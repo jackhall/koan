@@ -5,18 +5,20 @@
 //!
 //! A registration closed and unquantified is checked against the builtin overloads at its key
 //! where it is typed ([`overlap`](super::super::check::overlap)), outside a quote's code, whose
-//! closing record keeps its first overlap for the `EVAL` running it to report.
+//! closing record keeps its first overlap for the `EVAL` running it to report. A binding that makes
+//! a deferred body's part no code refuses it in its words ([`SiteRule::NeverCode`]).
 
 use crate::elaborate::judge;
-use crate::elaborate::{self, Signatures, Tools, TypeContext};
-use crate::memory::{BumpVec, collect};
+use crate::elaborate::{self, Signatures, Stop, Tools, TypeContext};
+use crate::elaborate::{SignatureMember, signature_member};
+use crate::memory::{BumpVec, Lays, resident};
 use crate::scope::{
-    Binder, BodyShape, Born, Component, Located, PathName, Position, Registration, Resolved,
-    Segment, ShapeError, ShapeKind, Shapes, Site, Slot, StaticCallable, StaticRegistered,
-    StaticType, Store, TypeExpression, Unknown,
+    BodyShape, Born, Component, Located, NeverSatisfied, PathName, Payload, Position, Question,
+    Registration, Resolved, Segment, ShapeError, ShapeKind, Shapes, Site, SiteRule, Slot,
+    StaticCallable, StaticRegistered, StaticType, Store, TypeExpression, Unknown,
 };
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, Parametric};
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 
 use super::super::check::overlap;
 use super::{Pass, Tag};
@@ -28,20 +30,20 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, '
         self.shapes
     }
 
-    fn binding(&self, unknown: Unknown) -> Option<crate::scope::Bound<'o>> {
-        self.bound_to(unknown)
+    fn declared(&self, body: Segment, slot: Slot) -> StaticType<'o> {
+        self.declared_cell(self.shape_at(body), slot)
     }
 
-    fn declared(&self, binder: Binder) -> StaticType<'o> {
-        self.declared_cell(self.shape_at(binder.body), binder.slot)
-    }
-
-    fn registered(&self, binder: Binder) -> StaticRegistered<'o> {
-        self.registered_cell(self.shape_at(binder.body), binder.slot)
+    fn registered(&self, body: Segment, slot: Slot) -> StaticRegistered<'o> {
+        self.registered_cell(self.shape_at(body), slot)
     }
 
     fn callable(&self, body: Segment) -> StaticCallable<'o> {
         self.callable_cell(self.shape_at(body))
+    }
+
+    fn surfaced(&self, body: Segment, slot: Slot) -> Option<KType> {
+        self.surfaced_type(self.level_of(body)?, slot)
     }
 
     fn group_levels(&self, body: Segment) -> &'o [Parametric] {
@@ -60,11 +62,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, '
         Pass::note(self, unknowns);
     }
 
-    fn note_open(&self, unknown: Unknown, mark: crate::scope::OpenMark<'static>) {
-        Pass::note_open(self, unknown, mark);
-    }
-
-    fn marks(&self) -> &dyn crate::elaborate::judge::Marks {
+    fn marks(&self) -> &dyn crate::elaborate::judge::Derives<Unwalked = std::convert::Infallible> {
         self
     }
 }
@@ -72,6 +70,33 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, '
 impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
     Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S>
 {
+    /// The type the surfaced type name at `slot` of the `USING … SCOPE` body at `level` is, where
+    /// the module its `USING` reads declares the member exactly at its static type: a manifest
+    /// member, or a head parameter the type pins, closed. A member the type leaves abstract, or
+    /// declares over a name a run binds, is the run's to bind.
+    pub(super) fn surfaced_type(&self, level: usize, slot: Slot) -> Option<KType> {
+        let shape = self.chain[level].shape;
+        let name @ BinderSymbol::Type(_) = shape.slot_name(slot) else {
+            return None;
+        };
+        if shape.position_of(slot) != Position::PARAMETER {
+            return None;
+        }
+        let super::Entering::Surfaced(surfacing, tag) =
+            self.entering_of(level.checked_sub(1)?, shape)
+        else {
+            return None;
+        };
+        self.gather(tag);
+        match signature_member(self, self.types, self.scratch, surfacing.upper, name)? {
+            SignatureMember {
+                declared: DeclaredType::Type(declared),
+                unpinned: None,
+            } => judge::static_of(self.types, declared),
+            _ => None,
+        }
+    }
+
     /// What the type half's rules are handed.
     fn tools(
         &self,
@@ -83,6 +108,26 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         }
     }
 
+    /// `attempt`, typed again after each path it asks for is resolved ([`Stop::Unresolved`]): what
+    /// an asking attempt gathered is dropped, so what it types is gathered once. It ends, since
+    /// each request resolves one more of the chain's paths or refuses.
+    fn typing<T>(
+        &mut self,
+        mut attempt: impl FnMut(&Self) -> Result<T, Stop<'o>>,
+    ) -> Result<T, ShapeError<'o>> {
+        loop {
+            let gathered = self.gathered();
+            match attempt(self) {
+                Ok(typed) => return Ok(typed),
+                Err(Stop::Refused(refusal)) => return Err(refusal),
+                Err(Stop::Unresolved(asked)) => {
+                    self.ungather(gathered);
+                    self.resolve_asked(asked)?;
+                }
+            }
+        }
+    }
+
     /// Step two: declare `component`, a component of type binders of the shape at `level`.
     pub(super) fn declare(
         &mut self,
@@ -91,16 +136,17 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
         let mut fixed = BumpVec::new_in(self.scratch);
-        elaborate::declarations(
-            &*self,
-            self.tools(),
-            self.lay,
-            shape,
-            component,
-            &mut |slot, typed| {
-                fixed.push((slot, typed));
-            },
-        )?;
+        self.typing(|pass| {
+            fixed.clear();
+            elaborate::declarations(
+                pass,
+                pass.tools(),
+                pass.lay,
+                shape,
+                component,
+                &mut |slot, typed| fixed.push((slot, typed)),
+            )
+        })?;
         for (slot, typed) in fixed {
             self.set_declared(level, slot, typed);
         }
@@ -109,7 +155,8 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
 
     /// Step three's types: the type expressions of the shape at `level` at `expressions`, indices
     /// into its own in program order, then each `MATCH … WITH` guard against the others of its arm
-    /// set, and each `MATCH … UNDER`'s arms against its union.
+    /// set, what a binding may make alike laid at the first expression's site
+    /// ([`SiteRule::RepeatedGuard`]), and each `MATCH … UNDER`'s arms against its union.
     pub(super) fn type_expressions(
         &mut self,
         level: usize,
@@ -122,7 +169,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         for expression in written.iter() {
             self.type_expression(level, expression)?;
         }
-        elaborate::guards(
+        let repeats = elaborate::guards(
             self,
             self.types,
             shape,
@@ -130,9 +177,26 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             self.scratch,
             |expression| self.type_cell(shape, expression.site),
         )?;
-        elaborate::arms_under(self.types, self.scratch, shape, &written, |expression| {
-            self.type_cell(shape, expression.site)
-        })
+        // A binding making two guards alike refuses the first repeat in its words.
+        if let Some(first) = written.first() {
+            let mut asks = BumpVec::with_capacity_in(repeats.len(), self.scratch);
+            asks.extend(repeats.iter().map(|(asked, _)| *asked));
+            let mut refusals = BumpVec::with_capacity_in(repeats.len(), self.scratch);
+            refusals.extend(repeats.iter().map(|(_, refusal)| *refusal));
+            self.lay_refusals(level, first.site, SiteRule::RepeatedGuard, &asks, &refusals);
+        }
+        let bound = |clause| {
+            let level = judge::lexical_level(self.types, clause)?;
+            self.shapes.written_bound(shape.segment(), level)
+        };
+        elaborate::arms_under(
+            self.scratch,
+            shape,
+            &written,
+            |expression| self.type_cell(shape, expression.site),
+            |clause| self.shown_variants(clause),
+            bound,
+        )
     }
 
     /// Type `expression`, one of the shape at `level`'s.
@@ -143,7 +207,9 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
         self.chain[level].statement = expression.statement as usize;
-        let typed = elaborate::expression(&*self, self.tools(), self.lay, shape, expression)?;
+        let typed = self.typing(|pass| {
+            elaborate::expression(pass, pass.tools(), pass.lay, shape, expression)
+        })?;
         self.set_expression(level, expression.site, typed);
         Ok(())
     }
@@ -156,28 +222,43 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         registration: &Registration<'graph>,
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
-        let mut signatures: Signatures<'p> = BumpVec::new_in(self.scratch);
-        let typed = elaborate::registration(
-            &*self,
-            self.tools(),
-            self.lay,
-            shape,
-            registration,
-            &mut signatures,
-        )?;
-        self.set_registered(level, registration.slot, typed);
-        // A quote's code keeps its overlap for the `EVAL` running it to report.
-        let in_code = (self.chain[..=level].iter()).any(|at| at.shape.kind() == ShapeKind::Code);
-        if !in_code {
-            overlap(
-                &*self,
+        let typed = self.typing(|pass| {
+            let mut signatures: Signatures<'p> = BumpVec::new_in(pass.scratch);
+            elaborate::registration(
+                pass,
+                pass.tools(),
+                pass.lay,
                 shape,
                 registration,
-                typed,
-                self.builtins,
-                self.types,
-                self.scratch,
-            )?;
+                &mut signatures,
+            )
+        })?;
+        self.set_registered(level, registration.slot, typed);
+        let asked = overlap(
+            &*self,
+            shape,
+            registration,
+            typed,
+            self.builtins,
+            self.types,
+            self.scratch,
+        );
+        // A quote's code keeps an overlap at every binding for the `EVAL` running it to report
+        // (its closing record's); one a binding makes is the instance's at the `EVAL`'s entry.
+        let in_code = (self.chain[..=level].iter()).any(|at| at.shape.kind() == ShapeKind::Code);
+        let asked = match asked {
+            Err(_) if in_code => None,
+            asked => asked?,
+        };
+        // A binding making it overlap refuses it in that overload's words.
+        if let (Some((question, refusals)), Some(site)) =
+            (asked, shape.birth_site(registration.slot))
+        {
+            self.lay_decided(level, site, SiteRule::Overlap, &[question], |pass| {
+                pass.lay.fill(refusals.len(), |at| {
+                    Payload::Refusal(resident(pass.lay, refusals[at]))
+                })
+            });
         }
         Ok(())
     }
@@ -194,20 +275,24 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             self.deferred(level, body)?;
         }
         let shape = self.chain[level].shape;
-        let typed = elaborate::callable(&*self, self.tools(), self.lay, shape, body)?;
+        let registration = (shape.registrations().iter()).find(|registration| {
+            (shape.births(registration.slot)).is_some_and(|born| born.segment() == body.segment())
+        });
+        let typed = self.typing(|pass| {
+            elaborate::callable(pass, pass.tools(), pass.lay, shape, body, registration)
+        })?;
         let levels = elaborate::own_levels(&*self, self.tools(), self.lay, body, typed);
         let born = Born {
             callable: typed,
             levels,
             instance: None,
-            digestible: self.digestible(body, typed, levels),
         };
         self.set_born(body.segment(), born);
         Ok(())
     }
 
     /// The part an untraced `body`, born in the shape at `level`, is written as, typed there: a load
-    /// refusal where it can never be code.
+    /// refusal where it can never be code, laid as a binding's ([`SiteRule::NeverCode`]).
     fn deferred(
         &mut self,
         level: usize,
@@ -223,54 +308,23 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         };
         let typed = self.part(level, part)?;
         let (types, scratch) = (self.types, self.scratch);
-        match judge::never_satisfies(self, types, scratch, typed, KType::ANY_CODE.into()) {
-            Some(refused) => Err(ShapeError::BodyNotCode {
-                refused,
-                at: self.source(level, site),
-            }),
-            None => Ok(()),
+        let wanted = KType::ANY_CODE.into();
+        let at = self.source(level, site);
+        if let Some(refused) = judge::never_satisfies(self, types, scratch, typed, wanted) {
+            return Err(ShapeError::BodyNotCode { refused, at });
         }
-    }
-
-    /// The parameters of `frame`, typed `typed` with its own group at `levels`, whose arguments
-    /// digest at a constant cost, sorted: a type binder, or one declared closed under `Module` or
-    /// as a type value. A list's or a record's digest costs its size, so any other parameter keys
-    /// nothing.
-    fn digestible(
-        &self,
-        frame: &BodyShape<'graph>,
-        typed: StaticCallable<'o>,
-        levels: &[Parametric],
-    ) -> &'o [Slot] {
-        let (types, scratch) = (self.types, self.scratch);
-        // The function type as the body reads it, instantiated once for every parameter. Each
-        // `FOR ALL` name the binding binds is already closed in `levels`.
-        let params = self
-            .function_in_body(typed, levels)
-            .map(|(params, _)| params);
-        let digests = |slot: Slot| {
-            let name = frame.slot_name(slot);
-            if let BinderSymbol::Type(_) = name {
-                return true;
-            }
-            let declared = params.and_then(|params| params.get(name.symbol()));
-            // A parameter over names digests where its declared bound lies under a module or a
-            // type value, as every binding of it does: a key's cost is the load's to fix, so it
-            // asks nothing a binding answers, and a binding never keys more than the load does.
-            let under = |ceiling: KType| {
-                declared.is_some_and(|declared| {
-                    judge::under_every_binding(types, scratch, declared, ceiling)
-                })
-            };
-            under(KType::EMPTY_SIGNATURE) || under(KType::ANY_TYPE)
+        // A binding that puts the part outside all code refuses it in these words.
+        let refused = NeverSatisfied {
+            value: typed,
+            wanted,
         };
-        let mut digestible = BumpVec::new_in(scratch);
-        for slot in (0..frame.slots() as u32).map(Slot) {
-            if frame.position_of(slot) == Position::PARAMETER && digests(slot) {
-                digestible.push(slot);
-            }
-        }
-        collect(self.lay, digestible.iter().copied())
+        let asked = Question::NeverSatisfies {
+            value: typed,
+            wanted,
+        };
+        let refusal = ShapeError::BodyNotCode { refused, at };
+        self.lay_refusals(level, site, SiteRule::NeverCode, &[asked], &[refusal]);
+        Ok(())
     }
 
     /// What the path at `level` of the chain `root` roots resolves to, where the walk resolved it,

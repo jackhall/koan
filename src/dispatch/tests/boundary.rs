@@ -1,11 +1,12 @@
 //! The import boundary, as a test over this module's own source.
 //!
-//! `dispatch` stands over the program and every layer below it — `builtin_image`, `elaborate`,
-//! `knot`, `memory`, `parse`, `program`, `scheduler`, `scope`, `source`, `symbols`, `type_lattice`
-//! and `values` — and nothing names it but the embedder.
+//! `dispatch` stands over the program and every layer below it — `build`, `builtin_image`,
+//! `elaborate`, `knot`, `memory`, `parse`, `program`, `scheduler`, `scope`, `source`, `symbols`,
+//! `type_lattice` and `values` — and nothing names it but the embedder.
 
 /// The path prefixes `dispatch` may name.
 const PREFIXES: &[&str] = &[
+    "crate::build",
     "crate::builtin_image",
     "crate::dispatch",
     "crate::elaborate",
@@ -89,7 +90,7 @@ const READERS: &[&str] = &[
     "src/dispatch/evaluate.rs",
     "src/dispatch/builtins.rs",
     "src/program/body.rs",
-    "src/program/settle.rs",
+    "src/program/compose.rs",
     "src/knot.rs",
     "src/knot/function.rs",
     "src/knot/code.rs",
@@ -281,43 +282,5 @@ sig_fits(types, scratch, a, b)";
         offenders.is_empty(),
         "judged past the doors:\n{}",
         offenders.join("\n")
-    );
-}
-
-/// Each call of a store's [`answer`](crate::scope::Store::answer) in `code`: the witness's door.
-fn witness_asks(code: &str) -> usize {
-    code.matches(".answer(").count()
-}
-
-/// The witness is reached only through the marks: of the judging sources, the stores and `scope`,
-/// only the walk's marks (`walk/reads.rs`) ask a store for its answer, once, so no rule reads a witness's
-/// answer except through a door, and none reads its types at all.
-#[test]
-fn the_witness_is_asked_only_through_the_marks() {
-    use crate::tests::boundary::strip_comments_and_strings;
-    // The scan bites on a call and lets a definition pass.
-    let planted = "self.store.answer(question, &unknown_of, types, scratch)\nfn answer(";
-    assert_eq!(witness_asks(planted), 1);
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut sources = judging_sources();
-    sources.push(manifest.join("src/elaborate/judge.rs"));
-    crate::tests::boundary::collect_sources(&manifest.join("src/program"), &mut sources);
-    crate::tests::boundary::collect_sources(&manifest.join("src/build"), &mut sources);
-    crate::tests::boundary::collect_sources(&manifest.join("src/scope"), &mut sources);
-    sources.retain(|source| {
-        let path = source.to_string_lossy();
-        !path.ends_with("tests.rs") && !path.contains("/tests/")
-    });
-    let mut asks = Vec::new();
-    for source in sources {
-        let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
-        let found = witness_asks(&code);
-        if found > 0 {
-            asks.push((source.to_string_lossy().into_owned(), found));
-        }
-    }
-    assert!(
-        asks.len() == 1 && asks[0].0.ends_with("src/dispatch/walk/reads.rs") && asks[0].1 == 1,
-        "the witness is asked past the marks: {asks:?}"
     );
 }

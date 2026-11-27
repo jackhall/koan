@@ -18,16 +18,17 @@
 use std::fmt;
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
+use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, PathClass, TypeNode, Verdict, display_name, outranks,
+    DeclaredType, Interval, KType, Parametric, PathClass, Scheme, TypeNode, Verdict, display_name,
+    outranks,
 };
 use crate::values::Chain;
 use crate::values::digest::{DigestHasher, Tag};
 
-use super::keyed::Keyed;
-use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
-use super::tree::UndecidedCall;
+use super::shape::{Candidate, Coordinate, Segment, Site};
+use super::site::Selection;
 use super::tree::{Binder, Identity, Tree};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
@@ -43,6 +44,9 @@ pub struct Callable<'x, T = Parametric> {
     /// What the registration the callable is born for puts in its bucket; `None` for a callable no
     /// registration binds — a `FN`, or a combined statement's name.
     pub registered: Option<Registered<'x, T>>,
+    /// The bounds `ktype`'s group writes over an encloser's names, by position in that group:
+    /// `ktype` holds each at its upper end. Empty for a callable the load closed.
+    pub rebounds: Rebounds<'x>,
 }
 
 /// What a registration's bucket holds of the function it binds, and what a keyworded call of it
@@ -55,6 +59,204 @@ pub struct Registered<'x, T = Parametric> {
     /// Each `FOR ALL` name the declaration wrote, with its index in `shape`'s group.
     pub quantifier_map: ShapeGroupMap<'x>,
     pub parameters: ParameterBinding<'x>,
+    /// The bounds `shape`'s group writes over an encloser's names, by position in that group.
+    pub rebounds: Rebounds<'x>,
+}
+
+/// The bounds a scheme's `FOR ALL` group writes over an encloser's names, each beside its
+/// variable's position in that scheme's group. The scheme holds each such bound at its upper end
+/// at every binding, and a binding closing every one rebuilds it ([`Shaped::rebuilt`]). Empty
+/// where every bound is closed. A position names one scheme's numbering: a function type and its
+/// registered shape each carry their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Rebounds<'x>(pub &'x [(u8, Parametric)]);
+
+impl<'x> Rebounds<'x> {
+    pub const NONE: Rebounds<'static> = Rebounds(&[]);
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// These bounds laid again through `lay`.
+    pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Rebounds<'to> {
+        match self.0 {
+            [] => Rebounds(&[]),
+            bounds => Rebounds(collect(lay, bounds.iter().copied())),
+        }
+    }
+}
+
+/// A value's static type where a binder or a call's head holds it: a type's interval, or a
+/// quantified callable's scheme beside the bounds its group writes over names ([`Rebounds`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Holding<'x> {
+    Type(Interval),
+    Scheme(Scheme, Rebounds<'x>),
+}
+
+impl From<Interval> for Holding<'_> {
+    fn from(typed: Interval) -> Self {
+        Holding::Type(typed)
+    }
+}
+
+impl From<DeclaredType<Interval>> for Holding<'_> {
+    /// A type's interval, or a scheme whose every bound is closed.
+    fn from(declared: DeclaredType<Interval>) -> Self {
+        match declared {
+            DeclaredType::Type(typed) => Holding::Type(typed),
+            DeclaredType::Scheme(scheme) => Holding::scheme(scheme),
+        }
+    }
+}
+
+impl<'x> Holding<'x> {
+    /// A scheme whose every bound is closed.
+    pub fn scheme(scheme: Scheme) -> Self {
+        Holding::Scheme(scheme, Rebounds(&[]))
+    }
+
+    /// The interval of a type held; `None` for a scheme.
+    pub fn as_type(self) -> Option<Interval> {
+        match self {
+            Holding::Type(typed) => Some(typed),
+            Holding::Scheme(..) => None,
+        }
+    }
+
+    /// This holding laid again through `lay`.
+    pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Holding<'to> {
+        match *self {
+            Holding::Type(typed) => Holding::Type(typed),
+            Holding::Scheme(scheme, rebounds) => Holding::Scheme(scheme, rebounds.laid(lay)),
+        }
+    }
+}
+
+/// A callable's type or shape as a question judges it: a type, or a scheme beside the bounds its
+/// group writes over names ([`Rebounds`]), which a binding closes before any door reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shaped<'x> {
+    pub ty: DeclaredType<Parametric>,
+    pub rebounds: Rebounds<'x>,
+}
+
+impl<'x> From<DeclaredType<Parametric>> for Shaped<'x> {
+    fn from(ty: DeclaredType<Parametric>) -> Self {
+        Shaped {
+            ty,
+            rebounds: Rebounds(&[]),
+        }
+    }
+}
+
+impl<'x> From<Parametric> for Shaped<'x> {
+    fn from(ty: Parametric) -> Self {
+        DeclaredType::Type(ty).into()
+    }
+}
+
+impl<'x> Shaped<'x> {
+    /// Hand `each` the type and every bound written over names.
+    pub fn each_type(&self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
+        each(self.ty);
+        for (_, bound) in self.rebounds.0 {
+            each((*bound).into());
+        }
+    }
+
+    /// This operand laid again through `lay`.
+    pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Shaped<'to> {
+        Shaped {
+            ty: self.ty,
+            rebounds: self.rebounds.laid(lay),
+        }
+    }
+
+    /// This operand with every type mapped by `declared`, its bounds laid through `lay`.
+    pub fn mapped<'to>(
+        &self,
+        lay: impl Lays<'to>,
+        declared: &mut dyn FnMut(DeclaredType<Parametric>) -> DeclaredType<Parametric>,
+    ) -> Shaped<'to> {
+        let bounds = self.rebounds.0;
+        let ty = declared(self.ty);
+        let mut each = |(at, bound): (u8, Parametric)| match declared(bound.into()) {
+            DeclaredType::Type(bound) => (at, bound),
+            DeclaredType::Scheme(_) => unreachable!("a bound is a type"),
+        };
+        Shaped {
+            ty,
+            rebounds: match bounds {
+                [] => Rebounds(&[]),
+                _ => Rebounds(lay.fill(bounds.len(), |at| each(bounds[at]))),
+            },
+        }
+    }
+
+    /// The scheme with each bound written in where every one is closed, its bounds then empty;
+    /// else this operand as it is.
+    pub fn rebuilt(self, types: &Chain<'_, '_, '_, '_>, scratch: BumpAllocator<'x>) -> Shaped<'x> {
+        if self.rebounds.is_empty() {
+            return self;
+        }
+        let mut closed = BumpVec::with_capacity_in(self.rebounds.0.len(), scratch);
+        for (at, bound) in self.rebounds.0 {
+            match types.concrete(*bound) {
+                Some(bound) => closed.push((usize::from(*at), bound)),
+                None => return self,
+            }
+        }
+        match rebuilt_scheme(types, scratch, self.ty, &closed) {
+            Some(ty) => ty.into(),
+            None => self,
+        }
+    }
+}
+
+/// `scheme` with the bound of each group variable `bounds` names replaced by the closed bound
+/// beside it: its body read at fresh quantified variables under the new bounds, bound again under
+/// its own group. `None` where `scheme` is no scheme over a function type or a shape.
+pub fn rebuilt_scheme(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    scheme: DeclaredType<Parametric>,
+    bounds: &[(usize, KType)],
+) -> Option<DeclaredType<Parametric>> {
+    use crate::type_lattice::instantiate_quantified;
+    let DeclaredType::Scheme(scheme) = scheme else {
+        return None;
+    };
+    let group = scheme.group(types);
+    let mut fresh = BumpVec::with_capacity_in(group.bounds.len(), scratch);
+    fresh.extend(group.bounds.iter().copied());
+    for (index, bound) in bounds {
+        *fresh.get_mut(*index)? = *bound;
+    }
+    let mut variables = BumpVec::with_capacity_in(fresh.len(), scratch);
+    variables.extend((fresh.iter().enumerate()).map(|(at, bound)| types.quantified(at, *bound)));
+    let body = instantiate_quantified(types, scratch, scheme, &variables);
+    let rebuilt = match types.node(body) {
+        TypeNode::KFunction { params, ret } => {
+            let mut fields = BumpVec::new_in(scratch);
+            fields.extend(params.iter());
+            types.function_scheme(scratch, group.names, &fresh, &fields, ret)
+        }
+        TypeNode::ExpressionShape {
+            elements,
+            classes,
+            ret,
+        } => {
+            let mut written = BumpVec::new_in(scratch);
+            written.extend(elements.iter());
+            let mut ranks = BumpVec::new_in(scratch);
+            ranks.extend(classes.iter());
+            types.shape_scheme(scratch, group.names, &fresh, &written, &ranks, ret)
+        }
+        _ => return None,
+    };
+    Some(rebuilt.handle)
 }
 
 /// Each `FOR ALL` name a declaration wrote, in written order, with its index in its callable's
@@ -109,11 +311,62 @@ pub enum ParameterBinding<'x> {
     Operands,
 }
 
+/// What a [too wide](Elaboration::TooWide) quantified type holds too many of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Width {
+    Names,
+    Parameters,
+    Slots,
+}
+
+/// The most `FOR ALL` names, parameters or slots a quantified type holds: a stored solve
+/// ([`Rule::Solved`](crate::scope::Rule::Solved)) names each by one bit of a `u64`.
+pub const WIDEST: usize = 63;
+
+/// The witness that a type was left unknown where no binding is written in: outside a walk, where
+/// a namer names no derived name, or past a reader's chain, where a path's root lands at a name no
+/// level names ([`Shapes::path_level`](super::Shapes::path_level)). A walk's own namer is total
+/// (its error is [`Infallible`](std::convert::Infallible)), so a walk leaves no type unknown over
+/// a name a binding writes in. Only those two minters construct one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Unwalked(());
+
+impl Unwalked {
+    /// The token, for a minter named in the type's doc.
+    pub(crate) const fn outside_a_walk() -> Self {
+        Unwalked(())
+    }
+}
+
+impl From<std::convert::Infallible> for Unwalked {
+    fn from(never: std::convert::Infallible) -> Self {
+        match never {}
+    }
+}
+
+/// A path a walk's reader met before the walk resolved it: the path `index` of
+/// [`BodyShape::spelled`](super::BodyShape::spelled) of the shape at `segment`. The walk resolves
+/// it and types again, so a walk never reads a path it holds no resolution for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Unresolved {
+    pub segment: Segment,
+    pub index: u32,
+}
+
 /// Why a type expression did not elaborate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Elaboration {
     /// The type name at `site` is bound to something other than a type.
     NotAType { name: TypeSymbol, site: Site },
+    /// A spelling at `site` over `name`, a name a run binds, that its bound, written as `written`
+    /// where the message can name it so, does not license at every binding
+    /// ([what a body may ask of a `FOR ALL` name](../../design/quantified-types.md#what-a-body-may-ask-of-a-for-all-name)).
+    Unlicensed {
+        name: Parametric,
+        written: Option<AsWritten>,
+        spelling: Spelling,
+        site: Site,
+    },
     /// A spelling the elaborator does not elaborate, at `site`.
     Unsupported { site: Site },
     /// A projection `Owner.name`, at `site`, naming a member `Owner` does not declare: a union's
@@ -138,15 +391,33 @@ pub enum Elaboration {
         members: (Parametric, Parametric),
         site: Site,
     },
+    /// A quantified function type or expression shape at `site` with `count` `FOR ALL` names,
+    /// parameters or slots (`width`), past what a stored solve holds: it names each by a bit.
+    TooWide {
+        width: Width,
+        count: usize,
+        site: Site,
+    },
     /// The type declaration of `name`, at `site`, names itself through signatures and aliases
     /// alone: neither mints an identity, so the cycle has no finite type.
     CycleWithoutNominal { name: TypeSymbol, site: Site },
-    /// The load-time reader cannot know the type at `site` before the program runs: the load
-    /// pass's cue to leave it for the run, never reported.
-    Unknown { site: Site },
+    /// The load-time reader cannot know the type at `site` before the program runs, where no
+    /// binding is written in (`unwalked`): the load pass's cue to leave it for the run, never
+    /// reported.
+    Unknown { site: Site, unwalked: Unwalked },
+    /// A `FOR ALL` bound inside a type at `site` reads a run-bound name: no type written over names
+    /// holds a scheme whose bound a binding decides. A callable's own group may, its type carrying
+    /// the bound beside its scheme ([`Rebounds`]).
+    BoundOverRunBound { site: Site },
     /// A type at `site` reads the name `name`, which no layer the run reads binds: what a rigid
     /// fact reaching the run refuses as, worded as the load words a name with no binding.
     Unbound { name: Symbol, site: Site },
+    /// A type at `site` the load left open reached the run with no name to word it by: a fact no
+    /// walk closed, which debug builds stop at.
+    OpenAtRun { site: Site },
+    /// A type at `site` reads `path`, which the walk has not resolved yet: its cue to resolve it
+    /// and type again, never reported.
+    Unresolved { site: Site, path: Unresolved },
 }
 
 impl Elaboration {
@@ -154,14 +425,19 @@ impl Elaboration {
     pub fn site(&self) -> Site {
         match self {
             Elaboration::NotAType { site, .. }
+            | Elaboration::Unlicensed { site, .. }
             | Elaboration::Unsupported { site }
             | Elaboration::NoSuchMember { site, .. }
             | Elaboration::Bound { site }
             | Elaboration::Quantified { site }
             | Elaboration::MeetOverVariable { site }
             | Elaboration::TiedUnion { site, .. }
+            | Elaboration::TooWide { site, .. }
             | Elaboration::CycleWithoutNominal { site, .. }
-            | Elaboration::Unknown { site }
+            | Elaboration::Unknown { site, .. }
+            | Elaboration::BoundOverRunBound { site }
+            | Elaboration::OpenAtRun { site }
+            | Elaboration::Unresolved { site, .. }
             | Elaboration::Unbound { site, .. } => *site,
         }
     }
@@ -181,6 +457,51 @@ impl Elaboration {
     }
 }
 
+/// What an [`Elaboration::Unlicensed`] spelling reads off its run-bound name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Spelling {
+    /// A field projection `Elt.size` whose bound declares no such field.
+    Field(Symbol),
+    /// A variant read `Elt.None`, where the bound is a union declaring the variant.
+    Variant(Symbol),
+    /// An application, a `WITH`, a `NEEDING` or an `UNBUILT` with the name as its head.
+    Head,
+}
+
+/// A type as the program wrote it, where a message names it so: a type name, or the source of a
+/// type expression.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AsWritten {
+    Name(TypeSymbol),
+    Source(SourceRef),
+}
+
+/// The bound a variable's node carries, which a refusal names it by: `ty` itself for a type that
+/// is no variable.
+fn variable_bound(types: &Chain<'_, '_, '_, '_>, ty: Parametric) -> Parametric {
+    match types.node(ty) {
+        TypeNode::Lexical { bound, .. }
+        | TypeNode::Path { bound, .. }
+        | TypeNode::Derived { bound, .. }
+        | TypeNode::Projection { bound, .. } => bound.into(),
+        _ => ty,
+    }
+}
+
+/// Write `written` as the program spelled it, else `ty` as the lattice renders it.
+pub fn written_or(
+    f: &mut fmt::Formatter<'_>,
+    written: Option<AsWritten>,
+    ty: impl Into<DeclaredType<Parametric>>,
+    (symbols, types): (&SymbolInterner, &Chain<'_, '_, '_, '_>),
+) -> fmt::Result {
+    match written {
+        Some(AsWritten::Name(name)) => write!(f, "{}", symbols.display(name.symbol())),
+        Some(AsWritten::Source(source)) => write!(f, "{}", source.text()),
+        None => write!(f, "{}", display_name(ty, types, symbols)),
+    }
+}
+
 /// An [`Elaboration`] beside the interner and registry it renders through.
 pub struct ElaborationDisplay<'x, 'run, 'p, 'reg> {
     error: &'x Elaboration,
@@ -193,6 +514,45 @@ impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_> {
         match self.error {
             Elaboration::NotAType { name, .. } => {
                 write!(f, "{} names no type", self.symbols.display(name.symbol()))
+            }
+            Elaboration::Unlicensed {
+                name,
+                written,
+                spelling,
+                ..
+            } => {
+                let bound = variable_bound(self.types, *name);
+                let name = display_name(*name, self.types, self.symbols);
+                let written = (*written, bound);
+                let bound = |f: &mut fmt::Formatter<'_>| {
+                    written_or(f, written.0, written.1, (self.symbols, self.types))
+                };
+                match spelling {
+                    Spelling::Field(member) => {
+                        write!(
+                            f,
+                            "{name} has no member {}: its bound ",
+                            self.symbols.display(*member)
+                        )?;
+                        bound(f)?;
+                        f.write_str(" declares none")
+                    }
+                    Spelling::Variant(member) => {
+                        let member = self.symbols.display(*member);
+                        write!(
+                            f,
+                            "{name} has no member {member}, since a binding may be a lone \
+                             variant; spell it "
+                        )?;
+                        bound(f)?;
+                        write!(f, ".{member}")
+                    }
+                    Spelling::Head => write!(
+                        f,
+                        "{name} is bound where the program runs, and the type a value carries \
+                         is always applied, so it is no head"
+                    ),
+                }
             }
             Elaboration::Unsupported { .. } => f.write_str("this type expression is not supported"),
             Elaboration::NoSuchMember { owner, name, .. } => write!(
@@ -217,13 +577,32 @@ impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_> {
                 display_name(*a, self.types, self.symbols),
                 display_name(*b, self.types, self.symbols)
             ),
+            Elaboration::TooWide { width, count, .. } => write!(
+                f,
+                "this quantified type has {count} {}, but one holds at most {WIDEST} `FOR ALL` \
+                 names and {WIDEST} parameters or slots, so the solve of a call can be stored",
+                match width {
+                    Width::Names => "`FOR ALL` names",
+                    Width::Parameters => "parameters",
+                    Width::Slots => "slots",
+                }
+            ),
             Elaboration::CycleWithoutNominal { name, .. } => write!(
                 f,
                 "`{}` names itself through signatures and aliases alone, so its type is \
                  infinite; a recursive type passes through a NEWTYPE or a UNION",
                 self.symbols.display(name.symbol())
             ),
-            Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
+            Elaboration::BoundOverRunBound { .. } => f.write_str(
+                "a `FOR ALL` bound inside a type names a type bound where the program runs, so \
+                 each binding would make it a different type; only the `FOR ALL` group of a \
+                 callable itself may name one",
+            ),
+            Elaboration::Unknown { .. }
+            | Elaboration::OpenAtRun { .. }
+            | Elaboration::Unresolved { .. } => {
+                f.write_str("this type is known only where it runs")
+            }
             Elaboration::Unbound { name, .. } => write!(
                 f,
                 "`{}` names no binding visible here",
@@ -490,11 +869,43 @@ pub enum StaticInstance<'graph> {
 
 /// What the load fixed where a quantified function is read: the solution it instantiated it at,
 /// or — a member read at a call's head — that the run reads it as it is, and the call solves its
-/// group.
+/// group; or, where the value read is the member `name` of a module the load cannot see, the
+/// type that module carries and the type the read is wanted at, written over names, which the
+/// frame's binding closes and instances the member at
+/// ([`member_instance_closed`](super::application::member_instance_closed)).
 #[derive(Clone, Copy, Debug)]
 pub enum InstanceRead<'graph> {
     Solved(StaticInstance<'graph>),
     AsIs,
+    Member {
+        name: ValueSymbol,
+        carried: Parametric,
+        wanted: MemberWanted,
+    },
+}
+
+/// The type a member of a module the load cannot see is wanted at where it is read.
+#[derive(Clone, Copy, Debug)]
+pub enum MemberWanted {
+    /// Nothing is wanted of it.
+    Nothing,
+    /// The type the text wants it at, written over names.
+    At(Parametric),
+    /// It is the instance argument `argument`, among the member arguments, of the keyworded use
+    /// at `site`, whose candidates want it at different types: the type the candidate the
+    /// selection's answer runs wants it at, or the type every candidate the answer keeps agrees
+    /// on ([`Selectable::wanted`](super::site::Selectable::wanted)).
+    OfUse { site: Site, argument: u16 },
+}
+
+impl MemberWanted {
+    /// The type the text wants the member at, where it names one.
+    pub fn at(self) -> Option<Parametric> {
+        match self {
+            MemberWanted::At(wanted) => Some(wanted),
+            _ => None,
+        }
+    }
 }
 
 /// What the load fixed for a callable's type.
@@ -636,7 +1047,7 @@ impl<'graph> Table<'graph> {
 
     /// How many classes `shapes`' ranking has: only the ranking is read, which a scheme's body
     /// spells as a type's does.
-    fn classes(types: &Chain<'_, '_, '_, '_>, shapes: &[DeclaredType<Parametric>]) -> usize {
+    pub fn classes(types: &Chain<'_, '_, '_, '_>, shapes: &[DeclaredType<Parametric>]) -> usize {
         shapes
             .first()
             .map_or(0, |shape| match shape.view(types).body {
@@ -699,7 +1110,7 @@ pub struct UseStatics<'graph> {
     pub contributions: &'graph [StaticType<'graph>],
     /// Where the text does not select one candidate, what an answer selects among, which the
     /// use's content tree is keyed on ([`Called`](super::Called)).
-    pub undecided: Option<&'graph UndecidedCall<'graph>>,
+    pub undecided: Option<&'graph Selection<'graph>>,
 }
 
 impl UseStatics<'_> {
@@ -742,8 +1153,7 @@ pub struct CandidateRoute {
     /// Whether the candidate's return keeps the frame's contract, where the frame's return and the
     /// candidate's solution are closed: `None` where the call decides.
     pub kept: Option<bool>,
-    /// Whether the call is a self tail edge of a body whose name does not escape: a hop that keeps
-    /// the frame's settlement where its body keys one.
+    /// Whether the call is a self tail edge of a body whose name does not escape.
     pub hop: bool,
 }
 
@@ -762,36 +1172,12 @@ pub enum BodyClass {
     Porous { mints: u32 },
 }
 
-/// How the load classed one minting site of a body: by what its content reads
-/// ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Mint {
-    /// Over a closed content tree: the same content at every run, its types in the root.
-    Closed,
-    /// The same content at every frame of one binding: rested in the agent tier by the
-    /// settlement the frame runs under, and interned into the cold tier where it runs under none.
-    Invariant,
-    /// Content that may differ per hop: interned into the cold tier.
-    Varying,
-}
-
-/// What the load fixed about where a body's types intern at run: whether its frame caches and how
-/// each of its own minting sites is classed. On a callable's own record it also says which of its
-/// parameters may key its settlement.
+/// What the load fixed about where a body's types intern at run: whether its frame caches.
 #[derive(Clone, Copy, Debug)]
-pub struct Caching<'graph> {
+pub struct Caching {
     /// Whether the frame body this shape runs in caches: its own class for a callable or a quote's
     /// code, its frame's for a block or a module body.
     pub caches: bool,
-    /// Each of the shape's own minting sites, sorted by site, beside its class.
-    pub mints: Keyed<'graph, (Site, Mint)>,
-    /// On a caching frame body's own record, when it or a block or module body it runs has an
-    /// invariant minting site or an invariant composite site: the frame's parameter slots those
-    /// sites read, sorted, which may be none. Each is a parameter whose arguments digest at a
-    /// constant cost: one declared under `Module` or as a type value, or a type binder. A call to
-    /// the frame seeks the settlement these slots' arguments key. `None` on every other
-    /// record.
-    pub invariant: Option<&'graph [Slot]>,
 }
 
 /// At a `:|` over a module binder read bare: the module's body, and per capture its content

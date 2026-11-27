@@ -189,18 +189,15 @@ const OUTER: &str = "EXPR #(OUTER m :Holder) -> Number = #((LET w = (m :| Holder
 
 #[test]
 fn a_composed_asker_calling_a_written_keyed_operator_settles_it() {
-    let (printed, tiers, _) = composed(&format!(
+    let (printed, _, _) = composed(&format!(
         "{PRELUDE}{OUTER}LET q = #((MODULE m = ((LET held = 1))) (PRINT $(OUTER m)))\nLET qs = [q]
 EVAL #($..qs) -> Any"
     ));
     assert_eq!(printed, "7");
-    // The module is the one the load computed for the written quote: load content, so the call
-    // settles under the root.
-    assert_eq!((tiers.sought, tiers.settled), (1, 1));
 }
 
 #[test]
-fn a_written_callee_under_the_root_bound_to_a_composed_module_relays_nothing() {
+fn a_written_callee_under_the_root_bound_to_a_composed_module_lays_nothing_in_the_agent_tier() {
     let (printed, tiers, _) = composed(&format!(
         "{PRELUDE}{OUTER}LET f = (FN :{{n :Number}} -> Number = #(n))
 LET x = (f {{n = 1}})
@@ -208,8 +205,7 @@ LET q = #((MODULE m = ((LET held = $x))) (PRINT $(OUTER m)))\nLET qs = [q]
 EVAL #($..qs) -> Any"
     ));
     assert_eq!(printed, "7");
-    // No layer of the callee's chain holds the module's tree: the call seeks nothing.
-    assert_eq!((tiers.sought, tiers.relayed, tiers.agent), (0, 0, 0));
+    assert_eq!(tiers.agent, 0);
 }
 
 #[test]
@@ -259,15 +255,11 @@ fn lazily(unused: usize, calls: usize) -> (usize, usize) {
 #[test]
 fn a_frame_under_a_composition_probes_no_term_it_does_not_read() {
     // A call's frame mints what its reads name and nothing else, so a composition naming eight
-    // more types costs each call nothing more: the `EVAL`'s activation walk mints them once.
+    // more types costs each call nothing more.
     let per_call = |unused: usize| {
         let (once, twice) = (lazily(unused, 1), lazily(unused, 2));
         (twice.0 - once.0, twice.1 - once.1)
     };
-    assert!(
-        lazily(8, 1).0 > lazily(0, 1).0,
-        "the eight are terms the `EVAL`'s walk mints"
-    );
     assert_eq!(per_call(8), per_call(0));
 }
 
@@ -394,10 +386,8 @@ fn a_composed_declared_nominal_is_minted_at_its_declaring_statement() {
     assert_eq!(tiers.agent, 0);
 }
 
-/// What one run of `source` left under `budget`: what it printed, the drain's tallies, and how
-/// many settlements lay under a composition and how many compositions some settlement pinned at
-/// its end.
-fn pinned(source: &str, budget: BuildBudget) -> (String, Tiers, (usize, usize)) {
+/// What one run of `source` left under `budget`: what it printed, and the drain's tallies.
+fn ran_budget(source: &str, budget: BuildBudget) -> (String, Tiers) {
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 4, budget, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
@@ -405,12 +395,11 @@ fn pinned(source: &str, budget: BuildBudget) -> (String, Tiers, (usize, usize)) 
     substrate
         .with(|running| running.ran())
         .expect("the program runs");
-    let under = substrate.with(|running| running.scheduler().graph().under_compositions());
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));
-    (printed, TIERS.with(Cell::get), under)
+    (printed, TIERS.with(Cell::get))
 }
 
-/// `PEEK`'s code: a `SIG` and a function keyed on a module it reads as one.
+/// `PEEK`'s code: a `SIG` and a function viewing a module as one.
 const PEEK: &str = "(SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]) \
                     (LET peek = (FN :{m :Hold} -> Any = #((LET v = (m :| Hold)) ({h = v.held}))))";
 
@@ -420,8 +409,8 @@ const FRESH: &str = "LET body = [#(((LET held = 1)))]\n\
                      LET m = (EVAL #((MODULE m = $..body) (m)) -> Any)\n";
 
 #[test]
-fn a_callable_born_in_composed_code_keys_a_settlement_under_its_composition() {
-    let (printed, tiers, (under, pins)) = pinned(
+fn a_callable_born_in_composed_code_runs_under_its_composition() {
+    let (printed, _) = ran_budget(
         &format!(
             "LET q = #({PEEK} (MODULE m = ((LET held = 1))) (PRINT (peek {{m = m}})) \
              (PRINT (peek {{m = m}})))\nLET qs = [q]\nEVAL #($..qs) -> Any"
@@ -429,28 +418,24 @@ fn a_callable_born_in_composed_code_keys_a_settlement_under_its_composition() {
         BuildBudget::default(),
     );
     assert_eq!(printed, "{h = Elt(1)}\n{h = Elt(1)}");
-    // The second call hits the settlement the first built, under the composition.
-    assert_eq!((tiers.sought, tiers.settled), (2, 1));
-    assert_eq!((under, pins), (1, 0));
 }
 
 #[test]
-fn a_settlement_under_a_composition_rests_nothing_in_the_agent_tier() {
+fn a_call_under_a_composition_rests_nothing_in_the_agent_tier() {
     let source = |eval: &str| {
         format!(
             "LET q = #({PEEK} (MODULE m = ((LET held = 1))) (PRINT (peek {{m = m}})))\nLET qs = [q]\n\
              {eval} -> Any"
         )
     };
-    let (printed, tiers, _) = pinned(&source("EVAL #($..qs)"), BuildBudget::default());
+    let (printed, tiers) = ran_budget(&source("EVAL #($..qs)"), BuildBudget::default());
     assert_eq!(printed, run(&source("EVAL q")));
-    assert_eq!(tiers.settled, 1);
-    assert_eq!((tiers.agent, tiers.relayed, tiers.rested), (0, 0, 0));
+    assert_eq!(tiers.agent, 0);
 }
 
 #[test]
-fn a_settlement_binding_a_module_another_composition_computed_pins_it() {
-    let (printed, tiers, (under, pins)) = pinned(
+fn a_call_binding_a_module_another_composition_computed_runs_under_its_own() {
+    let (printed, tiers) = ran_budget(
         &format!(
             "{FRESH}LET q = #({PEEK} (peek))\nLET qs = [q]\nLET peek = (EVAL #($..qs) -> Any)\n\
              PRINT (peek {{m = m}})\nPRINT (peek {{m = m}})"
@@ -458,14 +443,12 @@ fn a_settlement_binding_a_module_another_composition_computed_pins_it() {
         BuildBudget::default(),
     );
     assert_eq!(printed, "{h = Elt(1)}\n{h = Elt(1)}");
-    assert_eq!((tiers.sought, tiers.settled, tiers.agent), (2, 1, 0));
-    // The settlement lies under `peek`'s composition and pins `m`'s.
-    assert_eq!((under, pins), (1, 1));
+    assert_eq!(tiers.agent, 0);
 }
 
 #[test]
-fn a_pinned_composition_is_evicted_only_after_its_last_pinner() {
-    let (printed, tiers, (under, pins)) = pinned(
+fn compositions_evicted_under_the_smallest_budget_are_rebuilt_from_a_bounce() {
+    let (printed, tiers) = ran_budget(
         &format!(
             "{FRESH}LET q = #({PEEK} (peek))\nLET qs = [q]\nLET peek = (EVAL #($..qs) -> Any)\n\
              PRINT (peek {{m = m}})\nPRINT (peek {{m = m}})\nLET p = #(PRINT 0)\nLET ps = [p]\n\
@@ -474,22 +457,93 @@ fn a_pinned_composition_is_evicted_only_after_its_last_pinner() {
         SMALLEST,
     );
     assert_eq!(printed, "{h = Elt(1)}\n{h = Elt(1)}\n0");
-    // `peek`'s miss evicts `m`'s composition, so the call rebuilds it from the module's root to pin
-    // it — a fourth composition, and like each, built over the syntax a bounce copied; while the
-    // settlement lives it stays, and the second call hits.
-    assert_eq!((tiers.settled, tiers.composed, tiers.bounced), (1, 4, 4));
-    // `p`'s miss evicts the settlement, then the composition it pinned, then `peek`'s.
-    assert_eq!(tiers.evicted, 4);
-    assert_eq!((under, pins), (0, 0));
+    // Each composition is built over the syntax a bounce copied.
+    assert_eq!(tiers.composed, tiers.bounced);
 }
 
 #[test]
-fn a_written_callee_bound_to_a_composed_module_decides_in_its_activation() {
-    let (printed, tiers, _) = pinned(
+fn a_written_callee_bound_to_a_composed_module_lays_nothing_in_the_agent_tier() {
+    let (printed, tiers) = ran_budget(
         &format!("{PRELUDE}{OUTER}{FRESH}PRINT (OUTER m)"),
         BuildBudget::default(),
     );
     assert_eq!(printed, "7");
-    // Under the root a settlement binds load content alone: `m`'s tree lies in its composition.
-    assert_eq!((tiers.sought, tiers.settled, tiers.agent), (0, 0, 0));
+    assert_eq!(tiers.agent, 0);
+}
+
+#[test]
+fn composed_code_gets_a_binding_graph_of_its_own_and_refused_code_none() {
+    let (_, tiers, _) = composed(
+        "LET x = 1
+LET q = #((LET y = 2) (PRINT (y + $x)))\nLET qs = [q]
+EVAL #($..qs) -> Any",
+    );
+    assert_eq!((tiers.composed, tiers.graphs), (1, 1));
+    let (printed, tiers, _) =
+        composed("LET q = #((LET x = 1) (LET x = 2))\nLET qs = [q]\nEVAL #($..qs) -> Any");
+    assert!(printed.starts_with("error: "), "{printed}");
+    assert_eq!((tiers.composed, tiers.graphs), (1, 0));
+}
+
+#[test]
+fn a_recursion_through_composed_code_s_own_callable_is_a_cycle_through_a_value_and_builds() {
+    // Code binds its callables as values, so `DEEPEN`'s self-call is one the text cannot follow:
+    // the graph laid when the code is composed refuses nothing, as the load refuses no `EVAL`'s.
+    let (printed, tiers, _) = composed(
+        "\
+LET q = #(
+  EXPR #(OUTER) -> Any = #(
+    EXPR FOR ALL #[Item] #(DEEPEN y :Item) -> Any = #(DEEPEN [y])
+    1
+  )
+  PRINT 1
+)
+LET qs = [q]
+EVAL #($..qs) -> Any",
+    );
+    assert_eq!(printed, "1");
+    assert_eq!((tiers.composed, tiers.graphs), (1, 1));
+}
+
+/// What one run of `source` printed, with how many times the answer function ran for an instance
+/// of a live composition's graph.
+fn composed_runs(source: &str) -> (String, u64) {
+    WRITTEN.with(|written| written.borrow_mut().clear());
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 4, BuildBudget::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    substrate
+        .with(|running| running.ran())
+        .expect("the program runs");
+    let runs = substrate.with(|running| running.scheduler().graph().composed_runs());
+    (WRITTEN.with(|written| written.borrow().join("\n")), runs)
+}
+
+#[test]
+fn a_loop_in_composed_code_finds_its_instance_after_the_first_hop() {
+    // Each hop of `WALK` binds `m` to `ints`, whose `held` selects `TELL`'s candidate: the first
+    // hop's entry makes the instance of the composition's graph there, and every later hop finds
+    // it filed, so the answer functions run as often over four hops as over sixteen.
+    let source = |depth: u32| {
+        let mut source = String::from("LET c0 = null\n");
+        for at in 1..=depth {
+            source.push_str(&format!("LET c{at} = {{next = c{}}}\n", at - 1));
+        }
+        source.push_str(&format!(
+            "LET q = #(\n  (SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)])\n  \
+             (MODULE ints = ((LET held = 1)))\n  \
+             (EXPR #(TELL x :Number) -> Str = #(\"num\"))\n  \
+             (EXPR #(TELL x :Str) -> Str = #(\"str\"))\n  \
+             (EXPR #(WALK m :Hold link :{{next :Any}}) -> Number = \
+             #((PRINT (TELL m.held)) (WALK m (ATTR link next))))\n  \
+             (EXPR #(WALK m :Hold end :Null) -> Number = #(7))\n  \
+             (WALK ints $c{depth}))\nLET qs = [q]\nEVAL #($..qs) -> Any"
+        ));
+        source
+    };
+    let [(few, few_runs), (many, many_runs)] = [4, 16].map(|depth| composed_runs(&source(depth)));
+    assert_eq!(few, ["num"; 4].join("\n"));
+    assert_eq!(many, ["num"; 16].join("\n"));
+    assert!(few_runs > 0, "the first hop makes the instance");
+    assert_eq!(few_runs, many_runs, "every later hop finds it filed");
 }

@@ -217,28 +217,30 @@ const RUNS: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
                     EXPR #(RUNS k :Counter end :Null) -> Number = #(7)\n\
                     LET go = (FN :{k :Counter} -> Number = #(RUNS k chain))\n";
 
-/// Run `source` over a chain of `depth` links: what it printed, how many tail calls decided at the
-/// call whether they keep their frame's contract, and how many hopped under their frame's own
-/// settlement.
-fn routed(depth: u32, source: &str) -> (String, usize, usize) {
-    use crate::dispatch::evaluate::{DERIVED, HOPPED};
+/// Run `source` over a chain of `depth` links: what it printed, and how many tail calls decided at
+/// the call whether they keep their frame's contract.
+fn routed(depth: u32, source: &str) -> (String, usize) {
+    use crate::dispatch::evaluate::DERIVED;
     DERIVED.with(|derived| derived.set(0));
-    HOPPED.with(|hopped| hopped.set(0));
     let ran = super::caching::ran_under(depth, source, BuildBudget::default());
-    (ran.printed, DERIVED.with(Cell::get), HOPPED.with(Cell::get))
+    (ran.printed, DERIVED.with(Cell::get))
 }
 
 #[test]
 fn a_tail_call_reads_its_route_and_derives_none() {
-    // `GO`'s call by name and each `RUNS` hop read whether they keep the contract off their route,
-    // and each hop of `RUNS` into itself stays under its frame's settlement: three, the last
-    // link's into the `end` overload's body.
-    let (printed, derived, hopped) = routed(4, &format!("{RUNS}PRINT (go {{k = ints}})\n"));
+    // `GO`'s call by name and each `RUNS` hop read whether they keep the contract off their route.
+    let (printed, derived) = routed(4, &format!("{RUNS}PRINT (go {{k = ints}})\n"));
     assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
-    assert_eq!((derived, hopped), (0, 3));
-    // A call of a function the load does not know decides at the call.
-    let unknown = "EXPR #(VIA f :Any) -> Number = #(f {k = ints})\nPRINT (VIA go)\n";
-    let (printed, derived, _) = routed(4, &format!("{RUNS}{unknown}"));
+    assert_eq!(derived, 0);
+    // A parameter declared `Any` is the name of what its value carries: the frame's binding
+    // decides the call.
+    let named = "EXPR #(VIA f :Any) -> Number = #(f {k = ints})\nPRINT (VIA go)\n";
+    let (printed, derived) = routed(4, &format!("{RUNS}{named}"));
+    assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
+    assert_eq!(derived, 0);
+    // A call of a function no name stands for, a field typed `Any`, decides at the call.
+    let unknown = "EXPR #(VIA r :{f :Any}) -> Number = #(r.f {k = ints})\nPRINT (VIA {f = go})\n";
+    let (printed, derived) = routed(4, &format!("{RUNS}{unknown}"));
     assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
     assert_eq!(derived, 1);
 }
@@ -300,31 +302,31 @@ fn a_recursion_through_tail_arms_holds_its_cells_constant_however_deep() {
 #[test]
 fn an_arm_owes_its_frames_contract_whether_or_not_it_tails() {
     // An arm whose last statement binds runs as a child, and the `MATCH` holds its value to the
-    // contract; a tail arm owes the contract itself.
+    // contract; a tail arm owes the contract itself. A field typed `Any` is no name a binding
+    // closes, so the run checks the value it returns.
     for arms in [
         "#{Number: (LET r = it), _: (LET r = \"s\")}",
         "#{Number: (it), _: (\"s\")}",
     ] {
-        let f = format!("EXPR #(PIN x :Any) -> Number = #(MATCH x WITH {arms})\n");
-        assert_eq!(super::run(&format!("{f}PRINT (PIN 1)")), "1");
+        let f = format!("EXPR #(PIN b :{{x :Any}}) -> Number = #(MATCH b.x WITH {arms})\n");
+        assert_eq!(super::run(&format!("{f}PRINT (PIN {{x = 1}})")), "1");
         assert_eq!(
-            super::run(&format!("{f}PRINT (PIN \"t\")")),
-            "error: :(FN :{x :Any} -> Number) returned Str, which does not satisfy Number\n  in :(FN :{x :Any} -> Number) (PIN \"t\") at <test>:2:7"
+            super::run(&format!("{f}PRINT (PIN {{x = \"t\"}})")),
+            "error: :(FN :{b :{x :Any}} -> Number) returned Str, which does not satisfy Number\n  in :(FN :{b :{x :Any}} -> Number) (PIN {x = \"t\"}) at <test>:2:7"
         );
     }
 }
 
 #[test]
 fn a_tail_arms_call_reads_its_route_and_derives_none() {
-    // Each hop of `RUNS` into itself is a tail arm's call, which reads its route and stays under
-    // its frame's settlement: four, one per link.
+    // Each hop of `RUNS` into itself is a tail arm's call, which reads its route.
     let runs = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
                 EXPR #(RUNS k :Counter link :Any) -> Number = #(MATCH link WITH \
                 #{Link: ((PRINT (PICK k.zero)) (RUNS k (ATTR it next))), Null: (7)})\n\
                 LET go = (FN :{k :Counter} -> Number = #(RUNS k chain))\n";
-    let (printed, derived, hopped) = routed(4, &format!("{runs}PRINT (go {{k = ints}})\n"));
+    let (printed, derived) = routed(4, &format!("{runs}PRINT (go {{k = ints}})\n"));
     assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
-    assert_eq!((derived, hopped), (0, 4));
+    assert_eq!(derived, 0);
 }
 
 #[test]

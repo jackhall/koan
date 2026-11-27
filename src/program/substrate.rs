@@ -6,6 +6,7 @@ use std::cell::Cell;
 
 use self_cell::self_cell;
 
+use crate::build::lay::{BindingGraph, GraphCell, GraphFacts, Instances, Layout};
 use crate::builtin_image;
 use crate::knot::KBuiltins;
 use crate::memory::{
@@ -13,7 +14,7 @@ use crate::memory::{
 };
 use crate::parse::parse_with_path;
 use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
-use crate::scope::{Inner, Link, Trace};
+use crate::scope::{Address, Inner, Link, LoadFacts, NameAddress, ShapeError, Trace};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{Agent, Halves, RootBuilder};
 use crate::values::{BuildBudget, Chain, Half, KeptCell, TypeTiers, Types};
@@ -39,6 +40,12 @@ struct Owner {
     storage: ProgramStorage,
     registry: Bump,
     agent: Bump,
+    /// What the binding graph's instances rest in: those the load made, frozen.
+    binding: Bump,
+    /// The program's binding graph, set once by the load.
+    graph: GraphCell,
+    /// What the instances the run makes rest in, and their views.
+    instances: Bump,
     symbols: SymbolInterner,
 }
 
@@ -53,9 +60,21 @@ pub struct Running<'graph> {
     symbols: &'graph SymbolInterner,
     program: &'graph Program<'graph>,
     resting: Option<Resting<'graph, KBundle>>,
+    instances: &'graph Instances<'graph>,
 }
 
 impl<'graph> Running<'graph> {
+    /// The program's binding graph, beside the instances the load made of it.
+    pub fn binding_graph(&self) -> &BindingGraph<'graph> {
+        &self.instances.binding
+    }
+
+    /// The instances the run makes of the program's binding graph.
+    #[cfg(test)]
+    pub(crate) fn instances(&self) -> &'graph Instances<'graph> {
+        self.instances
+    }
+
     /// A drain over this substrate's graph, for the length of one call.
     pub fn scheduler(&mut self) -> Scheduler<'_, 'graph, KBundle> {
         Scheduler::over(&mut self.graph)
@@ -243,10 +262,101 @@ self_cell!(
 /// kept. `'graph` is invariant, so the running state is reached only through [`with`](Self::with).
 pub struct CellSubstrate(Joined);
 
+/// The binding graph of the base `load` holds, its facts laid through `writer`, and the instances
+/// the load makes of it from the root, frozen in `lend`: the program's, or a composition's. A recursion whose calls build a name
+/// over itself refuses the load, naming a call on it; so does a refusal an instance the load
+/// makes answers, under the first call in text order into its body.
+pub(crate) fn bound_graph<'graph, L: Language>(
+    load: &'graph LoadFacts<'graph>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
+    writer: crate::memory::Writer<'graph, 'graph>,
+    scratch: BumpAllocator<'_>,
+    symbols: &SymbolInterner,
+    (lend, place): (&'graph Bump, &'graph GraphCell),
+) -> Result<BindingGraph<'graph>, ShapeError<'graph>> {
+    let crate::build::lay::Folded { text, facts } =
+        crate::build::lay::folded(load, types, scratch, writer);
+    // A question left out has no owner a run can read its answer through.
+    debug_assert_eq!(
+        facts.left, 0,
+        "the fold leaves no stored question to the run"
+    );
+    let facts = resident(writer, facts);
+    let graph = match text.lay(facts) {
+        Ok(graph) => match place.set(graph) {
+            Ok(()) => place.get().expect("the graph was set"),
+            Err(_) => panic!("a base's graph is laid once"),
+        },
+        Err(bindgraph::LayError::Grows { edge, name }) => {
+            return Err(grows(load, facts, edge, name));
+        }
+        Err(bindgraph::LayError::Malformed(malformed)) => {
+            panic!("the load's records fold to a malformed text: {malformed}")
+        }
+    };
+    let empty = resident(lend, bindgraph::Frozen::empty());
+    let resting = bindgraph::Resting::new(lend, None);
+    let mut bound = bindgraph::Bound::new(graph, facts, empty, lend, None);
+    if let Some((question, refusal, entered)) =
+        L::instances(&mut bound, resting, facts, load, types, scratch, symbols)
+    {
+        let refusal = crate::scope::relaid_error(writer, refusal);
+        // The call that entered the refusing instance; the root's own, or a holder's an onward
+        // call entered, names the first call into the question's body, where there is one.
+        let call = match entered {
+            Some(edge) if graph.edge(edge).onward().is_none() => facts.call(edge),
+            _ => facts.first_call(graph.question(question).site().body()),
+        };
+        return Err(match call {
+            Some(call) => ShapeError::UnderCall { call, refusal },
+            None => *refusal,
+        });
+    }
+    #[cfg(feature = "perf")]
+    let counts = bound.counts();
+    let frozen = bound.freeze(resting);
+    Ok(BindingGraph {
+        graph,
+        facts,
+        frozen,
+        layout: Layout::of(graph, writer, scratch),
+        #[cfg(feature = "perf")]
+        counts,
+    })
+}
+
+/// The refusal of a recursion whose call `edge` builds `name` over itself.
+fn grows<'graph>(
+    load: &LoadFacts<'graph>,
+    facts: &GraphFacts<'graph>,
+    edge: bindgraph::Edge,
+    name: bindgraph::NameId,
+) -> ShapeError<'graph> {
+    let shapes = load.shapes();
+    let NameAddress::Site(unknown) = facts.name(name).address else {
+        panic!("a name a call passes is a site name");
+    };
+    let shape = shapes.shape_at(unknown.segment);
+    let grown = match unknown.at {
+        Address::Slot(slot) => shape.slot_name(slot),
+        Address::Capture(capture) => shape.captures()[capture.index()].name,
+        Address::Held(_) => {
+            unreachable!("a call passes entry names, and a part held in place binds at a statement")
+        }
+    };
+    let bindgraph::Edge::Passes(edge) = edge else {
+        panic!("the fold lays no answering edge");
+    };
+    let written = || shapes.written(unknown.segment).map(|form| form.source);
+    let at = (facts.call(edge)).or_else(written);
+    ShapeError::Grows {
+        name: grown,
+        at: at.expect("a callable body is written"),
+    }
+}
+
 /// The load's one walk over `shapes`: every record the language's walk computes, laid in program
-/// storage through `writer`, beside the folds the load lays over them, the trace among them, and
-/// the layers the trace names, each with its call sites' requests. A refusal one of those layers
-/// reached refuses the load, naming the first call in text order that passed its binding.
+/// storage through `writer`, beside the folds the load lays over them.
 pub(crate) fn walked<'graph, 'x, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
@@ -256,31 +366,12 @@ pub(crate) fn walked<'graph, 'x, L: Language>(
     symbols: &'x crate::symbols::SymbolInterner,
 ) -> Result<&'graph crate::scope::LoadFacts<'graph>, crate::scope::ShapeError<'graph>> {
     let spellings = crate::scope::Spellings::new(symbols);
-    let store = crate::build::LoadStore::new(
-        writer,
-        scratch,
-        (shapes, spellings),
-        crate::scope::Binding::EMPTY,
-    );
-    L::facts(
-        shapes,
-        builtins,
-        &store,
-        types,
-        scratch,
-        shapes.root().segment(),
-    )?;
+    let store = crate::build::LoadStore::new(writer, scratch, (shapes, spellings));
+    L::facts(shapes, builtins, &store, types, scratch)?;
     let unfolded = resident(writer, store.facts(scratch));
-    let folds = crate::build::trace::traced((unfolded, types), writer, scratch);
+    let folds = crate::build::fold(unfolded, writer, scratch);
     let folded = resident(writer, unfolded.folded(writer, folds));
-    // The layers the trace names rest beside the base, their types in the load's chain.
-    super::settle::traced::<L>(
-        (shapes, builtins, spellings),
-        types,
-        writer,
-        scratch,
-        folded,
-    )
+    Ok(folded)
 }
 
 impl CellSubstrate {
@@ -288,7 +379,7 @@ impl CellSubstrate {
     /// `cap` cells, one of which is its run root: `language`'s builtin table at `'graph`, the
     /// program's shape over it and checked by the language, and the [`Program`] record writing to
     /// `output`, all written by the load before the graph stands. `cap` is at least one. `budget`
-    /// bounds the bytes of the settlements no run cell holds.
+    /// bounds the bytes of the compositions no run cell holds.
     ///
     /// The load builds its types through one chain over a root builder, and freezes it when the
     /// load ends, so no step can intern into it: a step's types rest in the agent tier laid beside
@@ -306,6 +397,9 @@ impl CellSubstrate {
             storage: program_storage(),
             registry: Bump::new(),
             agent: Bump::new(),
+            binding: Bump::new(),
+            graph: GraphCell::new(),
+            instances: Bump::new(),
             symbols: SymbolInterner::resting_on(&builtin_image::SYMBOLS),
         };
         Joined::try_new(owner, |owner| {
@@ -342,6 +436,15 @@ impl CellSubstrate {
                     &owner.symbols,
                 )
                 .map_err(refused)?;
+                let binding = bound_graph::<L>(
+                    walked,
+                    types,
+                    brand.writer(),
+                    &scratch,
+                    &owner.symbols,
+                    (&owner.binding, &owner.graph),
+                )
+                .map_err(refused)?;
                 let tiers = TypeTiers {
                     frozen: builder.freeze(),
                     agent: Agent::in_region(&owner.agent),
@@ -360,18 +463,29 @@ impl CellSubstrate {
                             builtin_image::ERROR_VARIANTS,
                         ),
                         &owner.symbols,
-                        (
-                            L::evaluator(),
-                            super::settle::settled::<L>,
-                            super::settle::composed::<L>,
-                            super::activation_store::activated_in::<L>,
-                        ),
+                        (L::evaluator(), super::compose::composed::<L>),
                         output,
                         &writer.fill(1, |_| Cell::new(Ending::Completed))[0],
                     ),
                 );
-                Ok((tiers, (walked, program), program))
+                Ok((tiers, (walked, program), (program, binding)))
             })?;
+            let (program, binding) = program;
+            let instances = resident(
+                &owner.instances,
+                Instances::new(
+                    binding,
+                    (
+                        program.facts(),
+                        crate::scope::Spellings::new(&owner.symbols),
+                    ),
+                    (L::rebind, L::instance),
+                    &owner.instances,
+                    budget.bytes.get(),
+                ),
+            );
+            let mut graph = graph;
+            graph.lend_instances(instances);
             Ok(Running {
                 graph,
                 root,
@@ -379,6 +493,7 @@ impl CellSubstrate {
                 symbols: &owner.symbols,
                 program,
                 resting: None,
+                instances,
             })
         })
         .map(CellSubstrate)

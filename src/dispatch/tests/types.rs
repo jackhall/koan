@@ -340,22 +340,46 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
     });
 }
 
+/// A callable whose own `FOR ALL` bound names the encloser's `Elt` is typed at load by its scheme
+/// with that bound at its upper end at every binding — `Number` under `Elt: Number`, and
+/// `LIST OF Number` for `LIST OF Elt` — beside the bound as written over `Elt`, which a binding
+/// writes in. Its body reads `Tee` at that upper end, so a body knows of `Tee` what it declares.
 #[test]
-fn a_bound_naming_a_run_bound_name_is_left_for_the_run() {
-    let source = "EXPR FOR ALL #[Elt] #(FUN x :Elt) -> Elt = \
-                  #(\n  EXPR FOR ALL #{Tee: Elt} #(GEN t :Tee) -> Tee = #(t)\n  x\n)";
-    loaded(source, |program| {
-        let facts = program.facts();
-        let inner = nested(registered(program), ShapeKind::Callable);
-        assert!(matches!(
-            facts.callable_type(&program.tiers().resting(), inner),
-            Static::Unknown
-        ));
-        assert!(
-            facts
-                .group_levels(&program.tiers().resting(), inner)
-                .is_empty()
+fn a_callable_whose_bound_names_a_run_bound_name_carries_the_bound_beside_its_scheme() {
+    let levels = |bound: &str, upper: &dyn Fn(&crate::values::Chain<'_, '_, '_, '_>) -> KType| {
+        let source = format!(
+            "EXPR FOR ALL #{{Elt: Number}} #(FUN x :Elt) -> Elt = \
+             #(\n  EXPR FOR ALL #{{Tee: {bound}}} #(GEN t :Tee) -> Tee = #(t)\n  x\n)"
         );
+        loaded(&source, |program| {
+            let facts = program.facts();
+            let inner = nested(registered(program), ShapeKind::Callable);
+            let bump = Bump::new();
+            let types = reading(program.tiers(), &bump);
+            let upper = upper(&types);
+            let Static::Rigid { value, .. } = facts.callable_type(&types, inner) else {
+                panic!("`GEN` is typed over `Elt`")
+            };
+            let [(at, bound)] = value.rebounds.0 else {
+                panic!("one bound over names: {:?}", value.rebounds)
+            };
+            assert!(
+                types.concrete(*bound).is_none(),
+                "the bound is written over `Elt`"
+            );
+            let DeclaredType::Scheme(scheme) = value.ktype else {
+                panic!("a scheme")
+            };
+            assert_eq!(scheme.group(&types).bounds[usize::from(*at)], upper);
+            assert_eq!(
+                facts.group_levels(&program.tiers().resting(), inner),
+                [super::statics::lexical(program, 1, "Tee", upper)]
+            );
+        });
+    };
+    levels("Elt", &|_| KType::NUMBER);
+    levels(":(LIST OF Elt)", &|types| {
+        (types.concrete(types.list(KType::NUMBER.into()))).expect("a closed list")
     });
 }
 
@@ -389,44 +413,19 @@ fn a_dollar_name_crossing_into_code_is_the_encloser_s_name() {
     });
 }
 
-/// A meet, a member read, an application, a code kind and a pin over a run-bound head are each a
-/// derived name: a meet the name of its term, the others the name decided on whether the binding's
-/// head spells them.
+/// A meet over a run-bound name is a derived name, the name of its term, which a binding meets; a
+/// function type over the name reads its lexical variable, and a meet of closed types is closed.
 #[test]
-fn a_spelling_over_a_run_bound_head_is_a_derived_name() {
+fn a_meet_over_a_run_bound_name_is_a_derived_name() {
     let source = "EXPR FOR ALL #[Elt] #(FUN x :Elt) -> Any = #(\
                   (:(Elt & Number)) \
-                  (:(Elt.x)) \
                   (:(FN :{y :Number, z :Elt} -> Number)) \
-                  (:(Number -> Elt)) \
-                  (:(Elt NEEDING #[y])) \
-                  (:(Number & Str)) \
-                  (:(UNBUILT Elt)) \
-                  (:(Elt WITH {Set = Number})))";
+                  (:(Number & Str)))";
     loaded(source, |program| {
         let (facts, body) = (program.facts(), registered(program));
         let typed = |expression: &TypeExpression<'_>| {
             facts.typed_expression(&program.tiers().resting(), body, expression.site)
         };
-        let spelled = [
-            (1, "(MEMBER x OF Elt)"),
-            (3, "(Number -> Elt)"),
-            (4, "(Elt NEEDING #[y])"),
-            (6, "(UNBUILT Elt)"),
-            (7, "(Elt WITH {Set = Number})"),
-        ];
-        for (statement, spelled) in spelled {
-            let [expression] = written_in(body, statement)[..] else {
-                panic!("one expression in statement {statement}")
-            };
-            let (value, _) = rigid(typed(expression));
-            let types = program.tiers().resting();
-            assert_eq!(
-                display_name(value, &types, program.symbols()).to_string(),
-                format!("(ONE OF Never, {spelled})"),
-                "statement {statement}"
-            );
-        }
         // A meet over a run-bound name is the derived name of its term, which a binding meets.
         let [met] = written_in(body, 0)[..] else {
             panic!("one expression in statement 0")
@@ -438,8 +437,8 @@ fn a_spelling_over_a_run_bound_head_is_a_derived_name() {
             display_name(value, &types, program.symbols()).to_string(),
             "(Elt & Number)"
         );
-        let [function] = written_in(body, 2)[..] else {
-            panic!("one expression in statement 2")
+        let [function] = written_in(body, 1)[..] else {
+            panic!("one expression in statement 1")
         };
         let (value, levels) = rigid(typed(function));
         let field = |name| {
@@ -456,7 +455,7 @@ fn a_spelling_over_a_run_bound_head_is_a_derived_name() {
         );
         assert_eq!(value, expected);
         assert_eq!(levels, [0]);
-        let [met] = written_in(body, 5)[..] else {
+        let [met] = written_in(body, 2)[..] else {
             panic!("one expression in the last statement")
         };
         closed(typed(met));

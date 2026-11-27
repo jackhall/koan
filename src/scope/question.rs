@@ -1,48 +1,47 @@
-//! The **questions** a door asks of a run-bound name, beside the answer a walk took
-//! ([build/README.md § Resumption](../build/README.md#resumption)).
+//! The **questions** a door asks of a run-bound name.
 //!
 //! A discrete door — one handing back a verdict, a bool, a stamp or a kind, never a type — leaves
 //! a judgement it cannot decide rigidly as a [`Question`]: every input it judged, enough to judge
-//! it again under another binding. A witnessing walk asks the closed door under its witness and
-//! notes the [`Answered`] question in its open mark; a later binding **keeps** the question where
-//! the closed door, asked with the binding written into the question's types, answers alike
-//! ([`keeps`]). An [`Answer`] holds no type, so nothing a walk builds is built from a witness.
+//! it again under another binding. An [`Answer`] holds no type.
 //!
 //! Substitution commutes with a binding, so [`rebound`] lives here beside the questions it writes a
-//! binding into; the walk's absorbing read shares it. `program` does not name `elaborate`, so the
+//! binding into. `program` does not name `elaborate`, so the
 //! closed re-ask lives in `scope`, and the never-satisfies door's pure core with it.
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
 use crate::type_lattice::{
     DeclaredType, DerivedId, Interval, KKind, KType, Parametric, Side, TypeNode, Variable, Verdict,
-    judge_by_class, meet, read_through, shape_slots,
+    meet, read_through, shape_slots,
 };
-use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{Chain, ContentDigest, Restamping};
+use crate::values::digest::DigestHasher;
+use crate::values::{Chain, Restamping};
 
 use super::derived::{Binds, DerivedName, DerivedTerm, Spellings, handed};
 use super::facts::{Binding, Bound, OpenKind};
+use super::heads::judge_signed;
 use super::record_types::Closed;
+use super::rigid::lower_end_outside_signed;
 use super::rule::Rule;
-use super::runs::{ArmRunning, Run, Running, arms_run, never_admits, runs};
+use super::runs::Run;
 use super::shape::Shown;
 use super::shapes::Shapes;
-use super::typed::Resolved;
+use super::site::{ArmChoice, Selection};
+use super::typed::{Resolved, Shaped};
 
 /// What a discrete door judged: enough to judge it again under another binding.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Question<'a> {
-    /// The verdict `judge_by_class(shape, arguments)` gives; its intervals are the door's
+    /// The verdict [`judge_signed`] gives `shape` over `arguments`; its intervals are the door's
     /// ([`Rule::Judged`]), so no answer holds a type.
     Verdict {
-        shape: DeclaredType<Parametric>,
+        shape: Shaped<'a>,
         arguments: &'a [Interval],
     },
     /// Whether no value of `value` can satisfy `wanted` ([`unsatisfiable`]).
     NeverSatisfies { value: Interval, wanted: Parametric },
     /// Whether `a` fits `b`.
     Fits {
-        a: DeclaredType<Parametric>,
+        a: Shaped<'a>,
         b: DeclaredType<Parametric>,
     },
     /// Whether `value`'s lower end lies outside `bound`.
@@ -65,21 +64,15 @@ pub enum Question<'a> {
     /// Whether `a` lies under `b` in the order, once a binding closes both: the order relates
     /// concrete types alone.
     Under { a: Parametric, b: Parametric },
-    /// What the candidate at `candidate` of a use's `kept` does at its call ([`runs`]), the use in
-    /// unfilled code where `unfilled` says so.
+    /// What the candidate at `candidate` of a use's `selection` does at its call
+    /// ([`Selection::runs`]).
     Runs {
-        kept: &'a [Running<'a>],
+        selection: Selection<'a>,
         candidate: u16,
-        unfilled: bool,
     },
-    /// What the arm at `arm` of a `MATCH` or `TRY` whose arms are `arms` does where a scrutinee
-    /// of the static type `scrutinee` meets them, under the union `clause` ([`arms_run`]).
-    Arms {
-        scrutinee: Interval,
-        clause: Option<Parametric>,
-        arms: &'a [ArmRunning],
-        arm: u16,
-    },
+    /// What the arm at `arm` of a `MATCH` or `TRY` whose arms are chosen by `choice` does
+    /// ([`ArmChoice::runs`]).
+    Arms { choice: ArmChoice<'a>, arm: u16 },
     /// Which of `against`, the closed builtin overloads at a registration's key, the registration
     /// of the unquantified shape `registered` overlaps first ([`overlapping`]).
     Overlaps {
@@ -94,11 +87,14 @@ pub enum Question<'a> {
     },
     /// Whether `ty` is a function type, as an instance is wanted at one.
     IsFunction { ty: Parametric },
+    /// Whether `ty` is closed: a surfaced signature head, which a frame retypes its value to only
+    /// once a binding closes it.
+    Closed { ty: DeclaredType<Parametric> },
     /// Whether the registered shape `a` strictly outranks `b` at `class`: one bit of a use's
     /// ranking table, once a binding closes both.
     Outranks {
-        a: DeclaredType<Parametric>,
-        b: DeclaredType<Parametric>,
+        a: Shaped<'a>,
+        b: Shaped<'a>,
         class: u16,
     },
 }
@@ -163,6 +159,7 @@ impl Answer {
                 | Question::Under { .. }
                 | Question::Defined { .. }
                 | Question::IsFunction { .. }
+                | Question::Closed { .. }
                 | Question::Outranks { .. },
                 Answer::Bool(holds),
             ) => Some(usize::from(holds)),
@@ -180,15 +177,26 @@ impl Answer {
     }
 }
 
-/// A question beside the answer a walk took.
+/// A question a door posed at the load, whole, beside its answer at every binding where the door
+/// has one, as a door noted it (`Marks::asked`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Answered<'a> {
+pub struct Posed<'a> {
     pub question: Question<'a>,
-    pub answer: Answer,
+    pub rigid: Option<Answer>,
+}
+
+impl Posed<'_> {
+    /// This posed question laid again through `lay`.
+    pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Posed<'to> {
+        Posed {
+            question: self.question.laid(lay),
+            rigid: self.rigid,
+        }
+    }
 }
 
 impl<'a> Question<'a> {
-    /// The kind of open mark this question leaves where no witness answers it.
+    /// The kind of open mark this question leaves where no rigid answer holds.
     pub fn kind(&self) -> OpenKind {
         match self {
             Question::Verdict { .. } => OpenKind::Verdict,
@@ -209,17 +217,16 @@ impl<'a> Question<'a> {
                     Rule::Member(_)
                     | Rule::Applied { .. }
                     | Rule::Pinned
-                    | Rule::Needing
-                    | Rule::Unbuilt
                     | Rule::Variant(_)
                     | Rule::Payload(_)
                     | Rule::Uncovered
-                    | Rule::Covered
                     | Rule::FieldAbove(_)
                     | Rule::FieldUnder(_)
                     | Rule::Fielded
+                    | Rule::Lacks(_)
                     | Rule::SignatureValue(_)
                     | Rule::Application
+                    | Rule::MemberApplication(_)
                     | Rule::Wanted
                     | Rule::View
                     | Rule::LaidOut { .. }
@@ -233,6 +240,7 @@ impl<'a> Question<'a> {
                     | Rule::Judged { .. }
                     | Rule::Constructed
                     | Rule::InstanceAt { .. }
+                    | Rule::MemberInstance { .. }
                     | Rule::Construction { .. }
                     | Rule::Piece(_)
                     | Rule::Meet
@@ -241,6 +249,7 @@ impl<'a> Question<'a> {
                 ..
             } => OpenKind::Solve,
             Question::IsFunction { .. } => OpenKind::Instance,
+            Question::Closed { .. } => OpenKind::Retype,
         }
     }
 
@@ -256,6 +265,7 @@ impl<'a> Question<'a> {
             | Question::Under { .. }
             | Question::Defined { .. }
             | Question::IsFunction { .. }
+            | Question::Closed { .. }
             | Question::Outranks { .. } => 2,
             Question::Kind { .. } => 5,
             Question::Restamp { .. } => 4,
@@ -285,6 +295,7 @@ impl<'a> Question<'a> {
             | Question::Under { .. }
             | Question::Defined { .. }
             | Question::IsFunction { .. }
+            | Question::Closed { .. }
             | Question::Outranks { .. } => bool(),
             Question::Kind { .. } => Answer::Kind(KINDS[index as usize]),
             Question::Restamp { .. } => Answer::Restamps(RESTAMPINGS[index as usize]),
@@ -303,7 +314,7 @@ impl<'a> Question<'a> {
         };
         match self {
             Question::Verdict { shape, arguments } => {
-                each(*shape);
+                shape.each_type(each);
                 for argument in arguments.iter() {
                     ends(argument, each);
                 }
@@ -312,7 +323,11 @@ impl<'a> Question<'a> {
                 ends(value, each);
                 each((*wanted).into());
             }
-            Question::Fits { a, b } | Question::Same { a, b } => {
+            Question::Fits { a, b } => {
+                a.each_type(each);
+                each(*b);
+            }
+            Question::Same { a, b } => {
                 each(*a);
                 each(*b);
             }
@@ -327,19 +342,17 @@ impl<'a> Question<'a> {
                 each((*a).into());
                 each((*b).into());
             }
-            Question::Runs { kept, .. } => {
-                for running in kept.iter() {
-                    each(running.shape);
-                    for argument in running.arguments {
-                        ends(argument, each);
-                    }
+            Question::Runs { selection, .. } => {
+                for ask in selection.asks.iter() {
+                    ask.each_type(each);
                 }
             }
             Question::Defined { operands, .. } => operands.iter().for_each(|ty| each(*ty)),
             Question::IsFunction { ty } => each((*ty).into()),
+            Question::Closed { ty } => each(*ty),
             Question::Outranks { a, b, .. } => {
-                each(*a);
-                each(*b);
+                a.each_type(each);
+                b.each_type(each);
             }
             Question::Overlaps {
                 registered,
@@ -350,16 +363,9 @@ impl<'a> Question<'a> {
                     each(Parametric::from(*builtin).into());
                 }
             }
-            Question::Arms {
-                scrutinee,
-                clause,
-                arms,
-                ..
-            } => {
-                ends(scrutinee, each);
-                let admits = arms.iter().filter_map(|arm| arm.admits);
-                for ty in clause.iter().copied().chain(admits) {
-                    each(ty.into());
+            Question::Arms { choice, .. } => {
+                for ask in choice.asks.iter() {
+                    ask.each_type(each);
                 }
             }
         }
@@ -369,13 +375,13 @@ impl<'a> Question<'a> {
     pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Question<'to> {
         match *self {
             Question::Verdict { shape, arguments } => Question::Verdict {
-                shape,
+                shape: shape.laid(lay),
                 arguments: collect(lay, arguments.iter().copied()),
             },
             Question::NeverSatisfies { value, wanted } => {
                 Question::NeverSatisfies { value, wanted }
             }
-            Question::Fits { a, b } => Question::Fits { a, b },
+            Question::Fits { a, b } => Question::Fits { a: a.laid(lay), b },
             Question::LowerEndOutside { value, bound } => {
                 Question::LowerEndOutside { value, bound }
             }
@@ -385,23 +391,14 @@ impl<'a> Question<'a> {
             Question::Restamp { declared } => Question::Restamp { declared },
             Question::Under { a, b } => Question::Under { a, b },
             Question::Runs {
-                kept,
+                selection,
                 candidate,
-                unfilled,
             } => Question::Runs {
-                kept: collect(lay, kept.iter().map(|running| running.laid(lay))),
+                selection: selection.laid(lay),
                 candidate,
-                unfilled,
             },
-            Question::Arms {
-                scrutinee,
-                clause,
-                arms,
-                arm,
-            } => Question::Arms {
-                scrutinee,
-                clause,
-                arms: collect(lay, arms.iter().copied()),
+            Question::Arms { choice, arm } => Question::Arms {
+                choice: choice.laid(lay),
                 arm,
             },
             Question::Overlaps {
@@ -416,7 +413,12 @@ impl<'a> Question<'a> {
                 operands: collect(lay, operands.iter().copied()),
             },
             Question::IsFunction { ty } => Question::IsFunction { ty },
-            Question::Outranks { a, b, class } => Question::Outranks { a, b, class },
+            Question::Closed { ty } => Question::Closed { ty },
+            Question::Outranks { a, b, class } => Question::Outranks {
+                a: a.laid(lay),
+                b: b.laid(lay),
+                class,
+            },
         }
     }
 
@@ -439,16 +441,46 @@ impl<'a> Question<'a> {
                 partial
             }
         };
-        let substituted = match *self {
+        let substituted = self.mapped(scratch, &mut declared).rebuilt(types, scratch);
+        (substituted, changed)
+    }
+
+    /// This question with each scheme whose bounds over names are all closed rebuilt with them
+    /// written in ([`Shaped::rebuilt`]), so no closed door reads a scheme beside its bounds.
+    fn rebuilt<'x>(self, types: &Chain<'_, '_, '_, '_>, scratch: BumpAllocator<'x>) -> Question<'x>
+    where
+        'a: 'x,
+    {
+        match self {
+            Question::Verdict { shape, arguments } => Question::Verdict {
+                shape: shape.rebuilt(types, scratch),
+                arguments,
+            },
+            Question::Fits { a, b } => Question::Fits {
+                a: a.rebuilt(types, scratch),
+                b,
+            },
+            Question::Outranks { a, b, class } => Question::Outranks {
+                a: a.rebuilt(types, scratch),
+                b: b.rebuilt(types, scratch),
+                class,
+            },
+            question => question,
+        }
+    }
+
+    /// This question with every type it names mapped by `declared`, its slices laid through
+    /// `lay`.
+    pub fn mapped<'x>(
+        &self,
+        lay: impl Lays<'x>,
+        mut declared: &mut Substitute<'_>,
+    ) -> Question<'x> {
+        match *self {
             Question::Verdict { shape, arguments } => {
-                let shape = declared(shape);
-                let mut each = BumpVec::with_capacity_in(arguments.len(), scratch);
-                each.extend(
-                    arguments
-                        .iter()
-                        .map(|argument| interval(&mut declared, *argument)),
-                );
-                let arguments = collect(scratch, each.iter().copied());
+                let shape = shape.mapped(lay, declared);
+                let arguments =
+                    lay.fill(arguments.len(), |at| interval(&mut declared, arguments[at]));
                 Question::Verdict { shape, arguments }
             }
             Question::NeverSatisfies { value, wanted } => Question::NeverSatisfies {
@@ -456,7 +488,7 @@ impl<'a> Question<'a> {
                 wanted: parametric(&mut declared, wanted),
             },
             Question::Fits { a, b } => Question::Fits {
-                a: declared(a),
+                a: a.mapped(lay, declared),
                 b: declared(b),
             },
             Question::LowerEndOutside { value, bound } => Question::LowerEndOutside {
@@ -481,75 +513,42 @@ impl<'a> Question<'a> {
                 b: parametric(&mut declared, b),
             },
             Question::Runs {
-                kept,
+                selection,
                 candidate,
-                unfilled,
-            } => {
-                let mut each = BumpVec::with_capacity_in(kept.len(), scratch);
-                for running in kept.iter() {
-                    let mut arguments = BumpVec::with_capacity_in(running.arguments.len(), scratch);
-                    arguments
-                        .extend((running.arguments.iter()).map(|at| interval(&mut declared, *at)));
-                    each.push(Running {
-                        shape: declared(running.shape),
-                        arguments: collect(scratch, arguments.iter().copied()),
-                        ..*running
-                    });
-                }
-                Question::Runs {
-                    kept: collect(scratch, each.iter().copied()),
-                    candidate,
-                    unfilled,
-                }
-            }
-            Question::Arms {
-                scrutinee,
-                clause,
-                arms,
+            } => Question::Runs {
+                selection: selection.mapped(lay, declared),
+                candidate,
+            },
+            Question::Arms { choice, arm } => Question::Arms {
+                choice: choice.mapped(lay, declared),
                 arm,
-            } => {
-                let mut each = BumpVec::with_capacity_in(arms.len(), scratch);
-                each.extend(arms.iter().map(|at| ArmRunning {
-                    admits: at.admits.map(|ty| parametric(&mut declared, ty)),
-                    ..*at
-                }));
-                Question::Arms {
-                    scrutinee: interval(&mut declared, scrutinee),
-                    clause: clause.map(|ty| parametric(&mut declared, ty)),
-                    arms: collect(scratch, each.iter().copied()),
-                    arm,
-                }
-            }
+            },
             Question::Overlaps {
                 registered,
                 against,
             } => Question::Overlaps {
                 registered: parametric(&mut declared, registered),
-                against: collect(scratch, against.iter().copied()),
+                against: collect(lay, against.iter().copied()),
             },
-            Question::Defined { rule, operands } => {
-                let mut each = BumpVec::with_capacity_in(operands.len(), scratch);
-                each.extend(operands.iter().map(|operand| declared(*operand)));
-                Question::Defined {
-                    rule,
-                    operands: collect(scratch, each.iter().copied()),
-                }
-            }
+            Question::Defined { rule, operands } => Question::Defined {
+                rule,
+                operands: lay.fill(operands.len(), |at| declared(operands[at])),
+            },
             Question::IsFunction { ty } => Question::IsFunction {
                 ty: parametric(&mut declared, ty),
             },
+            Question::Closed { ty } => Question::Closed { ty: declared(ty) },
             Question::Outranks { a, b, class } => Question::Outranks {
-                a: declared(a),
-                b: declared(b),
+                a: a.mapped(lay, declared),
+                b: b.mapped(lay, declared),
                 class,
             },
-        };
-        (substituted, changed)
+        }
     }
 }
 
 /// What substitutes one type of a question.
-type Substitute<'f> = dyn FnMut(DeclaredType<Parametric>) -> DeclaredType<Parametric> + 'f;
+pub type Substitute<'f> = dyn FnMut(DeclaredType<Parametric>) -> DeclaredType<Parametric> + 'f;
 
 fn parametric(declared: &mut Substitute<'_>, ty: Parametric) -> Parametric {
     match declared(ty.into()) {
@@ -565,34 +564,20 @@ fn interval(declared: &mut Substitute<'_>, interval: Interval) -> Interval {
     }
 }
 
-impl<'a> Answered<'a> {
-    /// This answered question laid again through `lay`.
-    pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Answered<'to> {
-        Answered {
-            question: self.question.laid(lay),
-            answer: self.answer,
-        }
-    }
-
-    /// Its content digest, alike across two lays: the question's variant, a verdict's run
-    /// lengths, every type it names, then the answer.
-    pub fn digest(&self) -> ContentDigest {
-        let mut hasher = DigestHasher::new(Tag::Answered);
-        self.question.fed(&mut hasher);
-        match self.answer {
-            Answer::Verdict(verdict) => hasher.count(0).count(verdict_tag(verdict)),
-            Answer::Bool(holds) => hasher.count(1).count(usize::from(holds)),
-            Answer::Satisfiable => hasher.count(2),
-            Answer::Kind(kind) => hasher.count(4).feed(kind),
-            Answer::Restamps(how) => hasher.count(6).feed(how),
-            Answer::Never => hasher.count(7),
-            Answer::Run(run) => hasher.count(8).count(run as usize),
-            Answer::Overlaps(at) => hasher
-                .count(9)
-                .count(at.map_or(0, |at| usize::from(at) + 1)),
-        };
-        hasher.finished()
-    }
+/// Feed `hasher` an answer.
+pub(super) fn answer_fed(hasher: &mut DigestHasher, answer: Answer) {
+    match answer {
+        Answer::Verdict(verdict) => hasher.count(0).count(verdict_tag(verdict)),
+        Answer::Bool(holds) => hasher.count(1).count(usize::from(holds)),
+        Answer::Satisfiable => hasher.count(2),
+        Answer::Kind(kind) => hasher.count(4).feed(kind),
+        Answer::Restamps(how) => hasher.count(6).feed(how),
+        Answer::Never => hasher.count(7),
+        Answer::Run(run) => hasher.count(8).count(run as usize),
+        Answer::Overlaps(at) => hasher
+            .count(9)
+            .count(at.map_or(0, |at| usize::from(at) + 1)),
+    };
 }
 
 impl Question<'_> {
@@ -613,36 +598,17 @@ impl Question<'_> {
             Question::Restamp { .. } => Some(8),
             Question::Under { .. } => Some(9),
             Question::Runs {
-                kept,
+                selection,
                 candidate,
-                unfilled,
             } => {
-                hasher
-                    .count(10)
-                    .count(kept.len())
-                    .count(usize::from(candidate));
-                hasher.count(usize::from(unfilled));
-                for running in kept {
-                    hasher.count(running.arguments.len());
-                    hasher.count(usize::from(running.builtin) | usize::from(running.one) << 1);
-                    hasher.count(running.surfacing as usize);
-                    hasher
-                        .count(running.pinned as usize)
-                        .count((running.pinned >> 32) as usize);
-                }
-                None
+                hasher.count(10).count(usize::from(candidate));
+                selection.fed(hasher);
+                return;
             }
-            Question::Arms {
-                clause, arms, arm, ..
-            } => {
-                hasher.count(11).count(arms.len()).count(usize::from(arm));
-                hasher.count(usize::from(clause.is_some()));
-                for each in arms {
-                    hasher
-                        .count(each.guard as usize)
-                        .count(usize::from(each.admits.is_some()));
-                }
-                None
+            Question::Arms { choice, arm } => {
+                hasher.count(11).count(usize::from(arm));
+                choice.fed(hasher);
+                return;
             }
             Question::Overlaps { against, .. } => {
                 hasher.count(12).count(against.len());
@@ -653,6 +619,7 @@ impl Question<'_> {
                 None
             }
             Question::IsFunction { .. } => Some(14),
+            Question::Closed { .. } => Some(16),
             Question::Outranks { class, .. } => {
                 hasher.count(15).count(usize::from(class));
                 None
@@ -730,53 +697,22 @@ impl Binds for Levels<'_> {
     }
 }
 
-/// A store's binding: `levels`, beside a witness's where a witnessing walk asks a question again,
-/// and each derived name's term and name through the store, which lays a term no table holds.
+/// A store's binding: `levels`, and each derived name's term and name through the store, which
+/// lays a term no table holds.
 pub struct StoreBinds<'q, 'l, S> {
     levels: &'q Levels<'l>,
     store: &'q S,
-    witness: Option<Witness<'q>>,
 }
-
-/// A witnessing walk's witness, beside how a level finds its unknown.
-type Witness<'q> = (
-    Binding<'q>,
-    &'q dyn Fn(usize) -> Option<super::facts::Unknown>,
-);
 
 impl<'q, 'l, S> StoreBinds<'q, 'l, S> {
     /// `store`'s binding at `levels`.
     pub fn of(levels: &'q Levels<'l>, store: &'q S) -> Self {
-        StoreBinds {
-            levels,
-            store,
-            witness: None,
-        }
-    }
-
-    /// This binding with `witness` written in, each level's unknown found by `unknown_of`.
-    pub fn witnessing(
-        self,
-        witness: Binding<'q>,
-        unknown_of: &'q dyn Fn(usize) -> Option<super::facts::Unknown>,
-    ) -> Self {
-        StoreBinds {
-            witness: Some((witness, unknown_of)),
-            ..self
-        }
+        StoreBinds { levels, store }
     }
 }
 
 impl<'o, S: super::facts::Store<'o>> Binds for StoreBinds<'_, '_, S> {
     fn level(&self, _: &Chain<'_, '_, '_, '_>, level: usize) -> Option<KType> {
-        if let Some((witness, unknown_of)) = self.witness
-            && let Some(unknown) = unknown_of(level)
-        {
-            return match witness.bound(unknown)? {
-                Bound::Type(closed) => Some(closed),
-                Bound::Module { .. } => None,
-            };
-        }
         self.levels.bound(level)
     }
 
@@ -839,8 +775,17 @@ pub fn answer(
     question: &Question<'_>,
 ) -> Option<Answer> {
     match *question {
+        // A scheme beside bounds no binding closed has no closed door's answer.
+        Question::Verdict { shape, .. }
+        | Question::Fits { a: shape, .. }
+        | Question::Outranks { a: shape, .. }
+            if !shape.rebounds.is_empty() =>
+        {
+            None
+        }
+        Question::Outranks { b, .. } if !b.rebounds.is_empty() => None,
         Question::Verdict { shape, arguments } => Some(Answer::Verdict(
-            judge_by_class(types, scratch, shape, arguments).verdict,
+            judge_signed(types, scratch, shape.ty, arguments).verdict,
         )),
         Question::NeverSatisfies { value, wanted } => {
             Some(match unsatisfiable(types, scratch, value, wanted) {
@@ -849,11 +794,11 @@ pub fn answer(
             })
         }
         Question::Fits { a, b } => Some(Answer::Bool(crate::type_lattice::fits(
-            types, scratch, a, b,
+            types, scratch, a.ty, b,
         ))),
-        Question::LowerEndOutside { value, bound } => Some(Answer::Bool(
-            crate::type_lattice::lower_end_outside(types, scratch, value, bound),
-        )),
+        Question::LowerEndOutside { value, bound } => Some(Answer::Bool(lower_end_outside_signed(
+            types, scratch, value, bound,
+        ))),
         Question::Same { a, b } => Some(Answer::Bool(a == b)),
         Question::Kind { ty } => Some(Answer::Kind(
             crate::type_lattice::bound_above(types, scratch, ty).kind_of(types),
@@ -867,27 +812,10 @@ pub fn answer(
             .zip(types.concrete(b))
             .map(|(a, b)| Answer::Bool(crate::type_lattice::is_subtype_of(types, scratch, a, b))),
         Question::Runs {
-            kept,
+            selection,
             candidate,
-            unfilled,
-        } => match runs(types, scratch, kept, unfilled) {
-            Some(answers) => answers
-                .get(usize::from(candidate))
-                .copied()
-                .map(Answer::Run),
-            // A candidate that admits at no binding never runs, whatever the rest do.
-            None => (kept.get(usize::from(candidate)))
-                .filter(|each| never_admits(types, scratch, each))
-                .map(|_| Answer::Run(Run::Never)),
-        },
-        Question::Arms {
-            scrutinee,
-            clause,
-            arms,
-            arm,
-        } => arms_run(types, scratch, scrutinee, clause, arms)
-            .and_then(|answers| answers.get(usize::from(arm)).copied())
-            .map(Answer::Run),
+        } => (selection.rigid_runs(types, scratch, candidate)).map(Answer::Run),
+        Question::Arms { choice, arm } => (choice.rigid_runs(types, scratch, arm)).map(Answer::Run),
         Question::Overlaps {
             registered,
             against,
@@ -900,10 +828,11 @@ pub fn answer(
             (closed.len() == operands.len())
                 .then(|| Answer::Bool(rule.closed(types, scratch, &closed).is_some()))
         }
+        Question::Closed { ty } => Some(Answer::Bool(types.concrete_declared(ty).is_some())),
         Question::IsFunction { ty } => (types.concrete(ty))
             .map(|ty| Answer::Bool(matches!(types.node(ty), TypeNode::KFunction { .. }))),
-        Question::Outranks { a, b, class } => (types.concrete_declared(a))
-            .zip(types.concrete_declared(b))
+        Question::Outranks { a, b, class } => (types.concrete_declared(a.ty))
+            .zip(types.concrete_declared(b.ty))
             .map(|(a, b)| {
                 Answer::Bool(crate::type_lattice::outranks(
                     types,
@@ -926,18 +855,6 @@ pub fn is_module(types: &Chain<'_, '_, '_, '_>, ty: KType) -> bool {
         }
         _ => false,
     }
-}
-
-/// Whether `binds` keeps `answered`: the closed door, asked with the binding written into the
-/// question's types, answers alike.
-pub fn keeps(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    answered: &Answered<'_>,
-    binds: &dyn Binds,
-) -> bool {
-    let (question, _) = (answered.question).substituted(types, scratch, binds);
-    answer(types, scratch, &question) == Some(answered.answer)
 }
 
 /// The first of `against`, the closed builtin overloads at a key, by position, that the closed
@@ -1056,13 +973,10 @@ pub fn rebound(
             DeclaredType::Scheme(scheme)
         }
     };
-    // A scheme is concrete as it is, so it is closed only where the binding left no name in it.
-    let open =
-        matches!(read, DeclaredType::Scheme(_)) && !free_variables(types, scratch, read).is_empty();
     match (changed, types.concrete_declared(read)) {
         (false, _) => Closed::Same,
-        (true, Some(closed)) if !open => Closed::Type(closed),
-        (true, _) => Closed::Partial(read),
+        (true, Some(closed)) => Closed::Type(closed),
+        (true, None) => Closed::Partial(read),
     }
 }
 
@@ -1075,6 +989,9 @@ fn bound_variable(
     variable: Variable,
     binds: &dyn Binds,
 ) -> Option<Parametric> {
+    if let Some(written) = binds.written(types, variable) {
+        return Some(written);
+    }
     match variable {
         Variable::Lexical { level, .. } => binds.level(types, level).map(Parametric::from),
         Variable::Derived { term, .. } => bound_derived(types, scratch, term, binds),
@@ -1110,16 +1027,21 @@ fn bound_derived(
     binds: &dyn Binds,
 ) -> Option<Parametric> {
     let term = binds.term(id)?;
-    if let DerivedTerm::Carried { binder, .. } = term {
-        return binds.carried(binder).map(Parametric::from);
+    // A carried name is the type the binding binds its binder to, else its bound written over.
+    if let DerivedTerm::Carried { binder, .. } = term
+        && let Some(carried) = binds.carried(binder)
+    {
+        return Some(carried.into());
     }
     let (term, changed) = term.substituted(types, scratch, binds);
     if !changed {
         return None;
     }
     handed(types, scratch, term, &mut |term| {
-        binds.name(types, scratch, term)
+        binds.name(types, scratch, term).ok_or(())
     })
+    .ok()
+    .flatten()
 }
 
 /// The free lexical and path variables and derived names `ty` holds, each once: what a mark reads

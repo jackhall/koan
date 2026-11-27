@@ -13,7 +13,8 @@
 //! views, open or closed, costs the load O(k) view reads; every read of a member of such a view or
 //! of a rebuilt value is memoized on the pass too ([`ViewIdentity`]).
 //!
-//! What a `:|` reads of its operand is an [`Operand`] ([`operand_of`](Pass::operand_of)): the
+//! What a `:|` reads of its operand is an [`Operand`] ([`operand_of`](super::super::graph::trees::Apply::operand_of), in
+//! tree application): the
 //! type it carries, its bare member's digest, and that member as a view — a body a transparent
 //! view of itself, a closed view by what the load computed for it, and a module a frame binds by
 //! what the frame recorded beside its digest. Where no tree shows a cell — a container literal's,
@@ -28,9 +29,9 @@
 use crate::elaborate::judge;
 use crate::elaborate::signature_member;
 use crate::knot::module::coerce::Substitution;
-use crate::knot::module::view::{self, Exposure, Operand};
+use crate::knot::module::view::{self, Exposure};
 use crate::memory::{BumpAllocator, BumpVec, collect, resident};
-use crate::scope::{Bare, Identity, Sealing, ShapeError, Site, Store, Tree, hides};
+use crate::scope::{Identity, ShapeError, Site, Store, Tree, hides};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, SigSchema, TypeHandle, TypeNode, substitute_carriers,
@@ -38,6 +39,7 @@ use crate::type_lattice::{
 };
 use crate::values::{Chain, applications};
 
+use super::super::graph::trees::underlying_tree;
 use super::Pass;
 use super::trees::Scope;
 
@@ -309,43 +311,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(())
     }
 
-    /// The operand a `:|` over `source` reads: the type it carries, its bare member's digest, and
-    /// that member as a view, each where the load knows it — a `MODULE` body a transparent view of
-    /// itself, a closed view by what the load computed for it, and a module a frame binds by what
-    /// the frame recorded beside its digest.
-    pub(super) fn operand_of(&mut self, source: Tree<'o>, site: Site) -> Read<'o, Operand<'p>> {
-        let held = self.carried_type(Carried::Tree(source), site)?;
-        let bare = source.bare();
-        let as_view = match bare {
-            Tree::Body { .. } => Some(Bare {
-                signature: self.carried_type(Carried::Tree(bare), site)?,
-                sealing: None,
-            }),
-            Tree::View { underlying, .. } if bare.closed() => {
-                let built = self.view_of(bare, site)?.and_then(|viewed| viewed.built);
-                let underlying_signature = self.carried_type(Carried::Tree(*underlying), site)?;
-                match (built, underlying_signature, underlying.digest()) {
-                    (Some(built), Some(underlying_signature), Some(digest)) => Some(Bare {
-                        signature: Some(built.view),
-                        sealing: Some(Sealing {
-                            record: built.record,
-                            underlying_signature,
-                            underlying: digest,
-                        }),
-                    }),
-                    _ => None,
-                }
-            }
-            Tree::Digest(_, Some(bare)) => Some(*bare),
-            _ => None,
-        };
-        Ok(Operand {
-            held,
-            digest: bare.digest(),
-            bare: as_view,
-        })
-    }
-
     /// The view of a nested module carrying `module` at a slot reading `src` on the underlying's
     /// side and `dst` on the view's, under the enclosing view's `sides` — its schema, the sides it
     /// rebuilds its members across and its own signature — where the load knows what the run
@@ -363,7 +328,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> Read<'o, Option<(SigSchema<'o>, Sided<'o>, KType)>> {
         let (types, scratch) = (self.types, self.scratch);
         if let Carried::Tree(tree) = module {
-            let operand = self.operand_of(tree, site)?;
+            let operand = self.applying().operand_of(tree, site)?;
             let nested = view::exposure(operand, dst, src, sides.hidden, types, scratch).ok();
             if let Some(nested) = nested
                 && let Some(built) = nested.built
@@ -387,7 +352,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// tree, where the load knows the module's.
     fn underlying_carried(&self, carried: Carried<'o>) -> Carried<'o> {
         match carried {
-            Carried::Tree(tree) => Carried::Tree(self.underlying_tree(tree)),
+            Carried::Tree(tree) => Carried::Tree(underlying_tree(self.lay, tree)),
             other => other,
         }
     }
@@ -400,74 +365,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> Read<'o, Option<KType>> {
         Ok(match carried {
             Carried::Typed(held) => Some(held),
-            Carried::Tree(Tree::Body { body, .. }) => self.signature_of(self.shape_at(body)),
-            Carried::Tree(tree @ Tree::View { .. }) => (self.view_of(tree, site)?)
-                .and_then(|viewed| viewed.built)
-                .map(|built| built.view),
-            // A module a frame binds, by the signature it recorded beside the digest.
-            Carried::Tree(Tree::Digest(_, Some(bare))) => bare.signature,
-            // A closed header's type is the one the load computed for it: a closed tree's carried
-            // type is closed ([`Tree::retyped`]).
-            Carried::Tree(tree @ Tree::Retyped { carried, .. }) => tree
-                .closed()
-                .then(|| judge::static_of(self.types, carried))
-                .flatten(),
-            Carried::Tree(_) => None,
+            Carried::Tree(tree) => self.applying().carried(tree, site)?,
             Carried::Across(across) => across.held,
         })
-    }
-
-    /// What the view `tree` binds, where the load knows it: a closed opaque view's over its
-    /// source's operand and its underlying, memoized by identity.
-    pub(super) fn view_of(
-        &mut self,
-        tree: Tree<'o>,
-        site: Site,
-    ) -> Read<'o, Option<Exposure<'o, 'p>>> {
-        let Tree::View {
-            application,
-            source,
-            identity,
-            ..
-        } = tree
-        else {
-            return Ok(None);
-        };
-        #[cfg(test)]
-        super::count(|counts| counts.view_reads += 1);
-        // An open view's fit or source is unknown (`Tree::view`), so it binds nothing the load
-        // knows.
-        let Identity::Closed(_) = identity else {
-            return Ok(None);
-        };
-        if let Some((viewed, tag)) = self.views.get(&identity).copied() {
-            self.gather(tag);
-            return Ok(viewed);
-        }
-        // A closed view's application is closed ([`Tree::view`]).
-        let Some(application) = judge::static_of(self.types, application) else {
-            return Ok(None);
-        };
-        let viewed = self.view_read(application, source, site)?;
-        let tag = self.innermost();
-        self.views.insert(identity, (viewed, tag));
-        Ok(viewed)
-    }
-
-    /// [`view_of`](Self::view_of) unmemoized, over a closed view.
-    fn view_read(
-        &mut self,
-        application: KType,
-        source: &'o Tree<'o>,
-        site: Site,
-    ) -> Read<'o, Option<Exposure<'o, 'p>>> {
-        let (types, scratch) = (self.types, self.scratch);
-        #[cfg(test)]
-        super::count(|counts| counts.source_reads += 1);
-        let operand = self.operand_of(*source, site)?;
-        #[cfg(test)]
-        super::count(|counts| counts.fits += 1);
-        Ok(view::exposure(operand, application, application, &[], types, scratch).ok())
     }
 
     /// `source` rebuilt by a view at `declared`, read across `sides`: carried as it is where the
@@ -588,7 +488,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             // A view's member is its underlying's, rebuilt.
             Carried::Tree(tree @ Tree::View { underlying, .. }) => {
                 let inner = self.cell(Carried::Tree(*underlying), name, site)?;
-                let viewed = self.view_of(tree, site)?;
+                let viewed = self.applying().view_of(tree, site)?;
                 let viewed = viewed.and_then(|viewed| self.sided(&viewed));
                 self.rebuilt(viewed, name, inner, site)?
             }
@@ -611,12 +511,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     Some(Carried::Tree(
                         inner @ (Tree::Body { .. } | Tree::View { .. } | Tree::Retyped { .. }),
                     )) => {
-                        let retyped = self.retyped_tree(inner, declared.into(), site)?;
+                        let retyped = self.applying().retyped_tree(inner, declared.into(), site)?;
                         Some(Carried::Tree(retyped))
                     }
                     _ => {
                         let retyped = judge::retyped(self, types, scratch, declared.into());
-                        judge::exact(self, types, retyped).then_some(Carried::Typed(declared))
+                        judge::exact(self, types, scratch, retyped)
+                            .then_some(Carried::Typed(declared))
                     }
                 }
             }
@@ -714,7 +615,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let key = (declared, sides.from.handle, sides.to.handle);
         let types = self.types;
         let judged = |pass: &Self, src: DeclaredType<Parametric>, dst: DeclaredType<Parametric>| {
-            if judge::same(pass, types, src, dst) {
+            if judge::same(pass, types, pass.scratch, src, dst) {
                 return Sides::Alike;
             }
             // A view is laid over a closed tree at a closed application, so its sides hold head

@@ -323,8 +323,10 @@ pub(super) fn fits_application<'run, 's>(
 
 /// [`fits_application`]'s solution where it fixes each parameter: `None` where `offered` does not
 /// fit, or where the solution names a stand-in for one of the offered side's own unpinned
-/// parameters. A stand-in names a type no reader may learn, so a solution holding one fixes
-/// nothing. What a pin over a call's own variable solves it to ([`Admits`](super::unify)).
+/// parameters or a rigid variable `offered` holds only inside a signature. A stand-in names a type
+/// no reader may learn, and a binding never reaches sealed content, so a run would read the
+/// variable unbound: a solution holding either fixes nothing. What a pin over a call's own
+/// variable solves it to ([`Admits`](super::unify)).
 pub(super) fn fits_at_open<'run, 's>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
@@ -335,9 +337,26 @@ pub(super) fn fits_at_open<'run, 's>(
     let solution = fits_application(types, scratch, offered, signature, fixed).ok()?;
     let held = applications(scratch, offered).map_or(0, |set| set.len());
     let stand_in = |level: usize| (OFFERED_LEVEL + 1 - held..=OFFERED_LEVEL).contains(&level);
+    let rigid = |node: &TypeNode<'run, Linked<'run>>| {
+        matches!(
+            node,
+            TypeNode::Lexical { .. } | TypeNode::Path { .. } | TypeNode::Derived { .. }
+        )
+    };
+    // The rigid variables a binding reaches: those outside sealed content, on either side.
+    let mut reached = BumpVec::new_in(scratch);
+    for root in std::iter::once(offered).chain(fixed.iter().map(|(_, pin)| *pin)) {
+        visit(scratch, root, &mut |at, node, _| {
+            if rigid(node) {
+                reached.push(at);
+            }
+            Visit::Descend
+        });
+    }
     let hidden = solution.iter().any(|(_, solved)| {
-        visit(scratch, solved, &mut |_, node, _| match *node {
+        visit(scratch, solved, &mut |at, node, _| match *node {
             TypeNode::Lexical { level, .. } if stand_in(level) => Visit::Stop,
+            _ if rigid(node) && !reached.contains(&at) => Visit::Stop,
             _ => Visit::Descend,
         })
     });

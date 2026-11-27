@@ -1,60 +1,43 @@
 # One build
 
 A program decided as far as its text allows, once, in one store the image
-writes out. The load fixes what the declarations decide, and lays a layer
-per binding [the trace](../../src/build/README.md#the-trace) names
-([where facts are decided](../../src/build/README.md#where-facts-are-decided));
-a binding the trace cannot follow is decided at run instead, in the build
-depot or in a frame's activation, by typing its body again. The items here
-replace that with [the binding graph](../../design/binding-graph.md): the
-build's own intermediate program, laid once at the load, which the build
-executes from its root as far as the text supplies content and a run cell
-continues wherever content arrives as the program runs. Then they write what
-the load decided out as an image a run resumes from without parsing, shaping
-or walking. What it buys the language: a text decided once per text rather
+writes out. The load fixes what the declarations decide, and lays
+[the binding graph](../../design/binding-graph.md): the build's own
+intermediate program, which the build executes from its root as far as the
+text supplies content and a run cell continues wherever content arrives as
+the program runs
+([where facts are decided](../../src/build/README.md#where-facts-are-decided)).
+The items here widen what the graph's edges carry and where the build starts,
+then write what the load decided out as an image a run resumes from without
+parsing, shaping or walking. What it buys the language: a text decided once per text rather
 than once per process, and a loaded program that exists outside any process,
 which an editor queries and a run starts from.
 
 The foundation comes first. The [`bindgraph`](../../bindgraph/README.md)
 crate holds the graph under its own laws, and
-[two items on its roadmap](../../bindgraph/roadmap/README.md) fit it to
-koan: the edges a text lays on a site and from an answer, and instances
-dropped and rebuilt behind the crate's door.
+[one item on its roadmap](../../bindgraph/roadmap/README.md) writes the
+graph out and reads it back, for [the build image](build-image.md).
 Every judgement about a bound name is a question with finitely many answers
-([resumption](../../src/build/README.md#resumption)), save three that hold;
-[module content and unstorable solves stated as questions](module-content-questions.md)
-takes two of them, and [a `FOR ALL` bound over a run-bound name](../types/run-bound-for-all-bounds.md)
-the third.
-[The build over the binding graph](build-over-the-binding-graph.md) then has
-the load lay the graph and the build and the run cells execute it, removing
-settlements, traced layers, activations and the decision memo, and leaving
-the depot compositions alone.
+([stored questions](../../src/build/README.md#stored-questions)), laid in the
+graph the build and the run cells execute.
 
 Over the foundation: [an exhaustive check](exhaustive-check.md) also starts
 from every entry under an opt-in flag, keeping only refusals;
-[captures and views traced](captures-and-views-traced.md),
-[a module read out of a nominal parameter traced](nominal-parameters-traced.md)
-and [callees built by a call traced](built-module-members.md) widen what a
-`PassesName` edge carries and which callees get one, each restated over the
-graph when it is planned;
+[a module passed through an alias, a capture, a view or a member read](captures-and-views-traced.md),
+[a module read out of a nominal parameter](nominal-parameters-traced.md)
+and [a callee read by a member path or a call's result](callees-read-by-path.md)
+widen what a `PassesName` edge carries and which callees get one;
 [a small union split where it is bound](small-unions-split.md) gives a name
 declared at a union an instance per member;
 [the run reads site answers](run-reads-site-answers.md) has a run cell
 perform an answer where it now reads a node's syntax;
 [what the agent tier keeps](agent-tier-keeps.md) rules on the tier above the
-frozen load; [the build image](build-image.md) writes the graph and the
+frozen load and on where a type a frame closes stays warm; [the build image](build-image.md) writes the graph and the
 frozen load out; and [partial evaluation](partial-evaluation.md) steps what
 the text alone decides of the run.
 [A refused program stays loaded](refused-programs-stay-loaded.md) and
 [a program owns its source](a-program-owns-its-source.md) clean the program's
 ownership the sequence runs through.
-[Warm composed types](warm-composed-types.md) keeps what a loop under a
-composition derives, and
-[invariance around a tail cycle](cycle-invariance.md) widens what the load's
-folds call unchanged.
-[The overlap check over a parametric registration](../types/parametric-overlap.md),
-a [types](../types/README.md) item, stops a callee over its encloser's type
-name walking at every hop.
 
 [The build module](../../src/build/README.md) owns the walk, its stores and
 the folds; [build storage](../../design/build-storage.md) says what each tier
@@ -68,9 +51,14 @@ to start. Regenerated by `python3 tools/doclinks.py sync-next`; do not edit by
 hand.
 
 - [A program owns its source](a-program-owns-its-source.md)
-- [Module content and unstorable solves stated as questions](module-content-questions.md)
+- [What the agent tier keeps](agent-tier-keeps.md)
+- [A callee read by a member path or a call's result](callees-read-by-path.md)
+- [A module passed through an alias, a capture, a view or a member read](captures-and-views-traced.md)
+- [An exhaustive check](exhaustive-check.md)
 - [An opaque view nested in a module, laid at load](opaque-views-nested-at-load.md)
 - [A refused program stays loaded](refused-programs-stay-loaded.md)
+- [The run reads site answers](run-reads-site-answers.md)
+- [A small union split where it is bound](small-unions-split.md)
 
 ## Open choices
 
@@ -128,10 +116,19 @@ as surprises, not scheduled.
   through the collector run with the variable's level as a quantified
   position; it covers no nested negative. Worth an item once a program's
   admissions cost.
+- **A shape too wide for a stored solve.** The load refuses a `FOR ALL` group
+  of 64 or more names, and a quantified function type or expression shape with
+  64 or more parameters or slots, since a stored solve
+  (`Rule::Solved`) names its slots and its pinned variables by a bit each
+  ([`TooWide`](../../src/elaborate/README.md#refusals)).
+  The limit is the representation's, not the language's. Over
+  [the binding graph](../../design/binding-graph.md#instances) the load lays
+  each stored question once, so the positions could rest beside its operands
+  as a slice, and the refusal go.
 - **Code passed through a parameter, traced at load.** A callable that
   `EVAL`s a code parameter, or whose body is one, is offered the names the
-  code needs, and [the trace](../../src/build/README.md#the-trace) leaves each offered callable
-  open, since its callers arrive at run. Where every call site binds the
+  code needs, and [the graph](../../design/binding-graph.md#edges) marks each offered callable
+  `OpenCaller`, since its callers arrive at run. Where every call site binds the
   parameter to a written quote holding no splice, the load knows the code
   and could build and trace it as it does
   [traced code](../../src/scope/README.md#building-code), following code

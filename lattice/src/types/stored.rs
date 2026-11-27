@@ -3,10 +3,10 @@
 //! its chain writes, and the table holds a reference to it.
 //!
 //! The table stores a node apart from the [`TypeNode`] a reader sees, so storage can pack what a
-//! view spells out. Each variant whose probe answers its children decide carries a [`Flags`] byte:
-//! the eight answers — four about variables and carriers, porous and exposing, and two that see
+//! view spells out. Each variant whose probe answers its children decide carries a [`Flags`] word:
+//! the nine answers — five about variables and carriers, porous and exposing, and two that see
 //! inside a signature, a sibling and a carrier reachable there — folded at intern so each probe is
-//! one read of the node. A signature's and a variable's byte holds only the two that see inside a
+//! one read of the node. A signature's and a variable's word holds only the two that see inside a
 //! signature, beside a constant of its kind. Every other variant's answers are a constant of its
 //! kind, which [`Content::flags`] answers.
 //!
@@ -49,23 +49,24 @@ use super::schema::SigSchema;
 use super::shape::{DeferredReturnSurface, StoredElement};
 use super::tiers::lay_one;
 
-/// The eight probe answers, folded from a node's children when it is interned: a free
-/// `Quantified`, any rigid variable, anything parametric, an opaque carrier, the two porosity
-/// answers ([type tiers](../../../design/type-tiers.md#porosity)), and the two [`DEEP`](Self::DEEP)
-/// answers, which alone fold through the handles a signature or an application holds too.
+/// The nine probe answers, folded from a node's children when it is interned: a free
+/// `Quantified`, any rigid variable, anything parametric, a variable no scheme binds, an opaque
+/// carrier, the two porosity answers ([type tiers](../../../design/type-tiers.md#porosity)), and
+/// the two [`DEEP`](Self::DEEP) answers, which alone fold through the handles a signature or an
+/// application holds too.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Flags(u8);
+pub struct Flags(u16);
 
 impl Flags {
-    /// The flags whose byte is `bits`: how a generated image writes a node's flags.
+    /// The flags whose word is `bits`: how a generated image writes a node's flags.
     #[doc(hidden)]
-    pub const fn imaged(bits: u8) -> Self {
+    pub const fn imaged(bits: u16) -> Self {
         Flags(bits)
     }
 
-    /// The flags' byte, for the emitter that writes it.
+    /// The flags' word, for the emitter that writes it.
     #[cfg(any(test, feature = "generator"))]
-    pub(super) fn bits(self) -> u8 {
+    pub(super) fn bits(self) -> u16 {
         self.0
     }
 
@@ -94,6 +95,10 @@ impl Flags {
     pub(super) const DEEP_CARRIER: Self = Flags(128);
     /// The answers that fold through the handles a signature or an application holds.
     pub(super) const DEEP: Self = Flags(64 | 128);
+    /// A `Lexical`, a `Path`, a derived name, a head `Parameter` or a projection is reachable
+    /// outside sealed content, a scheme's body included: a variable no scheme binds. Off a type
+    /// that is no scheme, [`PARAMETRIC`](Self::PARAMETRIC) is it or a free `Quantified`.
+    pub(super) const OUTSIDE: Self = Flags(256);
 
     /// These flags less `other`'s.
     pub(super) fn without(self, other: Self) -> Self {
@@ -539,6 +544,14 @@ impl<'run> StoredNode<'run> {
     /// reachable outside sealed content. Read off the flags interning stored in the node.
     pub(super) fn is_concrete(&self) -> bool {
         !self.flags().holds(Flags::PARAMETRIC)
+    }
+
+    /// Whether a variable no scheme binds — a `Lexical`, a `Path`, a derived name, a head
+    /// `Parameter` or a projection — is reachable from the node outside sealed content, a scheme's
+    /// body included. A scheme free of one is closed: a value may carry it. Read off the flag
+    /// interning stored in the node.
+    pub(super) fn contains_outside(&self) -> bool {
+        self.flags().holds(Flags::OUTSIDE)
     }
 
     /// Whether an opaque carrier is reachable from the node outside sealed content. Read off the
@@ -1001,7 +1014,7 @@ impl<'run> Content<'run> {
             | Content::Derived { flags, .. }
             | Content::Parameter { flags, .. }
             | Content::Projection { flags, .. } => {
-                Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY | flags
+                Flags::RIGID | Flags::PARAMETRIC | Flags::OUTSIDE | Flags::POROSITY | flags
             }
             // An opaque carrier: a value carries it and dispatches on it, so it is concrete. Its
             // payload is read at its own type, so it exposes; nothing but itself lies under it.

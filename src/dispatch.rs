@@ -36,6 +36,9 @@ mod builtins;
 mod caught;
 mod check;
 mod evaluate;
+// Reached by its tests alone until the load lays its binding graph through it.
+#[allow(dead_code)]
+mod graph;
 mod lookup;
 mod rules;
 mod select;
@@ -49,12 +52,13 @@ pub(crate) use builtins::overload_types;
 
 use std::cell::Cell;
 
+use crate::build::lay::{GraphFacts, GraphKept, Instances};
 use crate::knot::{KBuiltins, KReading, KValue};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Catching, Delivered, Evaluated, Evaluator, Language, Owed, Program, Within};
 use crate::scheduler::{Held, Use};
-use crate::scope::{Code, Segment, ShapeError, Shapes, Store};
+use crate::scope::{Code, LoadFacts, Segment, ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::Chain;
@@ -83,9 +87,49 @@ impl Language for Koan {
         store: &S,
         types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
-        at: Segment,
     ) -> Result<(), ShapeError<'o>> {
-        walk::walk(shapes, builtins, store, types, scratch, at)
+        walk::walk(shapes, builtins, store, types, scratch)
+    }
+
+    fn instances<'graph, 'x>(
+        bound: &mut bindgraph::Bound<'_, '_, 'graph, GraphFacts<'graph>>,
+        resting: &bindgraph::Resting<'graph, GraphKept>,
+        facts: &'graph GraphFacts<'graph>,
+        load: &'graph LoadFacts<'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
+        scratch: BumpAllocator<'x>,
+        symbols: &SymbolInterner,
+    ) -> Option<(
+        bindgraph::QuestionId,
+        &'x crate::scope::ShapeError<'x>,
+        Option<bindgraph::EdgeId>,
+    )>
+    where
+        'graph: 'x,
+    {
+        graph::made(bound, resting, facts, load, types, scratch, symbols)
+    }
+
+    fn instance<'graph>(
+        instances: &Instances<'graph>,
+        node: bindgraph::NodeId,
+        bound: &[(bindgraph::NameId, crate::scope::Bound<'_>)],
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        into: &mut [u64],
+    ) -> Option<(bindgraph::QuestionId, u16)> {
+        graph::instance(instances, node, bound, types, scratch, into)
+    }
+
+    fn rebind<'graph>(
+        instances: &Instances<'graph>,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        segment: Segment,
+        binding: crate::scope::Binding<'_>,
+        ty: crate::type_lattice::DeclaredType<crate::type_lattice::Parametric>,
+    ) -> crate::scope::Closed {
+        graph::rebound_under(instances, types, scratch, segment, binding, ty)
     }
 }
 

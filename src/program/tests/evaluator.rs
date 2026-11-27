@@ -24,10 +24,9 @@ use crate::memory::{Active, Bump, BumpAllocator, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
 use crate::program::{
-    CallKind, Delivered, Evaluated, Evaluator, KBundle, Language, Next, Node, Program, Tailed,
-    call, eval,
+    CallKind, Delivered, Evaluated, Evaluator, KBundle, Language, Next, Node, Program, call, eval,
 };
-use crate::scheduler::{Held, Seek, Step, StepError, Taken, Use};
+use crate::scheduler::{Held, Step, StepError, Taken, Use};
 use crate::scope::{
     BodyShape, Builtins, CaptureSlot, Code, Inner, Located, Offer, Position, Site, Slot,
 };
@@ -116,9 +115,8 @@ impl Language for Mini {
         store: &S,
         types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
-        at: crate::scope::Segment,
     ) -> Result<(), crate::scope::ShapeError<'o>> {
-        crate::tests::walk(shapes, builtins, store, types, scratch, at)
+        crate::tests::walk(shapes, builtins, store, types, scratch)
     }
 }
 
@@ -353,7 +351,7 @@ fn evaluate<'graph, 'here, 'scratch>(
                 program.written(),
                 site,
                 None,
-                (crate::values::DepotRef::ROOT, None),
+                crate::values::DepotRef::ROOT,
                 types,
                 &scratch,
             ) else {
@@ -454,7 +452,6 @@ fn evaluate<'graph, 'here, 'scratch>(
                 code,
                 Value::Record(offered),
                 (KType::ANY, written.source),
-                None,
                 node.use_,
             ) {
                 Ok(request) => {
@@ -464,10 +461,8 @@ fn evaluate<'graph, 'here, 'scratch>(
                 Err(refused) => {
                     let message = refused.display(program.symbols(), types).to_string();
                     record(format!("refused {message}"));
-                    let fault = crate::memory::resident(
-                        step.writer(),
-                        refused.relaid(step.writer(), &scratch),
-                    );
+                    let fault =
+                        crate::memory::resident(step.writer(), refused.relaid(step.writer()));
                     Next::Raised(Inner::Fault(fault))
                 }
             }
@@ -497,7 +492,6 @@ fn evaluate<'graph, 'here, 'scratch>(
                     &[],
                     (written.source, owed),
                     None,
-                    None,
                     node.use_,
                 )
             };
@@ -506,12 +500,7 @@ fn evaluate<'graph, 'here, 'scratch>(
                     .is_some_and(|function| owed.contract.kept_by(types, function.ktype(), None))
             {
                 let request = request(Some(owed.hopped(step.writer())));
-                let seek = Seek {
-                    parent: crate::values::DepotRef::ROOT,
-                    settlement: None,
-                    hands_back: false,
-                };
-                return Next::Tail(Tailed::Seeking(request.work, seek));
+                return Next::Tail(request.work, crate::values::DepotRef::ROOT);
             }
             node.stage = FINISHING;
             Next::Spawned(step.spawn(request(None)))

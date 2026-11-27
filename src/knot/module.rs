@@ -58,7 +58,7 @@ use crate::scope::{BodyAt, BodyRef, ClosureBindings, ViewRecord};
 
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 pub use crate::values::digest::Operator;
-use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
+use crate::values::digest::{DigestHasher, Tag, body_content, lone_member, view_content};
 use crate::values::{Chain, ContentDigest, Knotted as _, Link, Seen, Value, Weight};
 use coerce::Hidden;
 
@@ -97,6 +97,11 @@ pub enum Born<'graph, 'cell, 'h> {
 /// carries what the content is computed from.
 struct Content<'graph, 'cell> {
     known: Cell<Option<ModuleContent>>,
+    /// The module's digest as a value, the one node of a knot of its own, once computed.
+    digest: Cell<Option<ContentDigest>>,
+    /// Its digest as a value carrying a root-tier type over it, the last one asked
+    /// ([`Module::retyped_digest`]).
+    retyped: Cell<Option<(KType, ContentDigest)>>,
     view: Option<(ViewRecord<'cell>, Knotted<'graph, 'cell>)>,
     body: Option<(
         BodyAt<'graph, 'cell, 'cell>,
@@ -141,6 +146,8 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
             writer,
             Content {
                 known: Cell::new(known),
+                digest: Cell::new(None),
+                retyped: Cell::new(None),
                 view,
                 body,
             },
@@ -217,6 +224,35 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     }
 
     /// Keep `content`, computed by a demand, as what the module is.
+    /// The module's digest as a value, where its content is known: the one node of a knot of its
+    /// own ([`lone_member`]), kept once computed. `None` while its content is pending.
+    pub fn digest(&self) -> Option<ContentDigest> {
+        if let Some(digest) = self.content.digest.get() {
+            return Some(digest);
+        }
+        let digest = lone_member(self.content.known.get()?.digest());
+        self.content.digest.set(Some(digest));
+        Some(digest)
+    }
+
+    /// The module's digest as a value carrying `carried` over it, a type of the root tier, whose
+    /// handle names one type for the module's life: kept for the last type asked, `compute`d on a
+    /// miss.
+    pub fn retyped_digest(
+        &self,
+        carried: KType,
+        compute: impl FnOnce() -> Option<ContentDigest>,
+    ) -> Option<ContentDigest> {
+        if let Some((kept, digest)) = self.content.retyped.get()
+            && kept == carried
+        {
+            return Some(digest);
+        }
+        let digest = compute()?;
+        self.content.retyped.set(Some((carried, digest)));
+        Some(digest)
+    }
+
     pub fn fill(&self, content: ModuleContent) {
         debug_assert!(
             self.content
@@ -278,6 +314,8 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
                 writer,
                 Content {
                     known: Cell::new(self.content.known.get()),
+                    digest: Cell::new(self.content.digest.get()),
+                    retyped: Cell::new(self.content.retyped.get()),
                     view: (self.view_record())
                         .zip(underlying)
                         .map(|(record, underlying)| (record.laid(writer), underlying)),

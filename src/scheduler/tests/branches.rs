@@ -440,14 +440,15 @@ fn a_shares_chain_lays_in_the_hosts_scratch_and_leaves_its_region() {
     assert!(scratch > 0, "the lists were laid in the scratch branch");
 }
 
-/// A `Fresh` child holding its scratch and running on its caching chain: it borrows no
-/// settlement, and a type in its region and one in its own scratch both resolve, a list of each
-/// laid in its scratch while the region does not grow.
+/// A `Fresh` child holding its scratch and running on its caching chain, under the root: a type in
+/// its region and one in its own scratch both resolve, a list of each laid in its scratch while
+/// the region does not grow.
 fn reading<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     assert!(step.hold_scratch(), "a tree cell holds its own scratch");
-    assert!(
-        !step.under_settlement(),
-        "a frame with no settlement runs under the root"
+    assert_eq!(
+        step.depot_ref(crate::values::DepotRef::ROOT),
+        crate::values::DepotRef::ROOT,
+        "a frame of written code runs under the root"
     );
     let in_region = step.types().list(step.types().list(KType::NUMBER));
     let in_scratch = step.scratch_types().list(KType::BOOL);

@@ -51,7 +51,60 @@ pub enum Handed {
     Relative(u16),
 }
 
+/// What the member of a [`Nominals`] group a derived name hands back shows in its declaration's
+/// text, the same at every binding: what a spelling over it reads at load.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Showing<'a> {
+    /// A union binder: each of its variants' names, and the parameters every one of them takes,
+    /// where they all take one set, as applying the union applies each.
+    Union {
+        variants: &'a [usize],
+        params: Option<&'a [TypeSymbol]>,
+    },
+    /// A newtype or a union's variant: its representation, written over names with each relative
+    /// fellow a sibling reference, and a family's parameters.
+    Member {
+        representation: Option<Parametric>,
+        params: &'a [TypeSymbol],
+    },
+}
+
 impl<'a> Nominals<'a> {
+    /// What the member the group hands back at `output` shows, its representations among
+    /// `operands`: `None` for a relative fellow, which is a signature or an alias.
+    pub fn shown(&self, output: u8, operands: &[Parametric]) -> Option<Showing<'a>> {
+        let params = |index: usize| match self.schemas[index] {
+            Schema::NewType(_) => &[][..],
+            Schema::Constructor { params, .. } => params,
+        };
+        match *self.handles.get(usize::from(output))? {
+            Handed::Binder(name) => {
+                let (_, variants) = self.binders.iter().find(|(binder, _)| *binder == name)?;
+                let mut each = variants.iter().map(|index| params(*index));
+                let first = each.next();
+                let params = first.filter(|first| each.all(|params| params == *first));
+                Some(Showing::Union { variants, params })
+            }
+            Handed::Member(index) => {
+                let representation = match self.schemas[index] {
+                    Schema::NewType(at) => Some(at),
+                    Schema::Constructor { representation, .. } => representation,
+                };
+                Some(Showing::Member {
+                    representation: representation
+                        .and_then(|at| operands.get(usize::from(at)).copied()),
+                    params: params(index),
+                })
+            }
+            Handed::Relative(_) => None,
+        }
+    }
+
+    /// The name of the window member at `index`.
+    pub fn name(&self, index: usize) -> TypeSymbol {
+        self.members[index].0
+    }
+
     /// The group laid through `lay`.
     pub fn laid<'to>(&self, lay: impl Lays<'to>) -> Nominals<'to> {
         let binders =

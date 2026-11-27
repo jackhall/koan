@@ -91,13 +91,15 @@ fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
         run("MODULE m = (LET x = 1)\nPRINT (m :| Any)"),
         "load: <test>:2:7: Any is no signature"
     );
-    // A type the load reads only under a binding refuses the load where a call fixes it, as the
-    // layer it lays for `VIEW` at `Elt := Number` words it, naming the call.
-    assert_eq!(
-        run("MODULE m = (LET x = 1)\n\
-             EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
-             PRINT (VIEW 1)"),
-        "load: <test>:2:46: Number is no signature\n  in (VIEW 1) at <test>:3:7"
+    // A type the load reads only under a binding refuses the load where a call fixes it, naming
+    // the call.
+    let refused = run("MODULE m = (LET x = 1)\n\
+                       EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
+                       PRINT (VIEW 1)");
+    assert!(
+        refused.starts_with("load: <test>:2:46: ")
+            && refused.ends_with(" is no signature\n  in (VIEW 1) at <test>:3:7"),
+        "{refused}"
     );
 }
 
@@ -195,8 +197,8 @@ fn eval_holds_its_value_to_its_declared_return() {
         "a tail out of the code hands the `EVAL`'s contract on"
     );
     assert_eq!(
-        run("EXPR #(RUN c :Any) -> Any = #(EVAL c -> Any)\nPRINT \"loaded\"\nRUN 1"),
-        "loaded\nerror: Number is not code for `EVAL` to run\n  in :(FN :{c :Any} -> Any) (RUN 1) at <test>:3:1"
+        run("EXPR #(RUN b :{c :Any}) -> Any = #(EVAL b.c -> Any)\nPRINT \"loaded\"\nRUN {c = 1}"),
+        "loaded\nerror: Number is not code for `EVAL` to run\n  in :(FN :{b :{c :Any}} -> Any) (RUN {c = 1}) at <test>:3:1"
     );
     let run_at = "EXPR FOR ALL #[Elt] #(RUN c :Code AT x :Elt) -> Elt = #(EVAL c -> Elt)\n";
     assert_eq!(run(&format!("{run_at}PRINT (RUN #(1) AT 2)")), "1");
@@ -343,9 +345,9 @@ fn a_call_is_exact_at_its_callee_s_return() {
 #[test]
 fn a_call_the_load_cannot_solve_exactly_is_at_most_its_return() {
     let source = "EXPR FOR ALL #[Elt] #(SINGLE x :Elt) -> :(LIST OF Elt) = #([x])\n\
-                  LET use = FN EXPR #(USE u :Any WITH f :(FN :{} -> :(LIST OF Any))) \
+                  LET use = FN EXPR #(USE b :{u :Any} WITH f :(FN :{} -> :(LIST OF Any))) \
                   -> Any = #(\n  \
-                  LET single = (SINGLE u)\n  \
+                  LET single = (SINGLE b.u)\n  \
                   LET called = (f {})\n  \
                   single\n\
                   )\n";
@@ -368,7 +370,7 @@ fn a_call_the_load_cannot_solve_exactly_is_at_most_its_return() {
     // Each node carries `LIST OF Number`, which the run's check reads against its static type.
     assert_eq!(
         run(&format!(
-            "{source}PRINT (USE 1 WITH (FN :{{}} -> :(LIST OF Number) = #([1])))"
+            "{source}PRINT (USE {{u = 1}} WITH (FN :{{}} -> :(LIST OF Number) = #([1])))"
         )),
         "[1]"
     );

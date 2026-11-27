@@ -12,10 +12,10 @@
 use crate::elaborate::{member_count, schema_member, schema_of, self_signature};
 use crate::knot::{Eager, KActivation, KReading, Knotted, Node, Supplied};
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
-use crate::scope::Untieable;
 use crate::scope::{
     Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target, Written,
 };
+use crate::scope::{Encloser, Untieable};
 use crate::symbols::BinderSymbol;
 use crate::values::{Chain, DepotRef};
 
@@ -38,16 +38,20 @@ pub fn body_activation<'graph, 'cell>(
     let captures = ClosureBindings::read_captures(body, enclosing, scratch, |_| {
         unreachable!("a module captures no fellow member: it is alone in its component")
     });
-    // A module is never called, so its closure seeks no settlement. The module keeps it, to
-    // compute its content from where a demand first reaches it.
-    let closure = ClosureBindings::of(writer, &captures, (DepotRef::ROOT, None), None);
+    // A module is never called, so its closure is born under the root. The module keeps it, to
+    // compute its content from where a demand first reaches it. Its body runs in the encloser's
+    // frame, so it answers through the encloser's slab and what the encloser's closure holds.
+    let encloser = Encloser {
+        words: enclosing.view().enclosers(),
+    };
+    let closure = ClosureBindings::of(writer, &captures, DepotRef::ROOT, encloser);
     Activation::of_module(
         writer,
         body,
         enclosing.facts(),
         closure,
         enclosing.builtins(),
-        enclosing.view().decided(),
+        (enclosing.view().handles(), enclosing.view().frame_binding()),
     )
 }
 

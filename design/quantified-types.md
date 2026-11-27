@@ -49,6 +49,80 @@ list, union, record or function type takes one. `Value::ktype` answers a
 `DeclaredType`, a scheme for a quantified callable and a `KType` for every
 other value, and every reader but a call's head takes `Value::concrete_ktype`.
 
+## What a body may ask of a `FOR ALL` name
+
+A body knows of its `FOR ALL` name what the bound declares, and nothing more.
+A spelling over the name — a projection off it, an application with it as
+head, a `MATCH … UNDER` clause naming it — loads only where the bound
+guarantees it at every binding. A binding then writes a type in. It never
+decides whether a spelling is a type, so no call is refused for a spelling
+inside a body its caller did not write.
+
+| Spelling in a body | `Elt`'s bound | The load |
+|---|---|---|
+| `Elt.size` | a record type declaring `size` | reads the [projection](../lattice/src/types/vocabulary.md#the-node-vocabulary) `(FIELD size OF Elt)`: each binding's `size`, and the union of the members' where a binding is a union |
+| `Elt.size` | any other | refuses: the bound declares no `size` |
+| `Elt.None` | any | refuses; under `Elt: Maybe` the variant is spelled `Maybe.None` |
+| `MATCH x UNDER Elt` | any | refuses; under `Elt: Maybe` the clause is spelled `UNDER Maybe` |
+| `Number -> Elt`, `Elt {…}`, `Elt WITH {…}`, `Elt NEEDING #[…]`, `UNBUILT Elt` | any | refuses |
+
+A variant read and an `UNDER` clause have no reading that holds at every
+binding. A binding under `Maybe` may be the lone variant `Some`, which has no
+`None` and is no union, and a variant does not know its union
+([a union's variants](../src/elaborate/README.md#a-unions-variants)). The
+bound's own spelling says the same thing at every binding. No bound licenses a
+head, since the type a value carries is always applied.
+
+A projection is the one spelling that keeps a record value whole and names a
+field's type:
+
+```koan
+EXPR FOR ALL #{Elt: :{size :Any}} #(RESIZER x :Elt) -> Any = #(
+  (FN :{n :(Elt.size)} -> Elt = #(x)))
+LET grow = (RESIZER {size = 5, width = 2})
+PRINT (grow {n = 6})
+```
+
+```text
+{size = 5, width = 2}
+```
+
+Quantifying the field instead, `x :{size :Size}`, re-stamps the argument at
+`:{size :Size}`, and no bound may name `Size`.
+
+The value side agrees. `x.size` over `x :Elt` is typed by the same projection,
+so `LET n :(Elt.size) = (x.size)` holds at load, and a read of a field the
+bound does not declare is refused at load
+([static types](../src/dispatch/README.md#static-types)). A body that reads a
+field only where the value has one tests the value:
+
+```koan
+EXPR FOR ALL #[Elt] #(SIZEOR x :Elt) -> Any = #(
+  MATCH x WITH #{:(:{size :Any}): (it.size), _: (0)})
+PRINT (SIZEOR {size = 5, width = 2})
+PRINT (SIZEOR 7)
+```
+
+```text
+5
+0
+```
+
+A name with no declared bound licenses nothing: a `:Type` parameter, a name
+`USING … SCOPE` surfaces that its module's signature leaves abstract, a
+quote's hole or `$` name, and a path over a head parameter its signature
+leaves unpinned. A surfaced name its module's static signature declares
+exactly — a manifest member, or a head parameter the signature's application
+pins — is that closed type. A type declared in a body over a `FOR ALL` name,
+`UNION Chain = #{Link: :{v :Elt}, …}`, is no run-bound name: its declaration
+licenses what it shows, each spelling checked at load against it. A value declared `Any` is the
+declared way to leave a read to the call
+([what a bind site binds](binding-graph.md#what-a-bind-site-binds)).
+
+The rule is about what a spelling is. Whether a check over the name holds, and
+which candidate a use selects, are a binding's to answer
+([the load and the run agree](gradual-typing.md#the-load-and-the-run-agree)).
+
 ## Where a scheme is held
 
 - **A callable's own type**: a function value's memo, and a registered shape.
@@ -80,15 +154,12 @@ dispatched on like any unquantified function. A type is wanted at:
 - a keyworded argument, at the slot of each candidate the use keeps;
 - a list, dict or record literal's parts, at that container's own type.
 
-A `LET` of a quantified `FN` outside a `MODULE` or `GROUP` body is an instance
-site too, whether or not its name is read, wanted at its annotation or, as a
-callable body's last statement, at the declared return. So a plain
-`LET pick = (FN FOR ALL …)` at the top level, or anywhere in a callable's,
-block's or quote's body but its last statement, refuses the load, even where
-`pick` is only called by name: nothing wants it at a type. A body that wants a
-local generic helper binds it under the type it is used at,
-`LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL …)`, or moves it into a
-module body, where it stays generic and each call solves its group.
+A plain `LET` holds a generic value, in any body: `LET pick = (FN FOR ALL …)`
+binds the scheme, and each call of `pick` by name solves its group at the
+call. A `LET` whose value its body returns — a callable body's, an arm's or a
+quote's last statement — is an instance site wanted at the body's declared
+return, and an annotated `LET` one wanted at its annotation, so
+`LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL …)` binds the instance.
 
 A member read `m.pick` is an instance site where the load sees that the
 member is quantified: its operand is a name, or a chain of member reads rooted
@@ -99,9 +170,10 @@ parameter as the [path](modules.md#carriers-and-paths) through the operand,
 declaring `VAL apply :(FN FOR ALL #[Elt] :{x :Carrier, y :Elt} -> Elt)`,
 `LET go :(FN :{x :(m.Carrier), y :Number} -> Number) = m.apply` loads. Only a
 read whose path the load cannot name — one reaching across a quote's code — is
-refused anywhere but a call's head, where the run solves the call. A read the
-load cannot see into is no instance site, and faults at run where it reaches a
-scheme anywhere but a call's head.
+refused anywhere but a call's head, where the run solves the call. A read
+the load cannot see into, off a module whose signature only the run gives, is
+an instance site too, answered where the module binder is bound: its scheme is
+what the binding gives.
 
 The solve is the least instance of the scheme under the wanted type
 ([`instance_under`](../lattice/src/types/relations.md#quantified-binders)). A
@@ -110,8 +182,9 @@ never read as its bound; one some contribution reaches binds its least
 instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A
 quantified callee's other arguments solve its group first, a variable a class
 ranked before the slot's solves taken as the call solves it, and the slot is
-read through that solve. The candidates a keyworded use keeps must agree on
-each instance.
+read through that solve. The candidates the text leaves a keyworded use must
+agree on each instance, each name declared `Any` read at its ends: a binding of
+an `Any` name does not choose a member argument's instance.
 
 The instance is made where the solve that fixes it is decided
 ([where a solve is decided](binding-graph.md#where-a-solve-is-decided)):
@@ -120,11 +193,15 @@ The instance is made where the solve that fixes it is decided
 - at the type each run binds, where the wanted type names a type a run binds,
   such as an enclosing `EXPR FOR ALL #[Outer]`'s `Outer`, whether the lattice
   spells the solution over `Outer` or each binding of `Outer` solves it;
-- by the call, where an argument that solves the callee's group contributes
-  the type its value carries, its static type being at most `Any`.
+- where a module binder is bound, for a member the load cannot see into: the
+  scheme is what the binding gives, and its instance is what the selection
+  over it answers.
 
-A site nothing wants at a type, one wanted at a union or `Any`, and one whose
-solving argument is itself an instance site are refused at the load.
+A site nothing wants at a type, one wanted at a union or `Any`, one whose
+solving argument is itself an instance site, and one with an argument at most
+`Any` among those that solve its variables are refused at the load. The last
+asks for a `FOR ALL` name: the text may use a type only where it declares one
+([what a bind site binds](binding-graph.md#what-a-bind-site-binds)).
 [Dispatch](../src/dispatch/README.md#static-types) owns the rule and its
 refusals.
 
@@ -207,10 +284,20 @@ module's exact content.
   empty group of its own, and a name only the outer group declares is refused
   under it. A bare `FN` type opens no group and keeps reading the enclosing
   head's variables.
-- **A bound is closed.** It names no variable and no head parameter, so no
-  variable is bounded by another, and an opaque carrier bounds none.
+- **A bound is closed.** In the lattice it names no variable and no head
+  parameter, so no variable is bounded by another, and an opaque carrier
+  bounds none. A callable's own `FOR ALL` group may name an encloser's name:
+  its static type carries the scheme's recipe, the bound written over names,
+  and the scheme is built with the bound closed where the callable is born
+  ([the binding graph](binding-graph.md#what-a-bind-site-binds)). A bound
+  inside a type, a `SIG`'s `VAL` scheme or its own group, names no
+  encloser's name, and is refused at the load.
 - **No meet over a variable.** Each call solves the variable, so the meet
   cannot be taken at load, and no intersection type keeps it symbolic.
+- **A body asks only what the bound declares.** A projection off a `FOR ALL`
+  name needs a bound declaring the field, and no bound licenses a variant
+  read, an `UNDER` clause or a head
+  ([above](#what-a-body-may-ask-of-a-for-all-name)).
 - **No union whose members tie.** A union in a declaration's parameter, slot
   or variant is admitted through its most specific member, so
   `(Elt | (LIST OF Key))` over `[1]` binds `Key`. Two members neither of which
@@ -264,5 +351,12 @@ lattice, not an unknown type, so nothing here is checked by consistency.
 
 - [A head reading its parameters' types](../roadmap/types/head-parameter-reads.md)
   — the hidden variable a head's read of its own parameters introduces.
-- [An instance made by the call](../roadmap/types/instance-made-by-the-call.md)
-  — an instance site whose group only the call can solve.
+- [A check over a `FOR ALL` name holds at every binding](../roadmap/types/checks-at-every-binding.md)
+  — a body's checks held to the bound as its spellings are.
+- [A check settled arm by arm](../roadmap/types/checks-by-arm.md) — a check
+  that holds on every arm of the selection it reads.
+- [A `FOR ALL` name bounded from below](../roadmap/types/bounds-from-below.md)
+  — a body returning a value it builds at the name.
+- [Unplanned work](../roadmap/types/README.md#unplanned-work) — a head
+  projecting a `FOR ALL` name, and a use's candidates checked for coverage at
+  load.

@@ -60,6 +60,11 @@ pub(super) struct Reference {
     pub(super) borrowed: usize,
     /// Calls on a site followed.
     pub(super) site_calls: usize,
+    /// Onward calls followed, onward calls whose holder did not arrive, and names
+    /// taken from a statement node onward calls reached.
+    pub(super) onward: usize,
+    pub(super) waited: usize,
+    pub(super) reached_takes: usize,
 }
 
 /// A knot the reference resolved: its members, whether it carries one type, and whether a union
@@ -97,6 +102,16 @@ enum Step {
     /// Anything else: a question, a name waiting on a pass, or a term that builds on or reads
     /// bare a name it still needs.
     Other,
+}
+
+/// Where the walk of onward calls toward a taken name's node stands.
+enum Reach {
+    /// An owner on the way still waits on these.
+    Waits(Vec<Unknown>),
+    /// Some holder on the way does not arrive: the taken name waits on the run.
+    Never,
+    /// The node's evaluation.
+    At(usize),
 }
 
 struct Evaluation {
@@ -195,7 +210,13 @@ fn answer_recording(
         asked.push((ask.names().to_vec(), ask.question(), answer));
         answer
     };
-    let mut doors = Doors::new(question, text.reads(), text.asks(), &mut serve);
+    let mut doors = Doors::new(
+        question,
+        text.reads(),
+        text.asks(),
+        &mut serve,
+        Default::default(),
+    );
     answers.answer(question, &mut doors)
 }
 
@@ -360,6 +381,16 @@ impl Run<'_> {
                 let content = if graph.answered_at(takes) == Some(entry) {
                     let into = self.enter(entry, &passed);
                     self.evaluations[into].names[&takes]?
+                } else if graph.reach(callee, takes).is_some() {
+                    match self.reach(call, takes, &passed) {
+                        Reach::Waits(_) => return None,
+                        Reach::Never => rigid,
+                        Reach::At(into) => {
+                            let taken = self.evaluations[into].names[&takes]?;
+                            self.counts.reached_takes += 1;
+                            taken
+                        }
+                    }
                 } else if graph.name_site(takes) == crate::Site::Entry(callee)
                     || !graph.inside(callee, takes)
                 {
@@ -403,8 +434,18 @@ impl Run<'_> {
                 }
             };
             if taken {
-                let callee = self.graph.entry(self.graph.edge(call).callee());
                 let passed = self.graph.passed(&Toy, call, &binding);
+                if let Some(target) = self.graph.edge(call).onward() {
+                    let target = self.graph.node_at(target).expect("a node");
+                    if self.arrived(target, &passed) {
+                        self.counts.onward += 1;
+                        self.enter(target, &passed);
+                    } else {
+                        self.counts.waited += 1;
+                    }
+                    continue;
+                }
+                let callee = self.graph.entry(self.graph.edge(call).callee());
                 self.enter(callee, &passed);
             }
         }
@@ -477,7 +518,18 @@ impl Run<'_> {
                     return waits(passes);
                 }
                 let passed = graph.passed(&Toy, call, &binding_of(&self.evaluations[at]));
-                let entry = graph.entry(graph.edge(call).callee());
+                let callee = graph.edge(call).callee();
+                if graph.reach(callee, takes).is_some() {
+                    return match self.reached(call, takes, &passed) {
+                        Reach::Waits(of) => waits(of),
+                        Reach::At(into) => Needs {
+                            of: vec![Unknown::Name(into, takes)],
+                            step: Step::Takes,
+                        },
+                        Reach::Never => unreachable!("a name no chain reaches is computable"),
+                    };
+                }
+                let entry = graph.entry(callee);
                 let key = (entry, self.view_of(entry, &passed));
                 let into = self.index[&key];
                 Needs {
@@ -486,6 +538,87 @@ impl Run<'_> {
                 }
             }
         }
+    }
+
+    /// Whether every name `target` binds and reads is closed in `given`: what a run would bind.
+    fn arrived(&self, target: NodeId, given: &Binding<Toy>) -> bool {
+        let relevant = self.graph.relevant(target);
+        (self.graph.node(target).names().iter())
+            .filter(|name| relevant.contains(name))
+            .all(|&name| given.get(name).is_some_and(super::toy::closed))
+    }
+
+    /// Walks the onward calls reaching the statement node `takes` is bound at, in the callee of
+    /// `call` under `passed`, entering each target as its owner's passes become known.
+    fn reach(&mut self, call: crate::EdgeId, takes: NameId, passed: &Binding<Toy>) -> Reach {
+        let graph = self.graph;
+        let callee = graph.edge(call).callee();
+        let (_, chain) = graph.reach(callee, takes).expect("a reached node");
+        let mut owner = match graph.owned_inside(chain[0]) {
+            true => Some(self.enter(graph.entry(callee), passed)),
+            false => None,
+        };
+        for &onward in chain {
+            let binding = match owner {
+                Some(owner) => {
+                    let unknown: Vec<Unknown> = (self.passes(owner, onward).iter())
+                        .filter(|&&name| !self.known(owner, name))
+                        .map(|&name| Unknown::Name(owner, name))
+                        .collect();
+                    if !unknown.is_empty() {
+                        return Reach::Waits(unknown);
+                    }
+                    binding_of(&self.evaluations[owner])
+                }
+                None => passed.clone(),
+            };
+            let given = graph.passed(&Toy, onward, &binding);
+            let target = graph
+                .node_at(graph.edge(onward).onward().expect("onward"))
+                .expect("a node");
+            if !self.arrived(target, &given) {
+                return Reach::Never;
+            }
+            owner = Some(self.enter(target, &given));
+        }
+        Reach::At(owner.expect("a chain has a call"))
+    }
+
+    /// [`Self::reach`] over the evaluations already entered.
+    fn reached(&self, call: crate::EdgeId, takes: NameId, passed: &Binding<Toy>) -> Reach {
+        let graph = self.graph;
+        let callee = graph.edge(call).callee();
+        let (_, chain) = graph.reach(callee, takes).expect("a reached node");
+        let find =
+            |node: NodeId, binding: &Binding<Toy>| self.index[&(node, self.view_of(node, binding))];
+        let mut owner = match graph.owned_inside(chain[0]) {
+            true => Some(find(graph.entry(callee), passed)),
+            false => None,
+        };
+        for &onward in chain {
+            let binding = match owner {
+                Some(owner) => {
+                    let unknown: Vec<Unknown> = (self.passes(owner, onward).iter())
+                        .filter(|&&name| !self.known(owner, name))
+                        .map(|&name| Unknown::Name(owner, name))
+                        .collect();
+                    if !unknown.is_empty() {
+                        return Reach::Waits(unknown);
+                    }
+                    binding_of(&self.evaluations[owner])
+                }
+                None => passed.clone(),
+            };
+            let given = graph.passed(&Toy, onward, &binding);
+            let target = graph
+                .node_at(graph.edge(onward).onward().expect("onward"))
+                .expect("a node");
+            if !self.arrived(target, &given) {
+                return Reach::Never;
+            }
+            owner = Some(find(target, &given));
+        }
+        Reach::At(owner.expect("a chain has a call"))
     }
 
     fn view_of(&self, node: NodeId, binding: &Binding<Toy>) -> Binding<Toy> {

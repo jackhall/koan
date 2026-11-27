@@ -260,19 +260,24 @@ fn a_module_binder_a_slot_s_signature_asks_more_of_refuses_the_load_uncalled() {
     );
 }
 
+/// The module `built` a callee builds, its `Zero` at `zero`.
+fn built(zero: &str) -> String {
+    format!("(MODULE built OVER #[e] = (LET Zero = {zero}))\n    built\n  )\n")
+}
+
+/// `SUBJECT`, which writes `inner` and then reads `Zero` off the module `MAKE x` builds.
+fn subject(inner: &str) -> String {
+    format!(
+        "EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(\n  {inner}\
+         LET a = (MAKE x)\n  LET z :(a.Zero) = \"no\"\n  z\n)\nPRINT \"start\"\n\
+         PRINT (SUBJECT 5)"
+    )
+}
+
 /// A call the text selects unfolds over a run-bound name, so what the callee builds refuses at
-/// load; a call only a binding selects is left to the binding, which refuses at the build.
+/// load.
 #[test]
 fn a_call_over_a_name_unfolds_where_the_text_selects_it() {
-    let built =
-        |zero: &str| format!("(MODULE built OVER #[e] = (LET Zero = {zero}))\n    built\n  )\n");
-    let subject = |inner: &str| {
-        format!(
-            "EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(\n  {inner}\
-             LET a = (MAKE x)\n  LET z :(a.Zero) = \"no\"\n  z\n)\nPRINT \"start\"\n\
-             PRINT (SUBJECT 5)"
-        )
-    };
     let refused = "this value is Str, which can never satisfy its annotation Number";
     let nested = subject(&format!(
         "EXPR #(MAKE e :Elt) -> Module = #(\n    {}  ",
@@ -285,6 +290,13 @@ fn a_call_over_a_name_unfolds_where_the_text_selects_it() {
         subject("")
     );
     assert_eq!(run(&quantified), format!("load: <test>:7:3: {refused}"));
+}
+
+/// A call only a binding selects reads its result's member under each binding the load lays, so
+/// the module the selected overload builds refuses at load, naming the call.
+#[test]
+fn a_call_a_binding_selects_refuses_at_load_what_its_result_holds() {
+    let refused = "this value is Str, which can never satisfy its annotation Number";
     let overloads = subject(&format!(
         "EXPR #(BUILD e :Number) -> Module = #(\n    {}  EXPR #(BUILD e :Str) -> Module = #(\n    \
          {}  ",
@@ -393,10 +405,9 @@ fn a_quantified_member_is_instantiated_where_it_is_wanted() {
     );
     assert_eq!(run(&format!("{PICK}PRINT (m.pick {{x = 1}})")), "1");
     assert_eq!(
-        run(&format!("{PICK}LET g = m.pick")),
-        "load: <test>:2:9: nothing fixes `Elt` here: a quantified function is read only at the \
-         head of a call, as the binding of a `MODULE` member, or where the type it is wanted at \
-         solves its group"
+        run(&format!("{PICK}LET g = m.pick\nPRINT (g {{x = 1}})")),
+        "1",
+        "a plain `LET` holds the generic member, and its call solves"
     );
 }
 
@@ -526,8 +537,8 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
          PRINT (v.succ {{x = (v.succ {{x = v.zero}})}})"
     );
     assert_eq!(run(&source), "Carrier(1)\nCarrier(2)");
-    // The load sees the view exactly, so it refuses an argument the view never sealed; through
-    // `Any` the barrier refuses it where it runs.
+    // The load sees the view exactly, so it refuses an argument the view never sealed; through a
+    // field typed `Any`, which no binding closes, the barrier refuses it where it runs.
     assert_eq!(
         run(&format!(
             "{COUNTER}LET v = (ints :| Counter)\nPRINT (v.succ {{x = 1}})"
@@ -538,11 +549,11 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
     );
     assert_eq!(
         run(&format!(
-            "{COUNTER}LET call = (FN :{{v :Any}} -> Any = #(v.succ {{x = 1}}))\n\
-             PRINT (call {{v = (ints :| Counter)}})"
+            "{COUNTER}LET call = (FN :{{b :{{v :Any}}}} -> Any = #(b.v.succ {{x = 1}}))\n\
+             PRINT (call {{b = {{v = (ints :| Counter)}}}})"
         )),
         "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Number}: it is not \
-         sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (v.succ {x = 1}) at <test>:3:36\n  in :(FN :{v :Any} -> Any) (call {v = (ints :| Counter)}) at <test>:4:7",
+         sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (b.v.succ {x = 1}) at <test>:3:41\n  in :(FN :{b :{v :Any}} -> Any) (call {b = {v = (ints :| Counter)}}) at <test>:4:7",
         "an argument the view never sealed"
     );
     let stepping = "SIG Stepper FOR ALL #[Carrier] = \
@@ -588,10 +599,10 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
              EXPR #(PASS p :Counter) -> Any = #(TAKE p)\n{program}"
         )
     };
-    // The load lays `USE c`'s layer at `c`'s closed tree, which refuses the load, naming the call.
-    let refused_plus = "load: <test>:4:34: no overload of `_ + _` admits these \
-                        arguments:\n  Carrier, which can never satisfy Number\n  in (USE c) at \
-                        <test>:10:7";
+    // `USE c`'s instance at `c`'s closed tree refuses the load, naming the call, worded under
+    // its binding as the direct read is.
+    let refused_plus = "load: <test>:4:34: no overload of `_ + _` admits these arguments:\n  \
+                        Carrier, which can never satisfy Number\n  in (USE c) at <test>:10:7";
     let refused_take = "no overload of `TAKE _` admits this argument:\n  SIG (Carrier: Carrier, \
                         zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)), which can never \
                         satisfy SIG (zero: Number)";
@@ -659,11 +670,11 @@ fn an_opaque_view_of_an_opaque_view_is_built_over_its_underlying() {
     );
     assert_eq!(
         run(&source(
-            "LET call = (FN :{e :Any, z :Any} -> Any = #(e.succ {x = z}))\n\
-             PRINT (call {e = d, z = c.zero})"
+            "LET call = (FN :{b :{e :Any, z :Any}} -> Any = #(b.e.succ {x = b.z}))\n\
+             PRINT (call {b = {e = d, z = c.zero}})"
         )),
         "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Carrier}: it is not \
-         sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (e.succ {x = z}) at <test>:6:44\n  in :(FN :{e :Any z :Any} -> Any) (call {e = d, z = c.zero}) at <test>:7:7"
+         sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (b.e.succ {x = b.z}) at <test>:6:49\n  in :(FN :{b :{e :Any z :Any}} -> Any) (call {b = {e = d, z = c.zero}}) at <test>:7:7"
     );
 }
 
@@ -713,11 +724,11 @@ fn an_argument_crossing_a_union_slot_inwards_unseals_by_the_member_over_the_carr
     );
     assert_eq!(
         run(&format!(
-            "{source}LET call = (FN :{{w :Any}} -> Any = #(w.show {{x = 1}}))\n\
-             PRINT (call {{w = v}})"
+            "{source}LET call = (FN :{{b :{{w :Any}}}} -> Any = #(b.w.show {{x = 1}}))\n\
+             PRINT (call {{b = {{w = v}}}})"
         )),
         "error: :(FN :{x :(Carrier | Str)} -> Str) cannot be called with :{x :Number}: no member \
-         of its union admits it\n  in :(FN :{x :(Carrier | Str)} -> Str) (w.show {x = 1}) at <test>:4:36\n  in :(FN :{w :Any} -> Any) (call {w = v}) at <test>:5:7"
+         of its union admits it\n  in :(FN :{x :(Carrier | Str)} -> Str) (b.w.show {x = 1}) at <test>:4:41\n  in :(FN :{b :{w :Any}} -> Any) (call {b = {w = v}}) at <test>:5:7"
     );
 }
 
@@ -898,12 +909,12 @@ fn a_carrier_is_keyed_on_content() {
              MODULE other = ((LET zero = 0) \
              (LET succ = (FN :{{x :Number}} -> Number = #(x + 2))))\n\
              LET a = (ints :| Counter)\nLET b = (twin :| Counter)\nLET c = (other :| Counter)\n\
-             LET call = (FN :{{f :Any, z :Any}} -> Any = #(f {{x = z}}))\n\
+             LET call = (FN :{{b :{{f :Any, z :Any}}}} -> Any = #(b.f {{x = b.z}}))\n\
              PRINT (a.Carrier == b.Carrier)\nPRINT (a.Carrier == c.Carrier)\n\
-             PRINT (call {{f = a.succ, z = c.zero}})"
+             PRINT (call {{b = {{f = a.succ, z = c.zero}}}})"
         )),
         "true\nfalse\nerror: :(FN :{x :Carrier} -> Carrier) cannot be called with \
-         :{x :Carrier}: it is not sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (f {x = z}) at <test>:8:44\n  in :(FN :{f :Any z :Any} -> Any) (call {f = a.succ, z = c.zero}) at <test>:11:7",
+         :{x :Carrier}: it is not sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (b.f {x = b.z}) at <test>:8:49\n  in :(FN :{b :{f :Any z :Any}} -> Any) (call {b = {f = a.succ, z = c.zero}}) at <test>:11:7",
         "modules of equal content share a carrier, and of other content do not"
     );
     assert_eq!(
@@ -1078,7 +1089,8 @@ fn a_binder_pinned_in_its_own_unit_is_read_by_a_later_callable() {
 fn a_field_read_stays_at_most_its_signature() {
     for go in [
         "EXPR #(GO rr :{c :Counter}) -> Any = #(ECHO rr.c)\nPRINT (GO {c = ints})",
-        "EXPR #(GO g :Any) -> Any = #((LET r = {c = (g :! Counter)}) (ECHO r.c))\nPRINT (GO ints)",
+        "EXPR #(GO b :{g :Any}) -> Any = #((LET r = {c = (b.g :! Counter)}) (ECHO r.c))\n\
+         PRINT (GO {g = ints})",
     ] {
         let refused = run(&format!("{ECHO}{go}"));
         assert!(refused.contains("no overload of `ECHO _`"), "{refused}");
@@ -1100,10 +1112,12 @@ fn a_value_retyped_in_place_stays_at_most_its_signature() {
 #[test]
 fn a_hold_in_place_beside_a_binder_of_its_operand_is_refused_at_the_load() {
     for go in [
-        "EXPR #(MIX g :Any) -> Any = \
-         #((LET x = g) (PRINT (ECHO (g :! Counter))) (ECHO (x :! Counter)))\nPRINT (MIX ints)",
-        "EXPR #(BOTH g :Any) -> Any = \
-         #((LET m = (g :! Counter)) (PRINT (ECHO m)) (ECHO (g :! Counter)))\nPRINT (BOTH ints)",
+        "EXPR #(MIX b :{g :Any}) -> Any = \
+         #((LET g = b.g) (LET x = g) (PRINT (ECHO (g :! Counter))) (ECHO (x :! Counter)))\n\
+         PRINT (MIX {g = ints})",
+        "EXPR #(BOTH b :{g :Any}) -> Any = \
+         #((LET g = b.g) (LET m = (g :! Counter)) (PRINT (ECHO m)) (ECHO (g :! Counter)))\n\
+         PRINT (BOTH {g = ints})",
     ] {
         let refused = run(&format!("{ECHO}{go}"));
         assert!(refused.contains("no overload of `ECHO _`"), "{refused}");
@@ -1353,6 +1367,25 @@ const NESTED: &str = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL one :Elem) (VAL t
                       MODULE m = ((LET zero = 0) (LET inner = parts) \
                       (LET first = (FN :{x :(Inner WITH {Elem = Number})} -> Number = #(x.one))))\n\
                       LET v = (m :| Outer)\n";
+
+/// A callable whose parameter type spells a path through a binder of its encloser's encloser,
+/// which neither captures as a value, is born with that binder captured through each body between,
+/// so its frame's binding closes the path as the layers' table does, which every test checks.
+#[test]
+fn a_path_through_an_outer_binder_closes_in_a_nested_callable() {
+    let nested = format!(
+        "{NESTED}EXPR #(GO u :Any) -> Any = #(\n  \
+           (LET i = (u :| Outer).inner)\n  \
+           (LET w = (i :| (Inner WITH {{Elem = v.Carrier}})))\n  \
+           (LET f = (FN :{{}} -> Any = #(\n    \
+             (LET take = (FN :{{x :(i.Extra)}} -> Any = #(x)))\n    \
+             (take {{x = w.two}})\n  \
+           )))\n  \
+           (f {{}})\n\
+         )\nPRINT (GO m)\nPRINT (GO m)"
+    );
+    assert_eq!(run(&nested), "Extra(s)\nExtra(s)");
+}
 
 /// A view's nested module member is an opaque view of the underlying's member: it hides the
 /// nested signature's parameter its slot leaves unpinned, a view of it at its own application is
@@ -1605,4 +1638,14 @@ fn a_member_read_through_a_signature_bound_lies_under_the_bound_s_member() {
         "load: <test>:5:3: this value is Number, which can never satisfy its annotation Str"
     );
     assert_eq!(run(&program("LET z = x.f\n  z")), "1");
+}
+
+/// A type path through a view's nested module member names the member the nested view hides, as
+/// a binder holding the nested view does.
+#[test]
+#[ignore = "the load reads no member through a view's tree: roadmap one-build/opaque-views-nested-at-load"]
+fn a_path_through_a_nested_view_names_its_hidden_member() {
+    assert_eq!(run(&format!("{NESTED}PRINT v.inner.Extra")), "Extra");
+    let annotated = format!("{NESTED}LET t :(v.inner.Extra) = v.inner.two\nPRINT t");
+    assert_eq!(run(&annotated), "Extra(s)");
 }
